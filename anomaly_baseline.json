@@ -1,0 +1,137 @@
+{
+  "sample_data_v3.json::id": [
+    {
+      "mean": 2.5,
+      "std": 1.2909944487358056,
+      "null_pct": 0.0,
+      "unique_count": 4,
+      "timestamp": "2026-02-27T00:29:48.946033+00:00"
+    }
+  ],
+  "sample_data_v3.json::first_name": [
+    {
+      "mean": null,
+      "std": null,
+      "null_pct": 0.0,
+      "unique_count": 4,
+      "timestamp": "2026-02-27T00:29:48.946043+00:00"
+    }
+  ],
+  "sample_data_v3.json::last_name": [
+    {
+      "mean": null,
+      "std": null,
+      "null_pct": 0.0,
+      "unique_count": 4,
+      "timestamp": "2026-02-27T00:29:48.946047+00:00"
+    }
+  ],
+  "sample_data_v3.json::email": [
+    {
+      "mean": null,
+      "std": null,
+      "null_pct": 0.0,
+      "unique_count": 4,
+      "timestamp": "2026-02-27T00:29:48.946050+00:00"
+    }
+  ],
+  "sample_data_v3.json::phone": [
+    {
+      "mean": null,
+      "std": null,
+      "null_pct": 0.0,
+      "unique_count": 4,
+      "timestamp": "2026-02-27T00:29:48.946053+00:00"
+    }
+  ],
+  "sample_data_v3.json::dob": [
+    {
+      "mean": null,
+      "std": null,
+      "null_pct": 0.0,
+      "unique_count": 4,
+      "timestamp": "2026-02-27T00:29:48.946055+00:00"
+    }
+  ],
+  "sample_data_v3.json::salary": [
+    {
+      "mean": 85000.0,
+      "std": 7000.0,
+      "null_pct": 0.25,
+      "unique_count": 3,
+      "timestamp": "2026-02-27T00:29:48.946058+00:00"
+    }
+  ],
+  "sample_data_v3.json::department_id": [
+    {
+      "mean": 34.75,
+      "std": 43.09195593920827,
+      "null_pct": 0.0,
+      "unique_count": 3,
+      "timestamp": "2026-02-27T00:29:48.946061+00:00"
+    }
+  ],
+  "sample_data_v3.json::country_code": [
+    {
+      "mean": null,
+      "std": null,
+      "null_pct": 0.0,
+      "unique_count": 3,
+      "timestamp": "2026-02-27T00:29:48.946064+00:00"
+    }
+  ],
+  "sample_data_v3.json::hired_date": [
+    {
+      "mean": null,
+      "std": null,
+      "null_pct": 0.0,
+      "unique_count": 4,
+      "timestamp": "2026-02-27T00:29:48.946066+00:00"
+    }
+  ],
+  "sample_data_v3.json::active": [
+    {
+      "mean": NaN,
+      "std": NaN,
+      "null_pct": 0.0,
+      "unique_count": 2,
+      "timestamp": "2026-02-27T00:29:48.946069+00:00"
+    }
+  ],
+  "sample_data_v3.json::address__street": [
+    {
+      "mean": null,
+      "std": null,
+      "null_pct": 0.0,
+      "unique_count": 4,
+      "timestamp": "2026-02-27T00:29:48.946071+00:00"
+    }
+  ],
+  "sample_data_v3.json::address__city": [
+    {
+      "mean": null,
+      "std": null,
+      "null_pct": 0.0,
+      "unique_count": 4,
+      "timestamp": "2026-02-27T00:29:48.946074+00:00"
+    }
+  ],
+  "sample_data_v3.json::address__zip": [
+    {
+      "mean": null,
+      "std": null,
+      "null_pct": 0.0,
+      "unique_count": 4,
+      "timestamp": "2026-02-27T00:29:48.946076+00:00"
+    }
+  ],
+  "sample_data_v3.json::_source_row_hash": [
+    {
+      "mean": null,
+      "std": null,
+      "null_pct": 0.0,
+      "unique_count": 4,
+      "timestamp": "2026-02-27T00:29:48.946079+00:00"
+    }
+  ]
+}

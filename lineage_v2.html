@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Data Lineage — 20260228_114143</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,sans-serif;background:#0d1117;color:#e6edf3;overflow:hidden;user-select:none}
+
+/* ── Toolbar ── */
+#toolbar{position:fixed;top:0;left:0;right:0;height:50px;background:#161b22;
+          border-bottom:1px solid #30363d;display:flex;align-items:center;
+          padding:0 16px;gap:12px;z-index:200}
+#toolbar h1{font-size:.95em;font-weight:600;color:#58a6ff;white-space:nowrap}
+#toolbar .sep{width:1px;height:24px;background:#30363d}
+.filter-btn{display:flex;align-items:center;gap:5px;padding:4px 10px;border-radius:20px;
+             border:1px solid #30363d;background:transparent;color:#8b949e;
+             font-size:.78em;cursor:pointer;transition:all .15s}
+.filter-btn.active{background:#1f6feb22;border-color:#1f6feb;color:#58a6ff}
+.filter-btn:hover{border-color:#8b949e;color:#e6edf3}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+#search{margin-left:auto;background:#0d1117;border:1px solid #30363d;color:#e6edf3;
+         padding:5px 12px;border-radius:20px;font-size:.8em;outline:none;width:180px}
+#search:focus{border-color:#58a6ff}
+#search::placeholder{color:#484f58}
+#export-btn{padding:5px 12px;background:#238636;border:none;color:#fff;border-radius:6px;
+             font-size:.8em;cursor:pointer;display:flex;align-items:center;gap:5px}
+#export-btn:hover{background:#2ea043}
+#run-ts{font-size:.72em;color:#484f58;white-space:nowrap}
+
+/* ── Canvas ── */
+#canvas{position:fixed;top:50px;left:0;right:0;bottom:0}
+svg#main{width:100%;height:100%}
+
+/* ── Edges ── */
+.link{stroke:#30363d;stroke-opacity:.8;fill:none;stroke-width:1.5}
+.link-dashed{stroke:#1f6feb;stroke-opacity:.4;stroke-dasharray:5 4;fill:none;stroke-width:1}
+.link.dimmed,.link-dashed.dimmed{opacity:.04}
+.edge-label{font-size:9px;fill:#6e7681;text-anchor:middle;pointer-events:none}
+
+/* ── Nodes ── */
+.node{cursor:pointer;transition:opacity .2s}
+.node.dimmed{opacity:.07}
+.node.focused rect,.node.focused circle,.node.focused .col-pill{filter:brightness(1.35);stroke-width:2.5px!important}
+
+/* Source pill */
+.node-source .n-pill{fill:#0c2d6b;stroke:#58a6ff;stroke-width:1.5;rx:22}
+.node-source text{fill:#cae8ff;font-size:11px;font-weight:600}
+
+/* Destination pill */
+.node-destination .n-pill{fill:#0a2d0a;stroke:#3fb950;stroke-width:1.5;rx:22}
+.node-destination text{fill:#7ee787;font-size:11px;font-weight:600}
+
+/* Transform box */
+.node-transform .n-box{fill:#161b22;stroke:#30363d;stroke-width:1.2;rx:10}
+.node-transform text{fill:#c9d1d9;font-size:11px}
+.node-transform .n-icon{font-size:14px}
+.n-dur{font-size:8px;fill:#6e7681}
+
+/* Column pill */
+.col-pill{rx:10;stroke-width:1.2}
+.node-column .col-pill{fill:#0d1117;stroke:#1f6feb}
+.node-pii_column .col-pill{fill:#1f0a0a;stroke:#f85149}
+.node-column text,.node-pii_column text{font-size:10px}
+.dtype-badge{font-size:8px;fill:#484f58}
+
+/* Drop badge */
+.drop-badge rect{fill:#6e292c;rx:4}
+.drop-badge text{font-size:8px;fill:#f85149;font-weight:600}
+
+/* ── Tooltip ── */
+#tip{position:fixed;background:#1c2128;border:1px solid #30363d;border-radius:8px;
+      padding:10px 14px;font-size:.78em;pointer-events:none;display:none;
+      max-width:260px;box-shadow:0 8px 24px rgba(0,0,0,.6);z-index:300}
+#tip h4{color:#58a6ff;margin-bottom:7px;font-size:.85em}
+#tip table{border-collapse:collapse;width:100%}
+#tip td{padding:2px 4px;vertical-align:top}
+#tip td:first-child{color:#8b949e;white-space:nowrap;padding-right:10px}
+#tip td:last-child{color:#e6edf3;word-break:break-all}
+
+/* ── Minimap ── */
+#minimap-wrap{position:fixed;bottom:16px;right:16px;border:1px solid #30363d;
+               background:#0d1117;border-radius:8px;overflow:hidden;z-index:150}
+#minimap{width:160px;height:110px;display:block}
+#mm-viewport{fill:#58a6ff22;stroke:#58a6ff;stroke-width:.5}
+
+/* ── Stats bar ── */
+#stats{position:fixed;bottom:16px;left:16px;background:#161b22;border:1px solid #30363d;
+        border-radius:20px;padding:5px 14px;font-size:.73em;color:#8b949e;z-index:150}
+</style>
+</head>
+<body>
+
+<div id="toolbar">
+  <h1>🔗 Data Lineage</h1>
+  <span class="sep"></span>
+  <button class="filter-btn active" id="f-transforms" onclick="toggleFilter('transforms')">
+    <span class="dot" style="background:#8b949e"></span>Transforms
+  </button>
+  <button class="filter-btn active" id="f-columns" onclick="toggleFilter('columns')">
+    <span class="dot" style="background:#1f6feb"></span>Columns
+  </button>
+  <button class="filter-btn active" id="f-pii" onclick="toggleFilter('pii')">
+    <span class="dot" style="background:#f85149"></span>PII
+  </button>
+  <span class="sep"></span>
+  <span id="run-ts">2026-02-28 11:41:43 UTC</span>
+  <input id="search" placeholder="🔍  Search nodes…" type="text">
+  <button id="export-btn" onclick="exportPNG()">⬇ PNG</button>
+</div>
+
+<div id="canvas"><svg id="main"></svg></div>
+<div id="tip"><h4 id="tip-title"></h4><table id="tip-body"></table></div>
+<div id="minimap-wrap"><svg id="minimap"><rect id="mm-viewport"/></svg></div>
+<div id="stats"></div>
+
+<script>
+const NODES = [{"id": "SOURCE", "label": "sample_data_v3.json", "type": "source", "icon": "\ud83d\udcc4", "meta": {"File": "sample_data_v3.json", "Format": ".json", "Rows": 4, "Columns": 14, "SHA-256": "3fba2466ea37\u2026", "Timestamp": "2026-02-28 11:41:43"}, "rows_out": 4, "drops": 0, "ts": "2026-02-28 11:41:43", "duration_s": null}, {"id": "EXTRACT", "label": "Extract", "type": "transform", "icon": "\ud83d\udce5", "meta": {"Stage": "Extract", "Rows": 4, "Columns": 14, "Timestamp": "2026-02-28 11:41:43"}, "rows_out": 4, "drops": 0, "ts": "2026-02-28 11:41:43", "duration_s": 0.0}, {"id": "CLASSIFY", "label": "Classify", "type": "transform", "icon": "\ud83c\udff7\ufe0f", "meta": {"Stage": "Data Classification", "Level": "CONFIDENTIAL", "PII fields": 6, "Timestamp": "2026-02-28 11:41:43"}, "rows_out": 4, "drops": 0, "ts": "2026-02-28 11:41:43", "duration_s": 0.0}, {"id": "VALIDATE", "label": "Validate", "type": "transform", "icon": "\u2705", "meta": {"Stage": "Great Expectations", "Passed": "22 / 22", "Failed": 0, "Success": "True", "Timestamp": "2026-02-28 11:41:43"}, "rows_out": 4, "drops": 0, "ts": "2026-02-28 11:41:43", "duration_s": 0.19}, {"id": "NULLS", "label": "Null Handling", "type": "transform", "icon": "\ud83e\uddf9", "meta": {"Stage": "Null Handling", "Nulls before": 0, "Nulls after": 0, "Timestamp": "2026-02-28 11:41:43"}, "rows_out": 4, "drops": 0, "ts": "2026-02-28 11:41:43", "duration_s": 0.01}, {"id": "DEDUP", "label": "Deduplicate", "type": "transform", "icon": "\u267b\ufe0f", "meta": {"Stage": "Deduplication", "Before": 4, "After": 4, "Removed": 0, "Timestamp": "2026-02-28 11:41:43"}, "rows_out": 4, "drops": 0, "ts": "2026-02-28 11:41:43", "duration_s": 0.0}, {"id": "TRANSFORM_DONE", "label": "Transform\nComplete", "type": "transform", "icon": "\u2699\ufe0f", "meta": {"Stage": "Transform Complete", "Rows": 4, "Columns": 17, "Timestamp": "2026-02-28 11:41:43"}, "rows_out": 4, "drops": 0, "ts": "2026-02-28 11:41:43", "duration_s": 0.0}, {"id": "DESTINATION", "label": "sqlite \u203a employees", "type": "destination", "icon": "\ud83d\uddc4\ufe0f", "meta": {"Platform": "sqlite", "Database": "lineage_v2_out", "Table": "employees", "Timestamp": "2026-02-28 11:41:43"}, "rows_out": 4, "drops": 0, "ts": "2026-02-28 11:41:43", "duration_s": null}, {"id": "MASK_PII", "label": "Mask PII", "type": "transform", "icon": "\ud83d\udd12", "meta": {"Stage": "PII Masking", "Fields": "dob, email, first_name, last_name, phone, salary", "Count": 6, "Action": "mask / pseudonymise", "Timestamp": "2026-02-28 11:41:43"}, "rows_out": 4, "drops": 0, "ts": "2026-02-28 11:41:43", "duration_s": null}, {"id": "COL_id", "label": "id", "type": "column", "icon": "\ud83d\udcca", "meta": {"Column": "id", "Type": "int64", "PII": "No"}, "rows_out": 4, "drops": 0, "ts": "", "duration_s": null, "dtype": "int"}, {"id": "COL_first_name", "label": "first_name", "type": "pii_column", "icon": "\ud83d\udd12", "meta": {"Column": "first_name", "Type": "object", "PII": "Yes \u2014 masked"}, "rows_out": 4, "drops": 0, "ts": "", "duration_s": null, "dtype": "str"}, {"id": "COL_last_name", "label": "last_name", "type": "pii_column", "icon": "\ud83d\udd12", "meta": {"Column": "last_name", "Type": "object", "PII": "Yes \u2014 masked"}, "rows_out": 4, "drops": 0, "ts": "", "duration_s": null, "dtype": "str"}, {"id": "COL_email", "label": "email", "type": "pii_column", "icon": "\ud83d\udd12", "meta": {"Column": "email", "Type": "object", "PII": "Yes \u2014 masked"}, "rows_out": 4, "drops": 0, "ts": "", "duration_s": null, "dtype": "str"}, {"id": "COL_phone", "label": "phone", "type": "pii_column", "icon": "\ud83d\udd12", "meta": {"Column": "phone", "Type": "object", "PII": "Yes \u2014 masked"}, "rows_out": 4, "drops": 0, "ts": "", "duration_s": null, "dtype": "str"}, {"id": "COL_dob", "label": "dob", "type": "pii_column", "icon": "\ud83d\udd12", "meta": {"Column": "dob", "Type": "object", "PII": "Yes \u2014 masked"}, "rows_out": 4, "drops": 0, "ts": "", "duration_s": null, "dtype": "str"}, {"id": "COL_salary", "label": "salary", "type": "pii_column", "icon": "\ud83d\udd12", "meta": {"Column": "salary", "Type": "float64", "PII": "Yes \u2014 masked"}, "rows_out": 4, "drops": 0, "ts": "", "duration_s": null, "dtype": "float"}, {"id": "COL_department_id", "label": "department_id", "type": "column", "icon": "\ud83d\udcca", "meta": {"Column": "department_id", "Type": "int64", "PII": "No"}, "rows_out": 4, "drops": 0, "ts": "", "duration_s": null, "dtype": "int"}, {"id": "COL_country_code", "label": "country_code", "type": "column", "icon": "\ud83d\udcca", "meta": {"Column": "country_code", "Type": "object", "PII": "No"}, "rows_out": 4, "drops": 0, "ts": "", "duration_s": null, "dtype": "str"}, {"id": "COL_hired_date", "label": "hired_date", "type": "column", "icon": "\ud83d\udcca", "meta": {"Column": "hired_date", "Type": "object", "PII": "No"}, "rows_out": 4, "drops": 0, "ts": "", "duration_s": null, "dtype": "str"}, {"id": "COL_active", "label": "active", "type": "column", "icon": "\ud83d\udcca", "meta": {"Column": "active", "Type": "bool", "PII": "No"}, "rows_out": 4, "drops": 0, "ts": "", "duration_s": null, "dtype": "bool"}, {"id": "COL_address__street", "label": "address__street", "type": "column", "icon": "\ud83d\udcca", "meta": {"Column": "address__street", "Type": "object", "PII": "No"}, "rows_out": 4, "drops": 0, "ts": "", "duration_s": null, "dtype": "str"}, {"id": "COL_address__city", "label": "address__city", "type": "column", "icon": "\ud83d\udcca", "meta": {"Column": "address__city", "Type": "object", "PII": "No"}, "rows_out": 4, "drops": 0, "ts": "", "duration_s": null, "dtype": "str"}, {"id": "COL_address__zip", "label": "address__zip", "type": "column", "icon": "\ud83d\udcca", "meta": {"Column": "address__zip", "Type": "object", "PII": "No"}, "rows_out": 4, "drops": 0, "ts": "", "duration_s": null, "dtype": "str"}];
+const EDGES = [{"source": "SOURCE", "target": "EXTRACT", "style": "solid", "row_count": 4}, {"source": "EXTRACT", "target": "CLASSIFY", "style": "solid", "row_count": 4}, {"source": "VALIDATE", "target": "NULLS", "style": "solid", "row_count": 4}, {"source": "NULLS", "target": "DEDUP", "style": "solid", "row_count": 4}, {"source": "DEDUP", "target": "TRANSFORM_DONE", "style": "solid", "row_count": 4}, {"source": "CLASSIFY", "target": "MASK_PII", "style": "solid", "row_count": 4}, {"source": "MASK_PII", "target": "VALIDATE", "style": "solid", "row_count": 4}, {"source": "TRANSFORM_DONE", "target": "COL_id", "style": "dashed", "row_count": 4}, {"source": "TRANSFORM_DONE", "target": "COL_first_name", "style": "dashed", "row_count": 4}, {"source": "TRANSFORM_DONE", "target": "COL_last_name", "style": "dashed", "row_count": 4}, {"source": "TRANSFORM_DONE", "target": "COL_email", "style": "dashed", "row_count": 4}, {"source": "TRANSFORM_DONE", "target": "COL_phone", "style": "dashed", "row_count": 4}, {"source": "TRANSFORM_DONE", "target": "COL_dob", "style": "dashed", "row_count": 4}, {"source": "TRANSFORM_DONE", "target": "COL_salary", "style": "dashed", "row_count": 4}, {"source": "TRANSFORM_DONE", "target": "COL_department_id", "style": "dashed", "row_count": 4}, {"source": "TRANSFORM_DONE", "target": "COL_country_code", "style": "dashed", "row_count": 4}, {"source": "TRANSFORM_DONE", "target": "COL_hired_date", "style": "dashed", "row_count": 4}, {"source": "TRANSFORM_DONE", "target": "COL_active", "style": "dashed", "row_count": 4}, {"source": "TRANSFORM_DONE", "target": "COL_address__street", "style": "dashed", "row_count": 4}, {"source": "TRANSFORM_DONE", "target": "COL_address__city", "style": "dashed", "row_count": 4}, {"source": "TRANSFORM_DONE", "target": "COL_address__zip", "style": "dashed", "row_count": 4}, {"source": "COL_id", "target": "DESTINATION", "style": "dashed", "row_count": 4}, {"source": "COL_first_name", "target": "DESTINATION", "style": "dashed", "row_count": 4}, {"source": "COL_last_name", "target": "DESTINATION", "style": "dashed", "row_count": 4}, {"source": "COL_email", "target": "DESTINATION", "style": "dashed", "row_count": 4}, {"source": "COL_phone", "target": "DESTINATION", "style": "dashed", "row_count": 4}, {"source": "COL_dob", "target": "DESTINATION", "style": "dashed", "row_count": 4}, {"source": "COL_salary", "target": "DESTINATION", "style": "dashed", "row_count": 4}, {"source": "COL_department_id", "target": "DESTINATION", "style": "dashed", "row_count": 4}, {"source": "COL_country_code", "target": "DESTINATION", "style": "dashed", "row_count": 4}, {"source": "COL_hired_date", "target": "DESTINATION", "style": "dashed", "row_count": 4}, {"source": "COL_active", "target": "DESTINATION", "style": "dashed", "row_count": 4}, {"source": "COL_address__street", "target": "DESTINATION", "style": "dashed", "row_count": 4}, {"source": "COL_address__city", "target": "DESTINATION", "style": "dashed", "row_count": 4}, {"source": "COL_address__zip", "target": "DESTINATION", "style": "dashed", "row_count": 4}];
+
+// ── State ────────────────────────────────────────────────────────────────
+const filters = {transforms:true, columns:true, pii:true};
+let focusedId  = null;
+
+// ── SVG / zoom setup ────────────────────────────────────────────────────
+const svg    = d3.select("#main");
+const W = () => +svg.node().clientWidth;
+const H = () => +svg.node().clientHeight;
+
+const defs = svg.append("defs");
+// Arrowheads
+[["arr-grey","#30363d",14],["arr-blue","#1f6feb",12]].forEach(([id,col,ref]) => {
+  defs.append("marker").attr("id",id)
+    .attr("viewBox","0 -4 8 8").attr("refX",ref).attr("refY",0)
+    .attr("markerWidth",5).attr("markerHeight",5).attr("orient","auto")
+    .append("path").attr("d","M0,-4L8,0L0,4").attr("fill",col).attr("opacity",.7);
+});
+
+const gZoom = svg.append("g").attr("class","zoom-root");
+const zoom  = d3.zoom().scaleExtent([.05,4]).on("zoom", e => {
+  gZoom.attr("transform", e.transform);
+  updateMinimap(e.transform);
+});
+svg.call(zoom).on("dblclick.zoom", null);
+
+// ── Build node lookup ────────────────────────────────────────────────────
+const nodeById = Object.fromEntries(NODES.map(n=>[n.id,n]));
+
+// ── Force simulation ─────────────────────────────────────────────────────
+const bandX = {source:.08, transform:.38, column:.68, pii_column:.68, destination:.95};
+
+const sim = d3.forceSimulation(NODES)
+  .force("link",   d3.forceLink(EDGES).id(d=>d.id)
+                     .distance(d => d.style==="dashed" ? 80 : 120).strength(.5))
+  .force("charge", d3.forceManyBody()
+                     .strength(d => (d.type==="column"||d.type==="pii_column") ? -60 : -350))
+  .force("x",      d3.forceX(d=>(bandX[d.type]||.4)*W()).strength(.55))
+  .force("y",      d3.forceY(H()/2).strength(.08))
+  .force("collide",d3.forceCollide(d=>(d.type==="column"||d.type==="pii_column")?30:58));
+
+// ── Draw curved edges ────────────────────────────────────────────────────
+const linkG = gZoom.append("g").attr("class","links");
+const link  = linkG.selectAll("g").data(EDGES).join("g");
+
+const linkPath = link.append("path")
+  .attr("class", d => d.style==="dashed"?"link-dashed":"link")
+  .attr("marker-end", d => d.style==="dashed"?"url(#arr-blue)":"url(#arr-grey)");
+
+const linkLabel = link.append("text").attr("class","edge-label")
+  .text(d => d.row_count != null ? d.row_count.toLocaleString()+"r" : "")
+  .style("display", d => (d.style==="dashed"||!d.row_count) ? "none":"block");
+
+// ── Draw nodes ───────────────────────────────────────────────────────────
+const nodeG = gZoom.append("g").attr("class","nodes");
+const node  = nodeG.selectAll("g.node").data(NODES).join("g")
+  .attr("class", d=>`node node-${d.type}`)
+  .call(d3.drag()
+    .on("start",(e,d)=>{if(!e.active)sim.alphaTarget(.3).restart();d.fx=d.x;d.fy=d.y})
+    .on("drag", (e,d)=>{d.fx=e.x;d.fy=e.y})
+    .on("end",  (e,d)=>{if(!e.active)sim.alphaTarget(0);d.fx=null;d.fy=null}))
+  .on("mousemove",(e,d)=>showTip(e,d))
+  .on("mouseleave",()=>hideTip())
+  .on("click",(e,d)=>{e.stopPropagation();toggleFocus(d)});
+
+svg.on("click", ()=>clearFocus());
+
+// Build each node shape
+node.each(function(d){
+  const el = d3.select(this);
+  const isCol = d.type==="column"||d.type==="pii_column";
+
+  if(d.type==="source"||d.type==="destination"){
+    const w = Math.max(140, d.label.length*8+48);
+    el.append("rect").attr("class","n-pill").attr("width",w).attr("height",34)
+      .attr("x",-w/2).attr("y",-17).attr("rx",17);
+    el.append("text").attr("class","n-icon").attr("x",-w/2+14).attr("y",1)
+      .attr("dominant-baseline","central").text(d.icon||"");
+    el.append("text").attr("x",8).attr("y",0).attr("dominant-baseline","central")
+      .text(d.label.length>22?d.label.slice(0,21)+"…":d.label);
+    if(d.rows_out!=null){
+      el.append("text").attr("class","n-dur").attr("x",0).attr("y",22).attr("text-anchor","middle")
+        .text(d.rows_out.toLocaleString()+" rows");
+    }
+  } else if(isCol){
+    const lbl   = d.label.length>14?d.label.slice(0,13)+"…":d.label;
+    const dtype = d.dtype||"";
+    const w = Math.max(70, lbl.length*7.5+24+(dtype?dtype.length*5.5+8:0));
+    el.append("rect").attr("class","col-pill").attr("width",w).attr("height",22)
+      .attr("x",-w/2).attr("y",-11).attr("rx",11);
+    el.append("text").attr("x", dtype ? -w/2+8 : 0).attr("y",0)
+      .attr("dominant-baseline","central")
+      .attr("text-anchor", dtype?"start":"middle").text(lbl)
+      .style("fill", d.type==="pii_column"?"#ffa198":"#79c0ff");
+    if(dtype){
+      const bx = w/2-dtype.length*5.5-8;
+      el.append("rect").attr("x",bx-4).attr("y",-7).attr("width",dtype.length*5.5+8)
+        .attr("height",14).attr("rx",3).style("fill","#161b22").style("stroke","#30363d").style("stroke-width","0.8");
+      el.append("text").attr("class","dtype-badge").attr("x",bx+dtype.length*2.75)
+        .attr("y",0).attr("dominant-baseline","central").attr("text-anchor","middle").text(dtype);
+    }
+  } else {
+    // Transform box
+    const lines  = d.label.split("\n");
+    const w      = Math.max(110, d.label.replace("\n"," ").length*8+40);
+    const h      = lines.length>1?52:42;
+    el.append("rect").attr("class","n-box").attr("width",w).attr("height",h)
+      .attr("x",-w/2).attr("y",-h/2).attr("rx",10);
+    // Icon
+    if(d.icon){
+      el.append("text").attr("class","n-icon").attr("x",-w/2+12).attr("y",0)
+        .attr("dominant-baseline","central").text(d.icon);
+    }
+    // Label lines
+    const xOff = d.icon?4:0;
+    lines.forEach((ln,i)=>{
+      el.append("text").attr("x",xOff).attr("y",(i-(lines.length-1)/2)*14)
+        .attr("dominant-baseline","central").attr("text-anchor","middle").text(ln);
+    });
+    // Duration badge
+    if(d.duration_s!=null){
+      el.append("text").attr("class","n-dur").attr("x",0).attr("y",h/2-6)
+        .attr("text-anchor","middle").text(d.duration_s+"s");
+    }
+    // Drop badge (if any rows dropped)
+    if(d.drops&&d.drops>0){
+      const g2 = el.append("g").attr("class","drop-badge").attr("transform",`translate(${w/2-4},${-h/2-2})`);
+      const lbl = `-${d.drops}`;
+      g2.append("rect").attr("x",-lbl.length*4.5-4).attr("y",-8).attr("width",lbl.length*4.5+8).attr("height",14).attr("rx",4);
+      g2.append("text").attr("x",-lbl.length*2.25+0.5).attr("y",0).attr("dominant-baseline","central").text(lbl);
+    }
+  }
+});
+
+// ── Tick: bezier paths ───────────────────────────────────────────────────
+sim.on("tick", () => {
+  linkPath.attr("d", d => {
+    const sx=d.source.x, sy=d.source.y, tx=d.target.x, ty=d.target.y;
+    const cx = (sx+tx)/2;
+    return `M${sx},${sy} C${cx},${sy} ${cx},${ty} ${tx},${ty}`;
+  });
+  linkLabel.attr("x",d=>(d.source.x+d.target.x)/2).attr("y",d=>(d.source.y+d.target.y)/2-5);
+  node.attr("transform",d=>`translate(${d.x},${d.y})`);
+  updateMinimapNodes();
+});
+
+// ── Entrance animation ────────────────────────────────────────────────────
+// Start all nodes off-screen-left, fade in by band
+const bandOrder = ["source","transform","column","pii_column","destination"];
+NODES.forEach(n => { n.x = -300; n.y = H()/2; });
+sim.alpha(1).restart();
+
+setTimeout(() => {
+  bandOrder.forEach((band, bi) => {
+    setTimeout(() => {
+      node.filter(d=>d.type===band)
+        .transition().duration(600).ease(d3.easeCubicOut)
+        .style("opacity",1);
+    }, bi*150);
+  });
+}, 200);
+
+// Start nodes invisible and reveal
+node.style("opacity",0);
+
+// ── Tooltip ──────────────────────────────────────────────────────────────
+const tip = document.getElementById("tip");
+function showTip(e,d){
+  document.getElementById("tip-title").textContent = (d.icon?d.icon+" ":"")+d.label.replace("\n"," ");
+  const rows = Object.entries(d.meta||{}).map(([k,v])=>
+    `<tr><td>${k}</td><td>${String(v).slice(0,80)}</td></tr>`).join("");
+  document.getElementById("tip-body").innerHTML = rows||"<tr><td>No metadata</td></tr>";
+  tip.style.display = "block";
+  moveTip(e);
+}
+function moveTip(e){
+  const t=tip, x=e.clientX+14, y=e.clientY-10;
+  t.style.left = (x+t.offsetWidth>window.innerWidth ? x-t.offsetWidth-28 : x)+"px";
+  t.style.top  = (y+t.offsetHeight>window.innerHeight ? y-t.offsetHeight : y)+"px";
+}
+function hideTip(){ tip.style.display="none"; }
+svg.node().addEventListener("mousemove", e=>{ if(tip.style.display!=="none") moveTip(e); });
+
+// ── Focus mode ────────────────────────────────────────────────────────────
+function getLineage(d){
+  const ids = new Set([d.id]);
+  // Traverse upstream and downstream
+  let frontier = [d.id];
+  for(let pass=0;pass<30&&frontier.length;pass++){
+    const next=[];
+    EDGES.forEach(e=>{
+      const s=typeof e.source==="object"?e.source.id:e.source;
+      const t=typeof e.target==="object"?e.target.id:e.target;
+      if(frontier.includes(s)&&!ids.has(t)){ids.add(t);next.push(t);}
+      if(frontier.includes(t)&&!ids.has(s)){ids.add(s);next.push(s);}
+    });
+    frontier=next;
+  }
+  return ids;
+}
+function toggleFocus(d){
+  if(focusedId===d.id){ clearFocus(); return; }
+  focusedId = d.id;
+  const ids = getLineage(d);
+  node.classed("dimmed",n=>!ids.has(n.id)).classed("focused",n=>n.id===d.id);
+  link.classed("dimmed",e=>{
+    const s=typeof e.source==="object"?e.source.id:e.source;
+    const t=typeof e.target==="object"?e.target.id:e.target;
+    return !ids.has(s)||!ids.has(t);
+  });
+}
+function clearFocus(){
+  focusedId=null;
+  node.classed("dimmed",false).classed("focused",false);
+  link.classed("dimmed",false);
+}
+
+// ── Filter toggles ────────────────────────────────────────────────────────
+function toggleFilter(key){
+  filters[key] = !filters[key];
+  document.getElementById("f-"+key).classList.toggle("active", filters[key]);
+  applyFilters();
+}
+function applyFilters(){
+  node.style("display", d=>{
+    if(d.type==="transform"&&!filters.transforms) return "none";
+    if(d.type==="column"&&!filters.columns) return "none";
+    if(d.type==="pii_column"&&(!filters.pii||!filters.columns)) return "none";
+    return null;
+  });
+  link.style("display", e=>{
+    const s=typeof e.source==="object"?nodeById[e.source.id]:nodeById[e.source];
+    const t=typeof e.target==="object"?nodeById[e.target.id]:nodeById[e.target];
+    if(!s||!t) return null;
+    const sHid = (s.type==="transform"&&!filters.transforms)||(s.type==="column"&&!filters.columns)||(s.type==="pii_column"&&(!filters.pii||!filters.columns));
+    const tHid = (t.type==="transform"&&!filters.transforms)||(t.type==="column"&&!filters.columns)||(t.type==="pii_column"&&(!filters.pii||!filters.columns));
+    return sHid||tHid ? "none" : null;
+  });
+}
+
+// ── Search ────────────────────────────────────────────────────────────────
+document.getElementById("search").addEventListener("input", function(){
+  const q=this.value.toLowerCase().trim();
+  if(!q){clearFocus();return;}
+  const matched=new Set(NODES.filter(n=>n.label.toLowerCase().includes(q)||
+    Object.values(n.meta||{}).join(" ").toLowerCase().includes(q)).map(n=>n.id));
+  node.classed("dimmed",n=>!matched.has(n.id));
+  link.classed("dimmed",e=>{
+    const s=typeof e.source==="object"?e.source.id:e.source;
+    const t=typeof e.target==="object"?e.target.id:e.target;
+    return !matched.has(s)||!matched.has(t);
+  });
+});
+
+// ── Export to PNG ─────────────────────────────────────────────────────────
+function exportPNG(){
+  const svgEl  = document.getElementById("main");
+  const clone  = svgEl.cloneNode(true);
+  clone.setAttribute("xmlns","http://www.w3.org/2000/svg");
+  clone.setAttribute("width",W());clone.setAttribute("height",H());
+  // Embed dark background
+  const bg=document.createElementNS("http://www.w3.org/2000/svg","rect");
+  bg.setAttribute("width","100%");bg.setAttribute("height","100%");bg.setAttribute("fill","#0d1117");
+  clone.insertBefore(bg,clone.firstChild);
+  const xml = new XMLSerializer().serializeToString(clone);
+  const img = new Image();
+  img.onload=()=>{
+    const c=document.createElement("canvas");c.width=W();c.height=H();
+    const ctx=c.getContext("2d");ctx.drawImage(img,0,0);
+    const a=document.createElement("a");a.download="lineage_20260228_114143.png";
+    a.href=c.toDataURL("image/png");a.click();
+  };
+  img.src="data:image/svg+xml;charset=utf-8,"+encodeURIComponent(xml);
+}
+
+// ── Minimap ───────────────────────────────────────────────────────────────
+const mm      = d3.select("#minimap");
+const mmW     = 160, mmH = 110;
+const mmNodes = mm.append("g");
+const mmVP    = document.getElementById("mm-viewport");
+let mmScale   = 1, mmTx = 0, mmTy = 0;
+
+function updateMinimap(t){
+  mmScale=t.k; mmTx=t.x; mmTy=t.y;
+  const vpW=W()/t.k, vpH=H()/t.k;
+  const sx=-t.x/t.k, sy=-t.y/t.k;
+  const bb=getGraphBB();
+  if(!bb||bb.w===0) return;
+  const scl=Math.min(mmW/bb.w, mmH/bb.h)*.85;
+  const ox=(mmW-bb.w*scl)/2-bb.minX*scl, oy=(mmH-bb.h*scl)/2-bb.minY*scl;
+  mmNodes.attr("transform",`translate(${ox},${oy}) scale(${scl})`);
+  d3.select(mmVP)
+    .attr("x",sx*scl+ox-4).attr("y",sy*scl+oy-4)
+    .attr("width",(vpW*scl)+8).attr("height",(vpH*scl)+8);
+}
+function getGraphBB(){
+  if(!NODES.length||!NODES[0].x) return null;
+  const xs=NODES.map(n=>n.x||0), ys=NODES.map(n=>n.y||0);
+  return {minX:Math.min(...xs),minY:Math.min(...ys),w:Math.max(...xs)-Math.min(...xs)||1,h:Math.max(...ys)-Math.min(...ys)||1};
+}
+function updateMinimapNodes(){
+  const dots=mmNodes.selectAll("circle").data(NODES);
+  dots.join("circle").attr("cx",d=>d.x||0).attr("cy",d=>d.y||0).attr("r",4)
+    .attr("fill",d=>{
+      if(d.type==="source")      return "#58a6ff";
+      if(d.type==="destination") return "#3fb950";
+      if(d.type==="pii_column") return "#f85149";
+      if(d.type==="column")      return "#1f6feb";
+      return "#8b949e";
+    }).attr("opacity",.8);
+}
+
+// ── Stats ─────────────────────────────────────────────────────────────────
+const piiCnt = NODES.filter(n=>n.type==="pii_column").length;
+const colCnt  = NODES.filter(n=>n.type==="column"||n.type==="pii_column").length;
+const trnCnt  = NODES.filter(n=>n.type==="transform").length;
+document.getElementById("stats").textContent =
+  `${NODES.length} nodes · ${EDGES.length} edges · ${trnCnt} stages · ${colCnt} columns (${piiCnt} PII)`;
+
+// ── Auto-fit after simulation settles ────────────────────────────────────
+let fitted=false;
+sim.on("end",()=>{
+  if(fitted) return; fitted=true;
+  const bb=getGraphBB();
+  if(!bb||bb.w===0) return;
+  const pad=80;
+  const scl=Math.min(.92,Math.min(W()/(bb.w+pad),(H())/(bb.h+pad)));
+  const tx=W()/2-scl*(bb.minX+bb.w/2), ty=H()/2-scl*(bb.minY+bb.h/2);
+  svg.transition().duration(800).call(zoom.transform,d3.zoomIdentity.translate(tx,ty).scale(scl));
+});
+window.addEventListener("resize",()=>sim.alpha(.15).restart());
+</script>
+</body>
+</html>

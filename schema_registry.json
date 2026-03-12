@@ -1,0 +1,23 @@
+{
+  "sample_data_v3.json": {
+    "columns": {
+      "id": "int64",
+      "first_name": "object",
+      "last_name": "object",
+      "email": "object",
+      "phone": "object",
+      "dob": "object",
+      "salary": "float64",
+      "department_id": "int64",
+      "country_code": "object",
+      "hired_date": "object",
+      "active": "bool",
+      "address__street": "object",
+      "address__city": "object",
+      "address__zip": "object"
+    },
+    "run_id": "b2d6757e-b37a-48cb-93bf-4375ee751da8",
+    "timestamp": "2026-02-27T00:29:48.909145+00:00",
+    "col_count": 14
+  }
+}

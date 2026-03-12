@@ -1,0 +1,1067 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pipeline V3 — Data Pipeline & Governance</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap');
+
+  :root {
+    --bg:        #0d0f12;
+    --panel:     #131619;
+    --panel2:    #191d22;
+    --border:    #252a32;
+    --border2:   #2e3540;
+    --amber:     #f0a500;
+    --amber-dim: #7a5200;
+    --green:     #3dd68c;
+    --green-dim: #1a4a38;
+    --red:       #f05252;
+    --blue:      #4fa3e0;
+    --blue-dim:  #1a3a56;
+    --text:      #c8d0da;
+    --text-dim:  #5a6472;
+    --text-mid:  #8a96a4;
+    --mono:      'IBM Plex Mono', monospace;
+    --sans:      'IBM Plex Sans', sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 13px;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── Title bar ─────────────────────────────────── */
+  .titlebar {
+    background: #0a0c0f;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    padding: 0 16px;
+    height: 38px;
+    flex-shrink: 0;
+    user-select: none;
+  }
+  .win-controls { display: flex; gap: 8px; margin-right: 16px; }
+  .win-btn {
+    width: 12px; height: 12px; border-radius: 50%; cursor: pointer;
+    transition: opacity 0.15s;
+  }
+  .win-btn:hover { opacity: 0.8; }
+  .win-btn.close  { background: #f05252; }
+  .win-btn.min    { background: #f0a500; }
+  .win-btn.max    { background: #3dd68c; }
+  .titlebar-title {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-dim);
+    letter-spacing: 0.08em;
+    flex: 1;
+    text-align: center;
+  }
+
+  /* ── Main layout ────────────────────────────────── */
+  .app {
+    display: grid;
+    grid-template-columns: 220px 1fr;
+    grid-template-rows: 1fr 180px;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  /* ── Sidebar ────────────────────────────────────── */
+  .sidebar {
+    grid-row: 1 / 3;
+    background: var(--panel);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .sidebar-logo {
+    padding: 20px 16px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .logo-mark {
+    font-family: var(--mono);
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--amber);
+    letter-spacing: -0.02em;
+    line-height: 1;
+  }
+  .logo-sub {
+    font-size: 10px;
+    color: var(--text-dim);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    margin-top: 4px;
+  }
+
+  .sidebar-steps { padding: 16px 0; flex: 1; }
+  .step-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 10px 16px;
+    cursor: pointer;
+    transition: background 0.15s;
+    position: relative;
+  }
+  .step-item:hover { background: var(--panel2); }
+  .step-item.active { background: var(--panel2); }
+  .step-item.active::before {
+    content: '';
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 3px;
+    background: var(--amber);
+    border-radius: 0 2px 2px 0;
+  }
+  .step-item.done .step-num { background: var(--green-dim); color: var(--green); border-color: var(--green-dim); }
+  .step-item.done .step-label { color: var(--text-mid); }
+  .step-num {
+    width: 22px; height: 22px;
+    border-radius: 50%;
+    background: var(--panel2);
+    border: 1px solid var(--border2);
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text-dim);
+    flex-shrink: 0;
+    transition: all 0.2s;
+  }
+  .step-item.active .step-num {
+    background: var(--amber-dim);
+    border-color: var(--amber);
+    color: var(--amber);
+  }
+  .step-info { flex: 1; min-width: 0; }
+  .step-label {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text);
+    line-height: 1.3;
+  }
+  .step-item.active .step-label { color: var(--amber); }
+  .step-desc {
+    font-size: 10px;
+    color: var(--text-dim);
+    margin-top: 2px;
+    line-height: 1.4;
+  }
+
+  .sidebar-stats {
+    padding: 12px 16px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .stat-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .stat-label { font-size: 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.08em; }
+  .stat-val { font-family: var(--mono); font-size: 11px; color: var(--green); }
+
+  /* ── Main panel ─────────────────────────────────── */
+  .main {
+    background: var(--panel2);
+    overflow-y: auto;
+    padding: 28px 32px;
+  }
+
+  .step-header {
+    margin-bottom: 24px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .step-header-tag {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--amber);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+  .step-header h1 {
+    font-size: 20px;
+    font-weight: 600;
+    color: white;
+    letter-spacing: -0.02em;
+  }
+  .step-header p {
+    font-size: 12px;
+    color: var(--text-mid);
+    margin-top: 4px;
+  }
+
+  /* Tiles */
+  .tile-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 10px;
+    margin-bottom: 24px;
+  }
+  .tile {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 14px;
+    cursor: pointer;
+    transition: all 0.15s;
+    position: relative;
+    overflow: hidden;
+  }
+  .tile:hover { border-color: var(--border2); background: #1a1f26; }
+  .tile.selected {
+    border-color: var(--amber);
+    background: #1c1700;
+  }
+  .tile.selected::after {
+    content: '✓';
+    position: absolute;
+    top: 8px; right: 10px;
+    color: var(--amber);
+    font-size: 11px;
+    font-weight: 700;
+  }
+  .tile-icon { font-size: 20px; margin-bottom: 8px; }
+  .tile-name { font-size: 12px; font-weight: 600; color: var(--text); }
+  .tile-desc { font-size: 10px; color: var(--text-dim); margin-top: 3px; line-height: 1.4; }
+  .tile.disabled { opacity: 0.35; cursor: not-allowed; }
+  .tile-badge {
+    display: inline-block;
+    font-size: 9px;
+    padding: 1px 5px;
+    border-radius: 3px;
+    margin-top: 4px;
+    font-family: var(--mono);
+    letter-spacing: 0.04em;
+  }
+  .tile-badge.tier1 { background: var(--blue-dim); color: var(--blue); }
+  .tile-badge.tier2 { background: #1f2a1a; color: #6dcc50; }
+  .tile-badge.tier3 { background: #2a1a2a; color: #c07af0; }
+  .tile-badge.sap   { background: #2a1a0a; color: var(--amber); }
+
+  /* Form fields */
+  .form-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+    margin-bottom: 20px;
+  }
+  .form-grid.cols1 { grid-template-columns: 1fr; }
+  .form-grid.cols3 { grid-template-columns: 1fr 1fr 1fr; }
+  .field { display: flex; flex-direction: column; gap: 5px; }
+  .field.span2 { grid-column: span 2; }
+  .field label {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-mid);
+    letter-spacing: 0.04em;
+  }
+  .field input, .field select {
+    background: var(--panel);
+    border: 1px solid var(--border2);
+    border-radius: 4px;
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 12px;
+    padding: 8px 10px;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  .field input:focus, .field select:focus { border-color: var(--amber); }
+  .field input::placeholder { color: var(--text-dim); }
+  select option { background: var(--panel); }
+  .field-hint { font-size: 10px; color: var(--text-dim); }
+
+  /* Toggle switches */
+  .toggle-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-bottom: 20px;
+  }
+  .toggle-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 10px 14px;
+    cursor: pointer;
+  }
+  .toggle-info .toggle-name { font-size: 12px; font-weight: 500; }
+  .toggle-info .toggle-desc { font-size: 10px; color: var(--text-dim); margin-top: 2px; }
+  .toggle-switch {
+    width: 32px; height: 18px;
+    background: var(--border2);
+    border-radius: 9px;
+    position: relative;
+    transition: background 0.2s;
+    flex-shrink: 0;
+  }
+  .toggle-switch.on { background: var(--amber); }
+  .toggle-switch::after {
+    content: '';
+    position: absolute;
+    width: 12px; height: 12px;
+    background: white;
+    border-radius: 50%;
+    top: 3px; left: 3px;
+    transition: left 0.2s;
+  }
+  .toggle-switch.on::after { left: 17px; }
+
+  /* Section label */
+  .section-label {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin-bottom: 10px;
+    margin-top: 20px;
+  }
+  .section-label:first-child { margin-top: 0; }
+
+  /* Transform rows */
+  .transform-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
+  .transform-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 8px 12px;
+  }
+  .transform-op {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 600;
+    padding: 2px 7px;
+    border-radius: 3px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    flex-shrink: 0;
+  }
+  .transform-op.mask    { background: #2a1a00; color: var(--amber); }
+  .transform-op.hash    { background: var(--blue-dim); color: var(--blue); }
+  .transform-op.drop    { background: #2a1010; color: var(--red); }
+  .transform-op.encrypt { background: #1a2a1a; color: var(--green); }
+  .transform-cols {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text);
+    flex: 1;
+  }
+  .transform-del {
+    color: var(--text-dim);
+    cursor: pointer;
+    font-size: 14px;
+    padding: 0 4px;
+    transition: color 0.15s;
+  }
+  .transform-del:hover { color: var(--red); }
+
+  .add-transform {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--amber);
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 500;
+    padding: 6px 0;
+    width: fit-content;
+    transition: opacity 0.15s;
+  }
+  .add-transform:hover { opacity: 0.75; }
+
+  /* Summary panel */
+  .summary-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+  .summary-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 14px;
+  }
+  .summary-card-label {
+    font-size: 10px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 6px;
+  }
+  .summary-card-val {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--text);
+    font-weight: 500;
+  }
+  .summary-card-val.green { color: var(--green); }
+  .summary-card-val.amber { color: var(--amber); }
+  .summary-badge-list { display: flex; flex-wrap: wrap; gap: 5px; }
+  .summary-badge {
+    font-family: var(--mono);
+    font-size: 10px;
+    padding: 2px 7px;
+    border-radius: 3px;
+    background: var(--green-dim);
+    color: var(--green);
+  }
+
+  /* Buttons */
+  .btn-row {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-top: 24px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+  }
+  .btn {
+    padding: 8px 20px;
+    border-radius: 5px;
+    font-family: var(--sans);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s;
+    border: none;
+    letter-spacing: 0.03em;
+  }
+  .btn-ghost {
+    background: transparent;
+    color: var(--text-dim);
+    border: 1px solid var(--border2);
+  }
+  .btn-ghost:hover { color: var(--text); border-color: var(--text-dim); }
+  .btn-primary {
+    background: var(--amber);
+    color: #0a0c0f;
+  }
+  .btn-primary:hover { background: #ffc030; }
+  .btn-run {
+    background: var(--green);
+    color: #0a0c0f;
+    padding: 8px 28px;
+  }
+  .btn-run:hover { background: #5af0a8; }
+
+  /* ── Terminal ───────────────────────────────────── */
+  .terminal {
+    background: #090b0e;
+    border-top: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .term-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 16px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .term-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--green);
+    animation: pulse 2s infinite;
+  }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+  .term-title { font-family: var(--mono); font-size: 10px; color: var(--text-dim); }
+  .term-body {
+    font-family: var(--mono);
+    font-size: 11px;
+    line-height: 1.7;
+    padding: 10px 16px;
+    overflow-y: auto;
+    flex: 1;
+  }
+  .term-line { display: block; }
+  .term-prompt { color: var(--amber); }
+  .term-ok { color: var(--green); }
+  .term-info { color: var(--blue); }
+  .term-dim { color: var(--text-dim); }
+  .term-white { color: var(--text); }
+
+  /* step pages */
+  .step-page { display: none; animation: fadeIn 0.2s ease; }
+  .step-page.active { display: block; }
+  @keyframes fadeIn { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:translateY(0)} }
+
+  /* pii badge on tiles */
+  .pii-warning {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: #1c1400;
+    border: 1px solid var(--amber-dim);
+    border-radius: 5px;
+    padding: 8px 12px;
+    margin-bottom: 16px;
+    font-size: 11px;
+    color: var(--amber);
+  }
+
+</style>
+</head>
+<body>
+
+<!-- Title bar -->
+<div class="titlebar">
+  <div class="win-controls">
+    <div class="win-btn close"></div>
+    <div class="win-btn min"></div>
+    <div class="win-btn max"></div>
+  </div>
+  <div class="titlebar-title">pipeline_v3.exe  —  Data Pipeline & Governance Wizard  v4.9</div>
+  <div style="width:80px"></div>
+</div>
+
+<div class="app">
+
+  <!-- ── Sidebar ────────────────────────────────────── -->
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+      <div class="logo-mark">PIPELINE<span style="color:var(--text-dim)">V3</span></div>
+      <div class="logo-sub">Data Governance Suite</div>
+    </div>
+
+    <nav class="sidebar-steps">
+      <div class="step-item active" onclick="goStep(1)" id="nav1">
+        <div class="step-num">1</div>
+        <div class="step-info">
+          <div class="step-label">Source</div>
+          <div class="step-desc">Where is your data from?</div>
+        </div>
+      </div>
+      <div class="step-item" onclick="goStep(2)" id="nav2">
+        <div class="step-num">2</div>
+        <div class="step-info">
+          <div class="step-label">Destination</div>
+          <div class="step-desc">Where does it go?</div>
+        </div>
+      </div>
+      <div class="step-item" onclick="goStep(3)" id="nav3">
+        <div class="step-num">3</div>
+        <div class="step-info">
+          <div class="step-label">Connection</div>
+          <div class="step-desc">Credentials &amp; tables</div>
+        </div>
+      </div>
+      <div class="step-item" onclick="goStep(4)" id="nav4">
+        <div class="step-num">4</div>
+        <div class="step-info">
+          <div class="step-label">Pipeline Options</div>
+          <div class="step-desc">Transforms &amp; governance</div>
+        </div>
+      </div>
+      <div class="step-item" onclick="goStep(5)" id="nav5">
+        <div class="step-num">5</div>
+        <div class="step-info">
+          <div class="step-label">Review & Run</div>
+          <div class="step-desc">Confirm and execute</div>
+        </div>
+      </div>
+    </nav>
+
+    <div class="sidebar-stats">
+      <div class="stat-row">
+        <div class="stat-label">Status</div>
+        <div class="stat-val" id="stat-status">Configuring</div>
+      </div>
+      <div class="stat-row">
+        <div class="stat-label">Source</div>
+        <div class="stat-val" id="stat-src">—</div>
+      </div>
+      <div class="stat-row">
+        <div class="stat-label">Destination</div>
+        <div class="stat-val" id="stat-dst">—</div>
+      </div>
+      <div class="stat-row">
+        <div class="stat-label">Platforms</div>
+        <div class="stat-val">17 supported</div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ── Main panel ─────────────────────────────────── -->
+  <main class="main">
+
+    <!-- STEP 1 -->
+    <div class="step-page active" id="step1">
+      <div class="step-header">
+        <div class="step-header-tag">Step 1 of 5</div>
+        <h1>Where is your data coming from?</h1>
+        <p>Select a source type. You'll configure the exact file or connection on the next screen.</p>
+      </div>
+
+      <div class="section-label">Source type</div>
+      <div class="tile-grid" style="grid-template-columns: repeat(3, 1fr)">
+        <div class="tile selected" onclick="selectTile(this, 'src', 'file')" data-val="file">
+          <div class="tile-icon">📁</div>
+          <div class="tile-name">File</div>
+          <div class="tile-desc">CSV, Parquet, Excel, JSON, XML, SAS, Stata and 7 more</div>
+        </div>
+        <div class="tile" onclick="selectTile(this, 'src', 'database')" data-val="database">
+          <div class="tile-icon">🗄️</div>
+          <div class="tile-name">Database</div>
+          <div class="tile-desc">Read from any of 15 platforms — SQLite to Snowflake</div>
+        </div>
+        <div class="tile" onclick="selectTile(this, 'src', 'stream')" data-val="stream">
+          <div class="tile-icon">⚡</div>
+          <div class="tile-name">Real-Time Stream</div>
+          <div class="tile-desc">Kafka, AWS Kinesis, or Google Pub/Sub</div>
+        </div>
+      </div>
+
+      <div id="src-file-opts">
+        <div class="section-label">File format</div>
+        <div class="tile-grid">
+          <div class="tile selected" onclick="selectTile(this,'fmt','csv')"><div class="tile-icon">📄</div><div class="tile-name">CSV</div><div class="tile-desc">.csv, auto-detect delimiter</div></div>
+          <div class="tile" onclick="selectTile(this,'fmt','parquet')"><div class="tile-icon">🗜️</div><div class="tile-name">Parquet</div><div class="tile-desc">Columnar binary</div></div>
+          <div class="tile" onclick="selectTile(this,'fmt','json')"><div class="tile-icon">{ }</div><div class="tile-name">JSON / JSONL</div><div class="tile-desc">Array or newline-delimited</div></div>
+          <div class="tile" onclick="selectTile(this,'fmt','excel')"><div class="tile-icon">📊</div><div class="tile-name">Excel</div><div class="tile-desc">.xlsx / .xls</div></div>
+          <div class="tile" onclick="selectTile(this,'fmt','xml')"><div class="tile-icon">〈/〉</div><div class="tile-name">XML</div><div class="tile-desc">Auto-flatten nested</div></div>
+          <div class="tile" onclick="selectTile(this,'fmt','sas')"><div class="tile-icon">📦</div><div class="tile-name">SAS</div><div class="tile-desc">.sas7bdat dataset</div></div>
+          <div class="tile" onclick="selectTile(this,'fmt','avro')"><div class="tile-icon">🔷</div><div class="tile-name">Avro / ORC</div><div class="tile-desc">Schema-embedded binary</div></div>
+          <div class="tile" onclick="selectTile(this,'fmt','other')"><div class="tile-icon">⋯</div><div class="tile-name">More…</div><div class="tile-desc">TSV, YAML, Feather, Stata, FWF</div></div>
+        </div>
+
+        <div class="form-grid cols1">
+          <div class="field">
+            <label>File path</label>
+            <input type="text" placeholder="C:\Users\matt\data\customers.csv" id="file-path" oninput="updateStat()">
+            <div class="field-hint">Compression auto-detected — .gz .bz2 .zip .zst .lz4 .tgz supported</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn btn-primary" onclick="goStep(2)">Next: Destination →</button>
+      </div>
+    </div>
+
+    <!-- STEP 2 -->
+    <div class="step-page" id="step2">
+      <div class="step-header">
+        <div class="step-header-tag">Step 2 of 5</div>
+        <h1>Where does the data go?</h1>
+        <p>Select a destination platform. Only relevant connection fields will appear in Step 3.</p>
+      </div>
+
+      <div class="section-label">Tier 1 — Mainstream Cloud Warehouses</div>
+      <div class="tile-grid">
+        <div class="tile" onclick="selectTile(this,'dst','sqlite')"><div class="tile-icon">🪶</div><div class="tile-name">SQLite</div><span class="tile-badge tier1">LOCAL</span></div>
+        <div class="tile" onclick="selectTile(this,'dst','postgresql')"><div class="tile-icon">🐘</div><div class="tile-name">PostgreSQL</div><span class="tile-badge tier1">SQL</span></div>
+        <div class="tile" onclick="selectTile(this,'dst','mysql')"><div class="tile-icon">🐬</div><div class="tile-name">MySQL</div><span class="tile-badge tier1">SQL</span></div>
+        <div class="tile" onclick="selectTile(this,'dst','mssql')"><div class="tile-icon">🪟</div><div class="tile-name">SQL Server</div><span class="tile-badge tier1">SQL</span></div>
+        <div class="tile selected" onclick="selectTile(this,'dst','snowflake')"><div class="tile-icon">❄️</div><div class="tile-name">Snowflake</div><span class="tile-badge tier1">CLOUD</span></div>
+        <div class="tile" onclick="selectTile(this,'dst','bigquery')"><div class="tile-icon">🔵</div><div class="tile-name">BigQuery</div><span class="tile-badge tier1">CLOUD</span></div>
+        <div class="tile" onclick="selectTile(this,'dst','redshift')"><div class="tile-icon">🔴</div><div class="tile-name">Redshift</div><span class="tile-badge tier1">CLOUD</span></div>
+        <div class="tile" onclick="selectTile(this,'dst','synapse')"><div class="tile-icon">💜</div><div class="tile-name">Azure Synapse</div><span class="tile-badge tier1">CLOUD</span></div>
+        <div class="tile" onclick="selectTile(this,'dst','mongodb')"><div class="tile-icon">🍃</div><div class="tile-name">MongoDB</div><span class="tile-badge tier1">NOSQL</span></div>
+      </div>
+
+      <div class="section-label">Tier 2 — Analytical Engines</div>
+      <div class="tile-grid">
+        <div class="tile" onclick="selectTile(this,'dst','databricks')"><div class="tile-icon">🧱</div><div class="tile-name">Databricks</div><span class="tile-badge tier2">DELTA</span></div>
+        <div class="tile" onclick="selectTile(this,'dst','clickhouse')"><div class="tile-icon">⬡</div><div class="tile-name">ClickHouse</div><span class="tile-badge tier2">OLAP</span></div>
+      </div>
+
+      <div class="section-label">Tier 3 — Enterprise & SAP</div>
+      <div class="tile-grid">
+        <div class="tile" onclick="selectTile(this,'dst','oracle')"><div class="tile-icon">🔶</div><div class="tile-name">Oracle ADW</div><span class="tile-badge tier3">ENTERPRISE</span></div>
+        <div class="tile" onclick="selectTile(this,'dst','db2')"><div class="tile-icon">🔷</div><div class="tile-name">IBM Db2</div><span class="tile-badge tier3">ENTERPRISE</span></div>
+        <div class="tile" onclick="selectTile(this,'dst','firebolt')"><div class="tile-icon">🔥</div><div class="tile-name">Firebolt</div><span class="tile-badge tier3">ANALYTICS</span></div>
+        <div class="tile" onclick="selectTile(this,'dst','yellowbrick')"><div class="tile-icon">🟡</div><div class="tile-name">Yellowbrick</div><span class="tile-badge tier3">MPP</span></div>
+        <div class="tile" onclick="selectTile(this,'dst','hana')"><div class="tile-icon">🌐</div><div class="tile-name">SAP HANA</div><span class="tile-badge sap">SAP</span><br><div class="tile-desc" style="margin-top:4px">Live source for SAP Analytics Cloud</div></div>
+        <div class="tile" onclick="selectTile(this,'dst','datasphere')"><div class="tile-icon">☁️</div><div class="tile-name">SAP Datasphere</div><span class="tile-badge sap">SAP</span><br><div class="tile-desc" style="margin-top:4px">Semantic layer → SAC dashboards</div></div>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn btn-ghost" onclick="goStep(1)">← Back</button>
+        <button class="btn btn-primary" onclick="goStep(3)">Next: Connection →</button>
+      </div>
+    </div>
+
+    <!-- STEP 3 -->
+    <div class="step-page" id="step3">
+      <div class="step-header">
+        <div class="step-header-tag">Step 3 of 5</div>
+        <h1>Connection Details</h1>
+        <p>Only fields relevant to <span style="color:var(--amber)" id="dst-label">Snowflake</span> are shown.</p>
+      </div>
+
+      <div class="section-label">Source — File</div>
+      <div class="form-grid cols1">
+        <div class="field">
+          <label>File path</label>
+          <input type="text" value="C:\Users\matt\data\customers.csv">
+        </div>
+      </div>
+
+      <div class="section-label">Destination — Snowflake</div>
+      <div class="form-grid">
+        <div class="field span2">
+          <label>Account identifier</label>
+          <input type="text" placeholder="org-account  (e.g. myorg-myaccount)">
+        </div>
+        <div class="field">
+          <label>Username</label>
+          <input type="text" placeholder="PIPELINE_USER">
+        </div>
+        <div class="field">
+          <label>Password</label>
+          <input type="password" placeholder="••••••••••">
+        </div>
+        <div class="field">
+          <label>Database</label>
+          <input type="text" placeholder="PROD_DB">
+        </div>
+        <div class="field">
+          <label>Schema</label>
+          <input type="text" placeholder="PUBLIC">
+        </div>
+        <div class="field">
+          <label>Warehouse</label>
+          <input type="text" placeholder="COMPUTE_WH">
+        </div>
+        <div class="field">
+          <label>Destination table</label>
+          <input type="text" placeholder="customers_clean">
+        </div>
+      </div>
+
+      <div class="section-label">Write mode</div>
+      <div class="tile-grid" style="grid-template-columns: repeat(3,1fr)">
+        <div class="tile selected" onclick="selectTile(this,'mode','replace')"><div class="tile-name">Replace</div><div class="tile-desc">DROP + recreate table each run</div></div>
+        <div class="tile" onclick="selectTile(this,'mode','append')"><div class="tile-name">Append</div><div class="tile-desc">INSERT new rows, keep existing</div></div>
+        <div class="tile" onclick="selectTile(this,'mode','upsert')"><div class="tile-name">Upsert / MERGE</div><div class="tile-desc">Update existing, insert new</div></div>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn btn-ghost" onclick="goStep(2)">← Back</button>
+        <button class="btn btn-primary" onclick="goStep(4)">Next: Options →</button>
+      </div>
+    </div>
+
+    <!-- STEP 4 -->
+    <div class="step-page" id="step4">
+      <div class="step-header">
+        <div class="step-header-tag">Step 4 of 5</div>
+        <h1>Pipeline Options</h1>
+        <p>Configure transforms, governance, and data quality settings.</p>
+      </div>
+
+      <div class="pii-warning">
+        ⚠️ PII detected in source columns: <strong>email, phone, salary, dob</strong> — masking recommended before load.
+      </div>
+
+      <div class="section-label">Transforms</div>
+      <div class="transform-list" id="transform-list">
+        <div class="transform-row">
+          <span class="transform-op mask">mask</span>
+          <span class="transform-cols">email, phone</span>
+          <span class="transform-del" onclick="this.parentElement.remove()">✕</span>
+        </div>
+        <div class="transform-row">
+          <span class="transform-op hash">hash</span>
+          <span class="transform-cols">user_id</span>
+          <span class="transform-del" onclick="this.parentElement.remove()">✕</span>
+        </div>
+        <div class="transform-row">
+          <span class="transform-op drop">drop</span>
+          <span class="transform-cols">password_hash, internal_notes</span>
+          <span class="transform-del" onclick="this.parentElement.remove()">✕</span>
+        </div>
+      </div>
+      <div class="add-transform" onclick="addTransform()">＋ Add transform</div>
+
+      <div class="section-label">Governance & Quality</div>
+      <div class="toggle-grid">
+        <div class="toggle-row" onclick="toggleSwitch(this)">
+          <div class="toggle-info">
+            <div class="toggle-name">PII Discovery Report</div>
+            <div class="toggle-desc">JSON + HTML GDPR/CCPA compliance report</div>
+          </div>
+          <div class="toggle-switch on"></div>
+        </div>
+        <div class="toggle-row" onclick="toggleSwitch(this)">
+          <div class="toggle-info">
+            <div class="toggle-name">Data Quality Score</div>
+            <div class="toggle-desc">Completeness, uniqueness, validity (0–100)</div>
+          </div>
+          <div class="toggle-switch on"></div>
+        </div>
+        <div class="toggle-row" onclick="toggleSwitch(this)">
+          <div class="toggle-info">
+            <div class="toggle-name">Reversible Load</div>
+            <div class="toggle-desc">Snapshot before write — one-call rollback</div>
+          </div>
+          <div class="toggle-switch on"></div>
+        </div>
+        <div class="toggle-row" onclick="toggleSwitch(this)">
+          <div class="toggle-info">
+            <div class="toggle-name">Schema Evolution</div>
+            <div class="toggle-desc">Auto ALTER TABLE on new columns</div>
+          </div>
+          <div class="toggle-switch on"></div>
+        </div>
+        <div class="toggle-row" onclick="toggleSwitch(this)">
+          <div class="toggle-info">
+            <div class="toggle-name">Cost Estimate</div>
+            <div class="toggle-desc">Log Snowflake compute + storage cost</div>
+          </div>
+          <div class="toggle-switch on"></div>
+        </div>
+        <div class="toggle-row" onclick="toggleSwitch(this)">
+          <div class="toggle-info">
+            <div class="toggle-name">Dry Run</div>
+            <div class="toggle-desc">Run all checks — skip the actual write</div>
+          </div>
+          <div class="toggle-switch"></div>
+        </div>
+      </div>
+
+      <div class="section-label">Run label</div>
+      <div class="form-grid cols1">
+        <div class="field">
+          <input type="text" value="run_customers_20260301" placeholder="Optional run identifier">
+          <div class="field-hint">Appended to all output filenames in the log folder</div>
+        </div>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn btn-ghost" onclick="goStep(3)">← Back</button>
+        <button class="btn btn-primary" onclick="goStep(5)">Next: Review →</button>
+      </div>
+    </div>
+
+    <!-- STEP 5 -->
+    <div class="step-page" id="step5">
+      <div class="step-header">
+        <div class="step-header-tag">Step 5 of 5</div>
+        <h1>Review & Run</h1>
+        <p>Confirm your configuration then execute the pipeline.</p>
+      </div>
+
+      <div class="summary-grid">
+        <div class="summary-card">
+          <div class="summary-card-label">Source</div>
+          <div class="summary-card-val">CSV  ·  customers.csv</div>
+        </div>
+        <div class="summary-card">
+          <div class="summary-card-label">Destination</div>
+          <div class="summary-card-val amber">Snowflake  ·  customers_clean</div>
+        </div>
+        <div class="summary-card">
+          <div class="summary-card-label">Write mode</div>
+          <div class="summary-card-val">REPLACE</div>
+        </div>
+        <div class="summary-card">
+          <div class="summary-card-label">Transforms</div>
+          <div class="summary-card-val green">3 configured</div>
+        </div>
+        <div class="summary-card" style="grid-column: span 2">
+          <div class="summary-card-label">Governance enabled</div>
+          <div class="summary-badge-list">
+            <span class="summary-badge">PII Report</span>
+            <span class="summary-badge">Quality Score</span>
+            <span class="summary-badge">Reversible Load</span>
+            <span class="summary-badge">Schema Evolution</span>
+            <span class="summary-badge">Cost Estimate</span>
+            <span class="summary-badge">Audit Ledger</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="section-label">Log folder</div>
+      <div class="field" style="margin-bottom:20px">
+        <input type="text" value="customers LOGS\" readonly style="color:var(--text-dim)">
+        <div class="field-hint">All reports, audit ledger, quality history, snapshots, and logs will be written here.</div>
+      </div>
+
+      <div class="btn-row" style="justify-content: space-between">
+        <button class="btn btn-ghost" onclick="goStep(4)">← Back</button>
+        <button class="btn btn-run" onclick="runPipeline()">▶  Run Pipeline</button>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- ── Terminal ─────────────────────────────────── -->
+  <div class="terminal">
+    <div class="term-bar">
+      <div class="term-dot" id="term-dot"></div>
+      <div class="term-title">Governance Output — customers LOGS\pipeline_20260301_172409.log</div>
+    </div>
+    <div class="term-body" id="term-body">
+      <span class="term-line"><span class="term-dim">────────────────────────────────────────────────────────────────</span></span>
+      <span class="term-line"><span class="term-prompt">  PIPELINE V3  </span><span class="term-white">│  Data Pipeline &amp; Governance Wizard  v4.9</span></span>
+      <span class="term-line"><span class="term-dim">────────────────────────────────────────────────────────────────</span></span>
+      <span class="term-line"><span class="term-dim">  17 destination platforms  │  14 source formats  │  6 compression wrappers</span></span>
+      <span class="term-line"></span>
+      <span class="term-line"><span class="term-dim">  Configure your pipeline using the wizard above, then click Run.</span></span>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  let state = { src: 'file', dst: 'snowflake', fmt: 'csv' };
+  let currentStep = 1;
+  let running = false;
+
+  function selectTile(el, group, val) {
+    el.closest('.tile-grid, .main').querySelectorAll('.tile').forEach(t => {
+      if (t.dataset.val && t.closest('.tile-grid') === el.closest('.tile-grid')) {
+        t.classList.remove('selected');
+      }
+    });
+    el.classList.add('selected');
+    state[group] = val;
+    if (group === 'dst') {
+      document.getElementById('dst-label').textContent = el.querySelector('.tile-name').textContent;
+      document.getElementById('stat-dst').textContent = el.querySelector('.tile-name').textContent;
+    }
+    if (group === 'src') {
+      document.getElementById('stat-src').textContent = el.querySelector('.tile-name').textContent;
+    }
+  }
+
+  function updateStat() {
+    const v = document.getElementById('file-path').value;
+    if (v) document.getElementById('stat-src').textContent = v.split('\\').pop() || v.split('/').pop() || v;
+  }
+
+  function goStep(n) {
+    if (running) return;
+    document.querySelectorAll('.step-page').forEach((p,i) => {
+      p.classList.toggle('active', i+1 === n);
+    });
+    document.querySelectorAll('.step-item').forEach((item, i) => {
+      item.classList.remove('active','done');
+      if (i+1 === n) item.classList.add('active');
+      if (i+1 < n)   item.classList.add('done');
+    });
+    currentStep = n;
+  }
+
+  function toggleSwitch(row) {
+    const sw = row.querySelector('.toggle-switch');
+    sw.classList.toggle('on');
+  }
+
+  function addTransform() {
+    const ops = ['mask','hash','encrypt','drop'];
+    const op = ops[Math.floor(Math.random()*ops.length)];
+    const cols = ['first_name','last_name','ssn','credit_card','address','dob'];
+    const col = cols[Math.floor(Math.random()*cols.length)];
+    const row = document.createElement('div');
+    row.className = 'transform-row';
+    row.innerHTML = `<span class="transform-op ${op}">${op}</span><span class="transform-cols">${col}</span><span class="transform-del" onclick="this.parentElement.remove()">✕</span>`;
+    document.getElementById('transform-list').appendChild(row);
+  }
+
+  function termLine(cls, text) {
+    const span = document.createElement('span');
+    span.className = 'term-line';
+    span.innerHTML = `<span class="${cls}">${text}</span>`;
+    document.getElementById('term-body').appendChild(span);
+    document.getElementById('term-body').scrollTop = 9999;
+  }
+
+  function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+  async function runPipeline() {
+    if (running) return;
+    running = true;
+    document.getElementById('stat-status').textContent = 'Running';
+    document.getElementById('stat-status').style.color = 'var(--amber)';
+    document.getElementById('term-dot').style.background = 'var(--amber)';
+
+    const tb = document.getElementById('term-body');
+    tb.innerHTML = '';
+
+    const lines = [
+      ['term-dim', '════════════════════════════════════════════════════════════════'],
+      ['term-prompt', '  PIPELINE RUN  ─  customers.csv  →  Snowflake::customers_clean'],
+      ['term-dim', '════════════════════════════════════════════════════════════════'],
+      ['term-dim', ''],
+      ['term-info', '  [LIFECYCLE] PIPELINE_STARTED'],
+      ['term-dim', '  Log folder  →  customers LOGS\\'],
+      ['term-dim', ''],
+      ['term-white', '  [1/5] EXTRACT ─────────────────────────────────────────────'],
+      ['term-ok', '  ✓  SHA-256 fingerprint: 3a9f14c2...'],
+      ['term-ok', '  ✓  45,231 rows × 18 columns read from customers.csv'],
+      ['term-ok', '  ✓  Compression: none detected'],
+      ['term-dim', ''],
+      ['term-white', '  [2/5] CLASSIFY ────────────────────────────────────────────'],
+      ['term-ok', '  ✓  Classification: CONFIDENTIAL  (PII fields: 4, special: 0)'],
+      ['term-info', '  🔍  PII scan  →  4 field(s) found: email, phone, salary, dob'],
+      ['term-dim', ''],
+      ['term-white', '  [3/5] VALIDATE ────────────────────────────────────────────'],
+      ['term-ok', '  ✓  Expectations suite: 12 checks'],
+      ['term-ok', '  ✓  Passed: 12  │  Failed: 0  │  DLQ rows: 0'],
+      ['term-dim', ''],
+      ['term-white', '  [4/5] TRANSFORM ───────────────────────────────────────────'],
+      ['term-ok', '  ✓  mask:    email, phone'],
+      ['term-ok', '  ✓  hash:    user_id'],
+      ['term-ok', '  ✓  drop:    password_hash, internal_notes'],
+      ['term-dim', ''],
+      ['term-white', '  [5/5] LOAD ─────────────────────────────────────────────────'],
+      ['term-info', '  📸  Snapshot saved: customers_clean  [45,231 rows]  (reversible)'],
+      ['term-ok', '  ✅  Load complete: 45,231 rows  →  Snowflake::customers_clean'],
+      ['term-dim', ''],
+      ['term-white', '  GOVERNANCE REPORTS ─────────────────────────────────────────'],
+      ['term-ok', '  ✓  Quality score: 97.4/100  (grade A)'],
+      ['term-ok', '  ✓  PII report  →  customers LOGS\\pii_report_20260301_172409.html'],
+      ['term-ok', '  ✓  Run report  →  customers LOGS\\run_report_20260301_172409.html'],
+      ['term-info', '  💰  Cost estimate: $0.033  (Snowflake X-Small, 0.016 credits)'],
+      ['term-dim', ''],
+      ['term-dim', '════════════════════════════════════════════════════════════════'],
+      ['term-ok', '  ✓  PIPELINE COMPLETE  │  45,231 rows  │  2.4s  │  grade A'],
+      ['term-dim', '════════════════════════════════════════════════════════════════'],
+    ];
+
+    for (const [cls, text] of lines) {
+      termLine(cls, text);
+      await sleep(60);
+    }
+
+    running = false;
+    document.getElementById('stat-status').textContent = 'Complete';
+    document.getElementById('stat-status').style.color = 'var(--green)';
+    document.getElementById('term-dot').style.background = 'var(--green)';
+    document.getElementById('term-dot').style.animation = 'none';
+  }
+</script>
+</body>
+</html>

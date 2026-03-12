@@ -1,0 +1,77 @@
+# Data Governance Pipeline — Full Requirements (all optional drivers)
+# ─────────────────────────────────────────────────────────────────────────────
+# Install with:  pip install -r requirements_v2.txt
+#
+# Installs everything in requirements.txt PLUS every optional cloud/enterprise
+# destination driver.  Install only the drivers you actually connect to if you
+# prefer a smaller environment.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Everything in the core file ───────────────────────────────────────────────
+-r requirements.txt
+
+
+# ── Tier 1: Cloud Data Warehouses ────────────────────────────────────────────
+
+# Snowflake (#6)
+snowflake-connector-python>=3.0.0
+snowflake-sqlalchemy>=1.6.0
+
+# Amazon Redshift (#8)
+redshift-connector>=2.0.0
+sqlalchemy-redshift>=0.8.0
+
+# Google BigQuery (#7)
+google-cloud-bigquery>=3.0.0
+google-cloud-bigquery-storage>=2.0.0
+db-dtypes>=1.0.0
+
+# Azure Synapse (#9)  — driver already covered by pyodbc in requirements.txt
+azure-storage-blob>=12.0.0
+azure-identity>=1.0.0
+
+
+# ── Tier 2: Analytical Engines ───────────────────────────────────────────────
+
+# Databricks (#10)
+databricks-sql-connector>=3.0.0
+
+# ClickHouse (#11)
+clickhouse-connect>=0.6.0
+
+
+# ── Tier 3: Enterprise Platforms ─────────────────────────────────────────────
+
+# Oracle (#12)
+oracledb>=1.0.0
+
+# IBM Db2 (#13)
+ibm-db>=3.0.0
+ibm-db-sa>=0.4.0
+
+# Firebolt (#14)
+firebolt-sdk>=0.9.0
+
+# SAP HANA (#16)
+hdbcli>=2.19.0
+
+# SAP Datasphere (#17) — covered by requests in requirements.txt
+
+# QuickBooks Online (#18) — covered by requests in requirements.txt
+
+
+# ── Streaming sources ─────────────────────────────────────────────────────────
+kafka-python>=2.0.0             # KafkaExtractor (pipeline_streaming.py)
+boto3>=1.28.0                   # KinesisExtractor (pipeline_streaming.py)
+google-cloud-pubsub>=2.18.0     # PubSubExtractor (pipeline_streaming.py)
+
+
+# ── Metadata / lineage extensions ────────────────────────────────────────────
+openlineage-python>=1.0.0       # OpenLineageEmitter (metadata_extensions.py)
+scipy>=1.11.0                   # AnomalyDetector statistical tests (metadata_extensions.py)
+attrs>=23.0.0                   # OpenLineage event dataclasses (metadata_extensions.py)
+
+
+# ── Data catalog connectors ───────────────────────────────────────────────────
+pyatlan>=3.0.0                  # AtlanConnector (catalog_connectors.py)
+# Collibra, Alation, and Informatica Axon use requests (already in core)

@@ -1,0 +1,6 @@
+[
+  {"id":1,"first_name":"Alice","last_name":"Johnson","email":"alice@example.com","phone":"+12125550101","dob":"1990-05-14","salary":85000,"department_id":10,"country_code":"US","hired_date":"2021-03-15","active":true,"address":{"street":"123 Main St","city":"New York","zip":"10001"}},
+  {"id":2,"first_name":"Bob","last_name":"Smith","email":"bob@example.com","phone":"+12125550102","dob":"1985-11-22","salary":92000,"department_id":20,"country_code":"GB","hired_date":"2019-07-22","active":true,"address":{"street":"456 Elm Ave","city":"Brooklyn","zip":"11201"}},
+  {"id":3,"first_name":"Carol","last_name":"Williams","email":"carol@example.com","phone":"+12125550103","dob":"1995-03-08","salary":78000,"department_id":10,"country_code":"US","hired_date":"2022-01-10","active":false,"address":{"street":"789 Oak Rd","city":"Queens","zip":"11354"}},
+  {"id":4,"first_name":"David","last_name":"Brown","email":"david@example.com","phone":"+12125550104","dob":"1988-07-19","salary":null,"department_id":99,"country_code":"CA","hired_date":"2023-06-01","active":true,"address":{"street":"321 Pine St","city":"Bronx","zip":"10451"}}
+]
