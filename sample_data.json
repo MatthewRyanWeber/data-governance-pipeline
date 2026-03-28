@@ -1,0 +1,35 @@
+[
+  {
+    "id": 1,
+    "first_name": "Alice",
+    "last_name": "Johnson",
+    "email": "alice@example.com",
+    "phone": "212-555-0101",
+    "address": {"street": "123 Main St", "city": "New York", "zip": "10001"},
+    "salary": 85000,
+    "department": "Engineering",
+    "metadata": {"hired_date": "2021-03-15", "active": true}
+  },
+  {
+    "id": 2,
+    "first_name": "Bob",
+    "last_name": "Smith",
+    "email": "bob@example.com",
+    "phone": "212-555-0102",
+    "address": {"street": "456 Elm Ave", "city": "Brooklyn", "zip": "11201"},
+    "salary": 92000,
+    "department": "Finance",
+    "metadata": {"hired_date": "2019-07-22", "active": true}
+  },
+  {
+    "id": 3,
+    "first_name": "Carol",
+    "last_name": "Williams",
+    "email": "carol@example.com",
+    "phone": "212-555-0103",
+    "address": {"street": "789 Oak Rd", "city": "Queens", "zip": "11354"},
+    "salary": 78000,
+    "department": "HR",
+    "metadata": {"hired_date": "2022-01-10", "active": false}
+  }
+]

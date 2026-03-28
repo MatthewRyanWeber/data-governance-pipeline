@@ -1,0 +1,16 @@
+{
+  "employees::salary": [
+    {
+      "key_version": "v1",
+      "pipeline_id": "b2d6757e-b37a-48cb-93bf-4375ee751da8",
+      "timestamp": "2026-02-27T00:29:49.170916+00:00"
+    }
+  ],
+  "employees::phone": [
+    {
+      "key_version": "v1",
+      "pipeline_id": "b2d6757e-b37a-48cb-93bf-4375ee751da8",
+      "timestamp": "2026-02-27T00:29:49.170916+00:00"
+    }
+  ]
+}

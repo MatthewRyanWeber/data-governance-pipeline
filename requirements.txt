@@ -1,0 +1,77 @@
+# Data Governance Pipeline — Core Requirements
+# ─────────────────────────────────────────────────────────────────────────────
+# Install with:  pip install -r requirements.txt
+#
+# This file covers everything needed to run pipeline_v3.py and
+# governance_extensions.py.  Optional cloud/enterprise drivers live in
+# requirements_v2.txt (install only the ones you actually connect to).
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+# ── Data processing ───────────────────────────────────────────────────────────
+pandas>=2.0.0               # DataFrame engine — required by all modules
+numpy>=1.26.0               # DifferentialPrivacyTransformer noise; pure-Python
+                            #   fallback exists but numpy is strongly recommended
+openpyxl>=3.1.0             # Excel .xlsx read/write
+lxml>=4.9.0                 # XML parsing via pd.read_xml
+
+
+# ── SQL engine ────────────────────────────────────────────────────────────────
+sqlalchemy>=2.0.0           # Universal SQL abstraction — required for all SQL
+                            #   destinations, RetentionEnforcer, and DSARResponder
+
+
+# ── Core destination drivers (always-used SQL/Mongo targets) ──────────────────
+psycopg2-binary>=2.9.0      # PostgreSQL / Yellowbrick (PG wire protocol)
+pymysql>=1.1.0              # MySQL / MariaDB
+pyodbc>=5.0.0               # SQL Server / Azure Synapse
+                            #   (also requires ODBC Driver 17 installed on the OS)
+pymongo>=4.6.0              # MongoDB
+
+
+# ── HTTP client ───────────────────────────────────────────────────────────────
+requests>=2.31.0            # QuickBooks Online, SAP Datasphere, catalog connectors,
+                            #   Slack webhook notifications
+
+
+# ── Secrets / configuration ───────────────────────────────────────────────────
+python-dotenv>=1.0.0        # SecretsManager — loads credentials from .env files
+
+
+# ── Resilience ────────────────────────────────────────────────────────────────
+tenacity>=8.2.0             # Exponential-backoff retry on load failures
+
+
+# ── Governance extensions ─────────────────────────────────────────────────────
+cryptography>=42.0.0        # PseudonymVault (Fernet encryption), ColumnEncryptor
+                            #   (AES-256 field-level encryption)
+pyarrow>=14.0.0             # Parquet source/destination, RetentionEnforcer archiving,
+                            #   and ORC format support
+pyyaml>=6.0.0               # PurposeLimitationEnforcer.load_from_yaml,
+                            #   DataContractValidator, DataContractEnforcer
+
+
+# ── File format support ───────────────────────────────────────────────────────
+fastavro>=1.8.0             # Avro (.avro) read/write
+pyorc>=0.9.0                # ORC (.orc) read/write
+zstandard>=0.21.0           # Zstandard (.zst) compression
+lz4>=4.0.0                  # LZ4 (.lz4) compression
+
+
+# ── Data quality ──────────────────────────────────────────────────────────────
+great-expectations>=1.0.0   # SchemaValidator expectation suites
+                            #   (pipeline degrades gracefully without this)
+
+
+# ── Data generation / enrichment ─────────────────────────────────────────────
+faker>=24.0.0               # SyntheticDataGenerator — realistic fake data
+phonenumbers>=8.13.0        # DataStandardiser — phone number normalisation
+
+
+# ── Scheduler / API server ────────────────────────────────────────────────────
+schedule>=1.2.0             # PipelineScheduler (pipeline_scheduler.py)
+flask>=3.0.0                # REST API server (pipeline_api.py)
+
+
+# ── Utilities ─────────────────────────────────────────────────────────────────
+flatten-json>=0.1.14        # Alternative JSON flattener (auto-detected at runtime)

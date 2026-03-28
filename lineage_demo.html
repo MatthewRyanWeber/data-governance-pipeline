@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Data Lineage — 20260228_105818</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: system-ui, sans-serif; background: #0f1117; color: #e0e0e0; overflow: hidden; }
+#header { position: fixed; top: 0; left: 0; right: 0; height: 52px; background: #1565c0;
+           display: flex; align-items: center; padding: 0 20px; gap: 16px; z-index: 100;
+           box-shadow: 0 2px 8px rgba(0,0,0,.4); }
+#header h1 { font-size: 1em; font-weight: 600; color: #fff; letter-spacing: .02em; }
+#header span { font-size: .8em; color: rgba(255,255,255,.6); }
+#search { margin-left: auto; background: rgba(255,255,255,.12); border: 1px solid rgba(255,255,255,.2);
+           color: #fff; padding: 5px 12px; border-radius: 20px; font-size: .85em; outline: none; width: 200px; }
+#search::placeholder { color: rgba(255,255,255,.45); }
+#canvas { position: fixed; top: 52px; left: 0; right: 0; bottom: 0; }
+svg { width: 100%; height: 100%; }
+
+/* Nodes */
+.node-source rect       { fill: #1565c0; rx: 24; ry: 24; stroke: #42a5f5; stroke-width: 1.5; }
+.node-destination rect  { fill: #1b5e20; rx: 24; ry: 24; stroke: #66bb6a; stroke-width: 1.5; }
+.node-transform rect    { fill: #1e2a3a; rx: 10; ry: 10; stroke: #546e7a; stroke-width: 1; }
+.node-column circle     { fill: #004d40; stroke: #26a69a; stroke-width: 1.2; }
+.node-pii_column circle { fill: #4a1010; stroke: #ef5350; stroke-width: 1.5; }
+
+.node text { fill: #e0e0e0; font-size: 11px; text-anchor: middle; dominant-baseline: central;
+              pointer-events: none; user-select: none; }
+.node-source text, .node-destination text { font-size: 12px; font-weight: 600; }
+
+/* Edges */
+.link { stroke: #455a64; stroke-opacity: .7; fill: none; }
+.link-dashed { stroke: #26a69a; stroke-opacity: .5; stroke-dasharray: 4 3; fill: none; }
+
+/* Arrows */
+marker#arrow path      { fill: #455a64; }
+marker#arrow-teal path { fill: #26a69a; }
+
+/* Highlight */
+.node.dimmed rect, .node.dimmed circle { opacity: .15; }
+.node.dimmed text   { opacity: .1; }
+.link.dimmed        { opacity: .05; }
+.link-dashed.dimmed { opacity: .05; }
+.node.highlighted rect, .node.highlighted circle { filter: brightness(1.4); }
+
+/* Detail panel */
+#detail { position: fixed; bottom: 20px; left: 20px; background: #1a2332;
+           border: 1px solid #2e3f55; border-radius: 10px; padding: 16px 20px;
+           min-width: 240px; max-width: 320px; font-size: .85em;
+           box-shadow: 0 4px 20px rgba(0,0,0,.5); display: none; }
+#detail h3 { color: #42a5f5; margin-bottom: 10px; font-size: .95em; }
+#detail table { width: 100%; border-collapse: collapse; }
+#detail td { padding: 3px 6px; vertical-align: top; }
+#detail td:first-child { color: #90a4ae; white-space: nowrap; padding-right: 12px; }
+#detail td:last-child   { color: #e0e0e0; word-break: break-all; }
+#detail-close { float: right; cursor: pointer; color: #546e7a; font-size: 1.1em; line-height: 1; }
+#detail-close:hover { color: #ef5350; }
+
+/* Legend */
+#legend { position: fixed; top: 68px; right: 16px; background: #1a2332;
+           border: 1px solid #2e3f55; border-radius: 8px; padding: 12px 16px;
+           font-size: .78em; }
+#legend h4 { color: #90a4ae; margin-bottom: 8px; font-size: .8em; text-transform: uppercase; letter-spacing: .06em; }
+.lg { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
+.lg-sq { width: 14px; height: 14px; border-radius: 3px; flex-shrink: 0; }
+.lg-ci { width: 14px; height: 14px; border-radius: 50%; flex-shrink: 0; }
+
+/* Node count badge */
+#stats { position: fixed; bottom: 16px; right: 16px; background: #1a2332;
+          border: 1px solid #2e3f55; border-radius: 20px; padding: 6px 14px;
+          font-size: .78em; color: #90a4ae; }
+</style>
+</head>
+<body>
+
+<div id="header">
+  <h1>🔗 Data Lineage Graph</h1>
+  <span>2026-02-28 10:58:18 UTC</span>
+  <input id="search" placeholder="Search nodes…" type="text">
+</div>
+
+<div id="canvas"><svg id="svg"></svg></div>
+
+<div id="legend">
+  <h4>Node Types</h4>
+  <div class="lg"><div class="lg-sq" style="background:#1565c0;border:1px solid #42a5f5"></div>Source</div>
+  <div class="lg"><div class="lg-sq" style="background:#1e2a3a;border:1px solid #546e7a"></div>Transform</div>
+  <div class="lg"><div class="lg-ci" style="background:#004d40;border:1px solid #26a69a"></div>Column</div>
+  <div class="lg"><div class="lg-ci" style="background:#4a1010;border:1px solid #ef5350"></div>PII Column</div>
+  <div class="lg"><div class="lg-sq" style="background:#1b5e20;border:1px solid #66bb6a"></div>Destination</div>
+  <hr style="border-color:#2e3f55;margin:8px 0">
+  <div class="lg"><div style="width:28px;height:2px;background:#455a64"></div>Flow</div>
+  <div class="lg"><div style="width:28px;height:0;border-top:2px dashed #26a69a"></div>Column flow</div>
+</div>
+
+<div id="detail">
+  <span id="detail-close" onclick="closeDetail()">✕</span>
+  <h3 id="detail-title"></h3>
+  <table id="detail-body"></table>
+</div>
+
+<div id="stats"></div>
+
+<script>
+const NODES = [{"id": "SOURCE", "label": "\ud83d\udcc4 sample_data_v3.json", "type": "source", "meta": {"File": "sample_data_v3.json", "Format": ".json", "Rows": 4, "Columns": 14, "SHA-256": "3fba2466ea37\u2026"}}, {"id": "EXTRACT", "label": "Extract", "type": "transform", "meta": {"Stage": "Extract", "Rows": 4, "Columns": "id, first_name, last_name, email, phone, dob, salary, department_id\u2026"}}, {"id": "CLASSIFY", "label": "Classify", "type": "transform", "meta": {"Stage": "Data Classification", "Level": "CONFIDENTIAL", "PII fields": 6, "Special cat": 0}}, {"id": "VALIDATE", "label": "Validate", "type": "transform", "meta": {"Stage": "Great Expectations", "Passed": "22 / 22", "Success": "True"}}, {"id": "NULLS", "label": "Null Handling", "type": "transform", "meta": {"Stage": "Null Handling", "Nulls before": 0, "Nulls after": 0}}, {"id": "DEDUP", "label": "Deduplicate", "type": "transform", "meta": {"Stage": "Deduplication", "Before": 4, "After": 4, "Removed": 0}}, {"id": "TRANSFORM_DONE", "label": "Transform\nComplete", "type": "transform", "meta": {"Stage": "Transform Complete", "Rows": 4, "Columns": 17}}, {"id": "DESTINATION", "label": "\ud83d\uddc4 sqlite \u203a employees", "type": "destination", "meta": {"Platform": "sqlite", "Database": "lineage_test_out", "Table": "employees"}}, {"id": "MASK_PII", "label": "Mask PII\n(6 fields)", "type": "transform", "meta": {"Stage": "PII Masking", "Fields": "dob, email, first_name, last_name, phone, salary", "Action": "mask / pseudonymise"}}, {"id": "COL_id", "label": "id", "type": "column", "meta": {"Column": "id", "PII": "No"}}, {"id": "COL_first_name", "label": "first_name", "type": "pii_column", "meta": {"Column": "first_name", "PII": "Yes \u2014 masked"}}, {"id": "COL_last_name", "label": "last_name", "type": "pii_column", "meta": {"Column": "last_name", "PII": "Yes \u2014 masked"}}, {"id": "COL_email", "label": "email", "type": "pii_column", "meta": {"Column": "email", "PII": "Yes \u2014 masked"}}, {"id": "COL_phone", "label": "phone", "type": "pii_column", "meta": {"Column": "phone", "PII": "Yes \u2014 masked"}}, {"id": "COL_dob", "label": "dob", "type": "pii_column", "meta": {"Column": "dob", "PII": "Yes \u2014 masked"}}, {"id": "COL_salary", "label": "salary", "type": "pii_column", "meta": {"Column": "salary", "PII": "Yes \u2014 masked"}}, {"id": "COL_department_id", "label": "department_id", "type": "column", "meta": {"Column": "department_id", "PII": "No"}}, {"id": "COL_country_code", "label": "country_code", "type": "column", "meta": {"Column": "country_code", "PII": "No"}}, {"id": "COL_hired_date", "label": "hired_date", "type": "column", "meta": {"Column": "hired_date", "PII": "No"}}, {"id": "COL_active", "label": "active", "type": "column", "meta": {"Column": "active", "PII": "No"}}, {"id": "COL_address__street", "label": "address__street", "type": "column", "meta": {"Column": "address__street", "PII": "No"}}, {"id": "COL_address__city", "label": "address__city", "type": "column", "meta": {"Column": "address__city", "PII": "No"}}, {"id": "COL_address__zip", "label": "address__zip", "type": "column", "meta": {"Column": "address__zip", "PII": "No"}}];
+const EDGES = [{"source": "SOURCE", "target": "EXTRACT", "style": "solid"}, {"source": "EXTRACT", "target": "CLASSIFY", "style": "solid"}, {"source": "VALIDATE", "target": "NULLS", "style": "solid"}, {"source": "NULLS", "target": "DEDUP", "style": "solid"}, {"source": "DEDUP", "target": "TRANSFORM_DONE", "style": "solid"}, {"source": "CLASSIFY", "target": "MASK_PII", "style": "solid"}, {"source": "MASK_PII", "target": "VALIDATE", "style": "solid"}, {"source": "TRANSFORM_DONE", "target": "COL_id", "style": "dashed"}, {"source": "TRANSFORM_DONE", "target": "COL_first_name", "style": "dashed"}, {"source": "TRANSFORM_DONE", "target": "COL_last_name", "style": "dashed"}, {"source": "TRANSFORM_DONE", "target": "COL_email", "style": "dashed"}, {"source": "TRANSFORM_DONE", "target": "COL_phone", "style": "dashed"}, {"source": "TRANSFORM_DONE", "target": "COL_dob", "style": "dashed"}, {"source": "TRANSFORM_DONE", "target": "COL_salary", "style": "dashed"}, {"source": "TRANSFORM_DONE", "target": "COL_department_id", "style": "dashed"}, {"source": "TRANSFORM_DONE", "target": "COL_country_code", "style": "dashed"}, {"source": "TRANSFORM_DONE", "target": "COL_hired_date", "style": "dashed"}, {"source": "TRANSFORM_DONE", "target": "COL_active", "style": "dashed"}, {"source": "TRANSFORM_DONE", "target": "COL_address__street", "style": "dashed"}, {"source": "TRANSFORM_DONE", "target": "COL_address__city", "style": "dashed"}, {"source": "TRANSFORM_DONE", "target": "COL_address__zip", "style": "dashed"}, {"source": "COL_id", "target": "DESTINATION", "style": "dashed"}, {"source": "COL_first_name", "target": "DESTINATION", "style": "dashed"}, {"source": "COL_last_name", "target": "DESTINATION", "style": "dashed"}, {"source": "COL_email", "target": "DESTINATION", "style": "dashed"}, {"source": "COL_phone", "target": "DESTINATION", "style": "dashed"}, {"source": "COL_dob", "target": "DESTINATION", "style": "dashed"}, {"source": "COL_salary", "target": "DESTINATION", "style": "dashed"}, {"source": "COL_department_id", "target": "DESTINATION", "style": "dashed"}, {"source": "COL_country_code", "target": "DESTINATION", "style": "dashed"}, {"source": "COL_hired_date", "target": "DESTINATION", "style": "dashed"}, {"source": "COL_active", "target": "DESTINATION", "style": "dashed"}, {"source": "COL_address__street", "target": "DESTINATION", "style": "dashed"}, {"source": "COL_address__city", "target": "DESTINATION", "style": "dashed"}, {"source": "COL_address__zip", "target": "DESTINATION", "style": "dashed"}];
+
+const svg    = d3.select("#svg");
+const width  = () => +svg.node().getBoundingClientRect().width;
+const height = () => +svg.node().getBoundingClientRect().height;
+
+// ── Defs: arrowheads ────────────────────────────────────────────────────
+const defs = svg.append("defs");
+[["arrow","#455a64"],["arrow-teal","#26a69a"]].forEach(([id,col]) => {
+  defs.append("marker").attr("id",id)
+    .attr("viewBox","0 -5 10 10").attr("refX",18).attr("refY",0)
+    .attr("markerWidth",6).attr("markerHeight",6).attr("orient","auto")
+    .append("path").attr("d","M0,-5L10,0L0,5").attr("fill",col);
+});
+
+// ── Zoomable container ───────────────────────────────────────────────────
+const g    = svg.append("g");
+const zoom = d3.zoom().scaleExtent([.1, 4])
+  .on("zoom", e => g.attr("transform", e.transform));
+svg.call(zoom);
+
+// ── Force simulation ─────────────────────────────────────────────────────
+const nodeMap = Object.fromEntries(NODES.map(n => [n.id, n]));
+
+// Assign x-bands so the graph flows left-to-right
+const bandX = { "source": .1, "transform": .45, "column": .7, "pii_column": .7, "destination": .9 };
+
+const sim = d3.forceSimulation(NODES)
+  .force("link",   d3.forceLink(EDGES).id(d => d.id).distance(d => {
+    if (d.style === "dashed") return 70;
+    return 130;
+  }).strength(.6))
+  .force("charge", d3.forceManyBody().strength(d => {
+    if (d.type === "column" || d.type === "pii_column") return -80;
+    return -400;
+  }))
+  .force("x",      d3.forceX(d => (bandX[d.type] || .5) * width()).strength(.5))
+  .force("y",      d3.forceY(d => height() / 2).strength(.1))
+  .force("collide",d3.forceCollide(d => {
+    if (d.type === "column" || d.type === "pii_column") return 22;
+    return 60;
+  }));
+
+// ── Draw edges ───────────────────────────────────────────────────────────
+const link = g.selectAll(".link-group").data(EDGES).join("g")
+  .attr("class","link-group");
+
+link.append("line")
+  .attr("class", d => d.style === "dashed" ? "link-dashed" : "link")
+  .attr("marker-end", d => d.style === "dashed" ? "url(#arrow-teal)" : "url(#arrow)");
+
+// ── Draw nodes ───────────────────────────────────────────────────────────
+const node = g.selectAll(".node").data(NODES).join("g")
+  .attr("class", d => `node node-${d.type}`)
+  .call(d3.drag()
+    .on("start", (e,d) => { if(!e.active) sim.alphaTarget(.3).restart(); d.fx=d.x; d.fy=d.y; })
+    .on("drag",  (e,d) => { d.fx=e.x; d.fy=e.y; })
+    .on("end",   (e,d) => { if(!e.active) sim.alphaTarget(0); d.fx=null; d.fy=null; }))
+  .on("click", (e,d) => showDetail(d))
+  .on("mouseover", (e,d) => highlightNeighbors(d))
+  .on("mouseout",  ()    => clearHighlight());
+
+// Columns get circles, others get rounded rects
+node.each(function(d) {
+  const el = d3.select(this);
+  if (d.type === "column" || d.type === "pii_column") {
+    el.append("circle").attr("r", 16);
+    el.append("text").attr("y", 26).text(d.label.length > 10 ? d.label.slice(0,9)+"…" : d.label)
+      .style("font-size","9px").attr("dy",".35em").attr("dominant-baseline","auto");
+  } else {
+    const w = Math.max(100, d.label.length * 9 + 24);
+    const h = d.label.includes("\n") ? 42 : 32;
+    el.append("rect").attr("width", w).attr("height", h)
+      .attr("x", -w/2).attr("y", -h/2)
+      .attr("rx", d.type === "source" || d.type === "destination" ? 20 : 8);
+    const lines = d.label.split("\n");
+    if (lines.length === 1) {
+      el.append("text").text(d.label);
+    } else {
+      lines.forEach((line, i) => {
+        el.append("text").attr("y", (i - (lines.length-1)/2) * 14).text(line);
+      });
+    }
+  }
+});
+
+// ── Tick ────────────────────────────────────────────────────────────────
+sim.on("tick", () => {
+  link.selectAll("line")
+    .attr("x1", d => d.source.x).attr("y1", d => d.source.y)
+    .attr("x2", d => d.target.x).attr("y2", d => d.target.y);
+  node.attr("transform", d => `translate(${d.x},${d.y})`);
+});
+
+// ── Highlight neighbors ─────────────────────────────────────────────────
+function getNeighborIds(d) {
+  const ids = new Set([d.id]);
+  EDGES.forEach(e => {
+    const sid = typeof e.source === "object" ? e.source.id : e.source;
+    const tid = typeof e.target === "object" ? e.target.id : e.target;
+    if (sid === d.id) ids.add(tid);
+    if (tid === d.id) ids.add(sid);
+  });
+  return ids;
+}
+function highlightNeighbors(d) {
+  const ids = getNeighborIds(d);
+  node.classed("dimmed",     n => !ids.has(n.id))
+      .classed("highlighted",n =>  ids.has(n.id));
+  link.selectAll("line")
+    .classed("dimmed", e => {
+      const s = typeof e.source === "object" ? e.source.id : e.source;
+      const t = typeof e.target === "object" ? e.target.id : e.target;
+      return !ids.has(s) || !ids.has(t);
+    });
+}
+function clearHighlight() {
+  node.classed("dimmed", false).classed("highlighted", false);
+  link.selectAll("line").classed("dimmed", false);
+}
+
+// ── Detail panel ────────────────────────────────────────────────────────
+function showDetail(d) {
+  document.getElementById("detail-title").textContent = d.label.replace("\n"," ");
+  const rows = Object.entries(d.meta || {}).map(([k,v]) =>
+    `<tr><td>${k}</td><td>${v}</td></tr>`).join("");
+  document.getElementById("detail-body").innerHTML = rows || "<tr><td>No metadata</td></tr>";
+  document.getElementById("detail").style.display = "block";
+}
+function closeDetail() { document.getElementById("detail").style.display = "none"; }
+
+// ── Search ───────────────────────────────────────────────────────────────
+document.getElementById("search").addEventListener("input", function() {
+  const q = this.value.toLowerCase().trim();
+  if (!q) { clearHighlight(); return; }
+  const matched = new Set(NODES.filter(n => n.label.toLowerCase().includes(q) ||
+    Object.values(n.meta||{}).join(" ").toLowerCase().includes(q)).map(n => n.id));
+  node.classed("dimmed",     n => !matched.has(n.id))
+      .classed("highlighted",n =>  matched.has(n.id));
+});
+
+// ── Stats badge ─────────────────────────────────────────────────────────
+const piiCount = NODES.filter(n => n.type === "pii_column").length;
+const colCount  = NODES.filter(n => n.type === "column" || n.type === "pii_column").length;
+document.getElementById("stats").textContent =
+  `${NODES.length} nodes · ${EDGES.length} edges · ${colCount} columns · ${piiCount} PII`;
+
+// ── Initial zoom to fit ──────────────────────────────────────────────────
+setTimeout(() => {
+  const bb = g.node().getBBox();
+  if (bb.width > 0) {
+    const pad = 60;
+    const scl = Math.min(.95, Math.min(width()/(bb.width+pad), (height()-52)/(bb.height+pad)));
+    const tx  = width()/2  - scl*(bb.x + bb.width/2);
+    const ty  = height()/2 - scl*(bb.y + bb.height/2);
+    svg.call(zoom.transform, d3.zoomIdentity.translate(tx,ty).scale(scl));
+  }
+}, 2000);
+
+// Handle resize
+window.addEventListener("resize", () => sim.alpha(.1).restart());
+</script>
+</body>
+</html>
