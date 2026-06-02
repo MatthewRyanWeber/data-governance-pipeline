@@ -437,6 +437,29 @@ MIT — see [LICENSE](LICENSE).
 
 ---
 
+## Security
+
+The pipeline includes built-in security controls:
+
+- **IAM role authentication** — Redshift COPY prefers IAM roles over inline credentials
+- **Input validation** — path traversal protection, identifier regex validation on all API inputs
+- **Rate limiting** — max 5 concurrent API runs to prevent resource exhaustion
+- **API authentication** — Bearer token required on all endpoints (except /health)
+- **Credential management** — .env files gitignored, secrets never logged, environment variables preferred
+- **Audit trail** — SHA-256 chained tamper-evident ledger of all operations
+
+## Legal
+
+- [Privacy Policy](docs/PRIVACY.md) — Pipeline itself collects zero data. Guidance for processing PII/PHI.
+- [Terms of Service](docs/TERMS.md) — MIT license, data controller responsibilities, compliance tools ≠ compliance guarantees.
+- [CCPA Compliance](docs/CCPA.md) — Maps each CCPA right to specific pipeline features. Operator checklist included.
+
+## License
+
+MIT
+
+---
+
 ## Contributing
 
 Issues and pull requests are welcome. Run the full test suite before submitting:
