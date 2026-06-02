@@ -4634,11 +4634,21 @@ class RedshiftLoader:
             self._ensure_table(cur, df, fqt, if_exists)
 
             col_list   = ", ".join(f'"{c}"' for c in df.columns)
+            # Use IAM role if available; fall back to env-var credentials (never embed in SQL)
+            iam_role = cfg.get("iam_role", os.environ.get("REDSHIFT_IAM_ROLE", ""))
+            if iam_role:
+                auth_clause = f"IAM_ROLE '{iam_role}'"
+            else:
+                access_key = cfg.get("aws_access_key_id", os.environ.get("AWS_ACCESS_KEY_ID", ""))
+                secret_key = cfg.get("aws_secret_access_key", os.environ.get("AWS_SECRET_ACCESS_KEY", ""))
+                if not access_key or not secret_key:
+                    raise ValueError("Redshift COPY requires iam_role or AWS credentials in environment")
+                auth_clause = f"ACCESS_KEY_ID '{access_key}' SECRET_ACCESS_KEY '{secret_key}'"
+                self.gov.logger.warning("[RS] Using inline credentials for COPY — prefer IAM_ROLE for production")
             copy_sql   = (
                 f"COPY {fqt} ({col_list}) "
                 f"FROM 's3://{bucket}/{key}' "
-                f"ACCESS_KEY_ID '{cfg.get('aws_access_key_id','')}' "
-                f"SECRET_ACCESS_KEY '{cfg.get('aws_secret_access_key','')}' "
+                f"{auth_clause} "
                 f"REGION '{region}' "
                 "CSV IGNOREHEADER 1 GZIP EMPTYASNULL BLANKSASNULL"
             )

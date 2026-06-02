@@ -117,9 +117,13 @@ def _execute_run(run_id: str, source: str, cfg: dict) -> None:
             df, _failed = val.validate(df, exps, on_failure="dlq")
             df   = Transformer(gov).transform(df, pii, cfg.get("pii_action","mask"), [])
 
+            import re as _re_val
             db_type  = cfg.get("db_type", "sqlite")
             db_name  = cfg.get("db_name", run_id)
             table    = cfg.get("table",   "data")
+            for _param_name, _param_val in [("db_name", db_name), ("table", table)]:
+                if not _re_val.match(r'^[a-zA-Z0-9_]{1,128}$', str(_param_val)):
+                    raise ValueError(f"Invalid {_param_name}: alphanumeric and _ only, max 128 chars")
             SQLLoader(gov, db_type).load(df, {"db_name": db_name}, table)
 
         log_path = str(gov.ledger_file) if hasattr(gov, "ledger_file") else None
@@ -210,9 +214,14 @@ def create_app(scheduler=None) -> Flask:
         }
         """
         body   = request.get_json(force=True, silent=True) or {}
-        source = body.get("source")
+        source = body.get("source", "").strip()
         if not source:
             abort(400, description="'source' field is required")
+        # Path traversal protection
+        import pathlib
+        source_resolved = str(pathlib.Path(source).resolve())
+        if ".." in source or source_resolved.startswith(("C:\\Windows", "/etc", "/proc")):
+            abort(403, description="path not allowed")
 
         run_id = str(uuid.uuid4())
         cfg    = {k: v for k, v in body.items() if k != "source"}
