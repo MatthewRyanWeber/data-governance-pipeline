@@ -58,6 +58,7 @@ from flask import Flask, jsonify, request, abort
 # ── In-memory run registry ────────────────────────────────────────────────────
 _RUNS: dict[str, dict[str, Any]] = {}
 _RUNS_LOCK = threading.Lock()
+_MAX_CONCURRENT_RUNS = 5
 
 
 # ── Optional scheduler integration ────────────────────────────────────────────
@@ -227,6 +228,9 @@ def create_app(scheduler=None) -> Flask:
         cfg    = {k: v for k, v in body.items() if k != "source"}
 
         with _RUNS_LOCK:
+            active = sum(1 for r in _RUNS.values() if r["status"] in ("queued", "running"))
+            if active >= _MAX_CONCURRENT_RUNS:
+                abort(429, description=f"Too many concurrent runs ({active}/{_MAX_CONCURRENT_RUNS}). Try again later.")
             _RUNS[run_id] = {
                 "run_id":  run_id,
                 "source":  source,
