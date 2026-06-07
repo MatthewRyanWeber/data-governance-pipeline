@@ -24,6 +24,7 @@ For healthcare data from Epic EHR systems, `epic_extensions.py` adds a complete 
 - 12 source formats: CSV, JSON, Excel, XML, Parquet, Avro, ORC, SQL tables, Kafka, Kinesis, Pub/Sub, QuickBooks Online
 - 42 destination loaders: PostgreSQL, MySQL, SQL Server, MongoDB, Snowflake, Redshift, BigQuery, Azure Synapse, Databricks, ClickHouse, Oracle, DB2, Firebolt, Yellowbrick, SAP HANA, SAP Datasphere, QuickBooks, LanceDB, Kafka, CockroachDB, DuckDB, MotherDuck, Parquet, Delta Lake, Iceberg, S3, GCS, Azure Blob, Athena, SFTP, Microsoft Fabric, PostGIS, Pinecone, Weaviate, Qdrant, Chroma, Milvus, pgvector, Snowflake Vector, BigQuery Vector
 - Chunked parallel processing, compression (gz/bz2/zip), incremental loading, checkpoint/resume
+- **Multi-file parallel runner** — process entire directories of files simultaneously with `parallel_runner.py` (ThreadPoolExecutor, configurable workers)
 
 **Data governance — GDPR / CCPA**
 - Tamper-evident SHA-256 audit ledger — every event is chained; any modification is detectable
