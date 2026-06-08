@@ -144,38 +144,39 @@ class QuickBooksExtractor:
 
         logger.info("[QBO] Extracting %s from realm %s",
                     entity, cfg['realm_id'])
-        while True:
-            query = self._build_query(entity, cfg, start, page_size)
-            resp = requests.get(
-                f"{base_url}/query",
-                params={"query": query, "minorversion": "70"},
-                headers=headers,
-                timeout=timeout,
-            )
-            if not resp.ok:
-                raise RuntimeError(
-                    f"QuickBooks API error {resp.status_code}: "
-                    f"{resp.text[:400]}"
+        with requests.Session() as session:
+            session.headers.update(headers)
+            while True:
+                query = self._build_query(entity, cfg, start, page_size)
+                resp = session.get(
+                    f"{base_url}/query",
+                    params={"query": query, "minorversion": "70"},
+                    timeout=timeout,
                 )
-            payload = resp.json()
-            qr = payload.get("QueryResponse", {})
-            entities = qr.get(entity, [])
+                if not resp.ok:
+                    raise RuntimeError(
+                        f"QuickBooks API error {resp.status_code}: "
+                        f"{resp.text[:400]}"
+                    )
+                payload = resp.json()
+                qr = payload.get("QueryResponse", {})
+                entities = qr.get(entity, [])
 
-            if not entities:
-                break
+                if not entities:
+                    break
 
-            for record in entities:
-                all_records.append(
-                    self._flatten_qbo_record(record, entity)
-                )
+                for record in entities:
+                    all_records.append(
+                        self._flatten_qbo_record(record, entity)
+                    )
 
-            total_count = qr.get("totalCount", len(entities))
-            logger.info("[QBO]   page start=%d  fetched=%d  total=%s",
-                        start, len(entities), total_count)
+                total_count = qr.get("totalCount", len(entities))
+                logger.info("[QBO]   page start=%d  fetched=%d  total=%s",
+                            start, len(entities), total_count)
 
-            if len(entities) < page_size:
-                break
-            start += page_size
+                if len(entities) < page_size:
+                    break
+                start += page_size
 
         df = pd.DataFrame(all_records) if all_records else pd.DataFrame()
         logger.info("[QBO] %s %s records extracted", f"{len(df):,}", entity)

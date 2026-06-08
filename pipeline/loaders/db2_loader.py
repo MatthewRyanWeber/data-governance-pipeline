@@ -14,8 +14,6 @@ import time
 import logging
 from typing import TYPE_CHECKING
 
-import pandas as pd
-
 from pipeline.constants import HAS_DB2
 from pipeline.loaders.base import BaseLoader, validate_sql_identifier
 
@@ -105,12 +103,7 @@ class Db2Loader(BaseLoader):
             insert_sql = f'INSERT INTO {fqt} VALUES ({bind_vars})'
             stmt = _ibm_db.prepare(conn, insert_sql)
 
-            rows = [
-                tuple(None if (v is not None and not isinstance(v, str)
-                               and pd.isna(v)) else v
-                      for v in row)
-                for row in df.itertuples(index=False, name=None)
-            ]
+            rows = list(df.where(df.notna(), None).itertuples(index=False, name=None))
             for attempt in range(1, 4):
                 try:
                     _ibm_db.execute_many(stmt, tuple(rows))

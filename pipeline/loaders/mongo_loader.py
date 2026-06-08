@@ -6,7 +6,6 @@ Revision history
 1.0   2026-06-07   Extracted from pipeline_v3.py (class MongoLoader).
 """
 
-import json
 import logging
 from typing import TYPE_CHECKING
 
@@ -34,7 +33,7 @@ class MongoLoader(BaseLoader):
             f"{cfg.get('port', 27017)}/"
         )
         with MongoClient(uri) as client:
-            records = json.loads(df.to_json(orient="records", date_format="iso"))
+            records = df.to_dict(orient="records")
             client[cfg["db_name"]][collection].insert_many(records)
             self.gov.load_complete(len(records), collection)
             self.gov.destination_registered("mongodb", cfg["db_name"], collection)

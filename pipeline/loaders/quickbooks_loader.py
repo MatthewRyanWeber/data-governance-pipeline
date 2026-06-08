@@ -113,11 +113,10 @@ class QuickBooksLoader(BaseLoader):
         required = self._REQUIRED_FIELDS.get(entity, [])
         return [f for f in required if not body.get(f)]
 
-    def _post_entity(self, base_url, headers, entity, body, timeout) -> dict:
-        """POST a single QBO entity body."""
-        import requests
+    def _post_entity(self, session, base_url, entity, body, timeout) -> dict:
+        """POST a single QBO entity body via a shared session."""
         url = f"{base_url}/{entity.lower()}?minorversion=70"
-        resp = requests.post(url, headers=headers, json=body, timeout=timeout)
+        resp = session.post(url, json=body, timeout=timeout)
         if not resp.ok:
             raise RuntimeError(
                 f"QuickBooks POST {entity} failed {resp.status_code}: "
@@ -142,6 +141,8 @@ class QuickBooksLoader(BaseLoader):
                 "'replace' mode will append/update rows only."
             )
 
+        import requests
+
         token = self._refresh_access_token(cfg)
         headers = self._headers(token)
         base_url = self._base_url(cfg)
@@ -150,36 +151,38 @@ class QuickBooksLoader(BaseLoader):
 
         logger.info("[QBO] Writing %s rows -> %s", f"{len(df):,}", entity)
         records = df.to_dict(orient="records")
-        for idx, rec in enumerate(records):
-            try:
-                if callable(custom_transform):
-                    body = custom_transform(rec)
-                else:
-                    body = self._row_to_body(rec, entity, sparse)
+        with requests.Session() as session:
+            session.headers.update(headers)
+            for idx, rec in enumerate(records):
+                try:
+                    if callable(custom_transform):
+                        body = custom_transform(rec)
+                    else:
+                        body = self._row_to_body(rec, entity, sparse)
 
-                missing = self._validate_row(body, entity)
-                if missing:
-                    logger.warning(
-                        "[QBO] Row %s: skipping -- missing required "
-                        "field(s): %s", idx, missing
-                    )
-                    skipped += 1
-                    continue
+                    missing = self._validate_row(body, entity)
+                    if missing:
+                        logger.warning(
+                            "[QBO] Row %s: skipping -- missing required "
+                            "field(s): %s", idx, missing
+                        )
+                        skipped += 1
+                        continue
 
-                had_id = bool(body.get("Id"))
-                self._post_entity(base_url, headers, entity, body, timeout)
+                    had_id = bool(body.get("Id"))
+                    self._post_entity(session, base_url, entity, body, timeout)
 
-                if had_id:
-                    updated += 1
-                else:
-                    created += 1
+                    if had_id:
+                        updated += 1
+                    else:
+                        created += 1
 
-                if delay > 0:
-                    time.sleep(delay)
+                    if delay > 0:
+                        time.sleep(delay)
 
-            except Exception as exc:
-                logger.error("[QBO] Row %s: %s", idx, exc)
-                errors += 1
+                except Exception as exc:
+                    logger.error("[QBO] Row %s: %s", idx, exc)
+                    errors += 1
 
         logger.info(
             "[QBO] %s: %d created  %d updated  %d skipped  %d errors",

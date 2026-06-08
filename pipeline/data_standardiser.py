@@ -64,11 +64,9 @@ class DataStandardiser:
 
             elif rule == "date_iso8601":
                 original = df[col].copy()
-                df[col] = (
-                    pd.to_datetime(df[col], errors="coerce")
-                    .dt.strftime("%Y-%m-%d")
-                    .where(pd.to_datetime(df[col], errors="coerce").notna(), other=df[col])
-                )
+                parsed = pd.to_datetime(df[col], errors="coerce")
+                valid = parsed.notna()
+                df[col] = parsed.dt.strftime("%Y-%m-%d").where(valid, other=df[col])
                 changed = int((df[col] != original).sum())
 
             elif rule == "country_iso2":
@@ -80,19 +78,18 @@ class DataStandardiser:
                     "no": "False", "0": "False", "false": "False",
                 }
                 original = df[col].copy()
-                df[col] = df[col].apply(
-                    lambda x, _m=bool_map: _m.get(str(x).strip().lower(), x)
-                    if pd.notna(x) else x
-                )
+                mask = df[col].notna()
+                keys = df.loc[mask, col].astype(str).str.strip().str.lower()
+                mapped = keys.map(bool_map)
+                df.loc[mask, col] = mapped.fillna(df.loc[mask, col])
                 changed = int((df[col] != original).sum())
 
             elif rule in ("upper", "lower", "strip", "title"):
                 original = df[col].copy()
-                fn = {"upper": str.upper, "lower": str.lower,
-                      "strip": str.strip, "title": str.title}[rule]
-                df[col] = df[col].apply(
-                    lambda x, _fn=fn: _fn(str(x)) if pd.notna(x) else x
-                )
+                mask = df[col].notna()
+                df.loc[mask, col] = getattr(
+                    df.loc[mask, col].astype(str).str, rule
+                )()
                 changed = int((df[col] != original).sum())
 
             self.gov.standardisation_applied(col, rule, changed)
@@ -104,43 +101,35 @@ class DataStandardiser:
     ) -> tuple["pd.Series", int]:
         import pandas as pd
 
-        changed = 0
-        results = []
-        if HAS_PHONENUMBERS:
-            import phonenumbers
-        for val in series:
+        if not HAS_PHONENUMBERS:
+            return series.copy(), 0
+        import phonenumbers
+
+        def _parse_one(val):
             if pd.isna(val):
-                results.append(val)
-                continue
-            if HAS_PHONENUMBERS:
-                try:
-                    parsed = phonenumbers.parse(str(val), region)
-                    e164 = phonenumbers.format_number(
-                        parsed, phonenumbers.PhoneNumberFormat.E164,
-                    )
-                    if e164 != str(val):
-                        changed += 1
-                    results.append(e164)
-                except Exception as exc:
-                    logger.debug("Could not parse phone '%s': %s", val, exc)
-                    results.append(val)
-            else:
-                results.append(val)
-        return pd.Series(results, index=series.index), changed
+                return val
+            try:
+                parsed = phonenumbers.parse(str(val), region)
+                return phonenumbers.format_number(
+                    parsed, phonenumbers.PhoneNumberFormat.E164,
+                )
+            except Exception as exc:
+                logger.debug("Could not parse phone '%s': %s", val, exc)
+                return val
+
+        result = series.apply(_parse_one)
+        mask = series.notna()
+        changed = int((result[mask].astype(str) != series[mask].astype(str)).sum())
+        return result, changed
 
     def _normalise_countries(
         self, series: "pd.Series",
     ) -> tuple["pd.Series", int]:
-        import pandas as pd
-
-        changed = 0
-        results = []
-        for val in series:
-            if pd.isna(val):
-                results.append(val)
-                continue
-            normalised = self.COUNTRY_MAP.get(str(val).strip().lower(), str(val))
-            if normalised != str(val):
-                changed += 1
-            results.append(normalised)
-        return pd.Series(results, index=series.index), changed
+        mask = series.notna()
+        original_str = series.loc[mask].astype(str)
+        keys = original_str.str.strip().str.lower()
+        mapped = keys.map(self.COUNTRY_MAP)
+        result = series.copy()
+        result.loc[mask] = mapped.fillna(original_str)
+        changed = int((result.loc[mask] != original_str).sum())
+        return result, changed

@@ -113,10 +113,7 @@ class DatabricksLoader(BaseLoader):
             col_list = ", ".join(f"`{c}`" for c in df.columns)
             placeholders = ", ".join("?" * len(df.columns))
             insert_sql = f"INSERT INTO {fqt} ({col_list}) VALUES ({placeholders})"
-            rows = [
-                tuple(None if pd.isna(v) else v for v in row)
-                for row in df.itertuples(index=False, name=None)
-            ]
+            rows = list(df.where(df.notna(), None).itertuples(index=False, name=None))
             batch_size = 1_000
             for i in range(0, len(rows), batch_size):
                 cur.executemany(insert_sql, rows[i:i + batch_size])

@@ -78,7 +78,7 @@ class HanaLoader(BaseLoader):
         cols = ", ".join(f'"{c}"' for c in df.columns)
         params = ", ".join("?" * len(df.columns))
         sql = f'INSERT INTO "{schema}"."{table}" ({cols}) VALUES ({params})'
-        rows = [tuple(r) for r in df.itertuples(index=False, name=None)]
+        rows = list(df.where(df.notna(), None).itertuples(index=False, name=None))
         for i in range(0, len(rows), self._CHUNK):
             cur.executemany(sql, rows[i: i + self._CHUNK])
 

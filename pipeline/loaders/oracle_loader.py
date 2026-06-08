@@ -14,8 +14,6 @@ import logging
 from typing import TYPE_CHECKING
 from urllib.parse import quote_plus as _qp
 
-import pandas as pd
-
 from pipeline.constants import HAS_ORACLE
 from pipeline.loaders.base import BaseLoader, validate_sql_identifier
 
@@ -94,12 +92,7 @@ class OracleLoader(BaseLoader):
             conn.commit()
             bind_vars = ", ".join(f":{i+1}" for i in range(len(df.columns)))
             insert_sql = f"INSERT INTO {fqt} VALUES ({bind_vars})"
-            rows = [
-                tuple(None if (v is not None and not isinstance(v, str)
-                               and pd.isna(v)) else v
-                      for v in row)
-                for row in df.itertuples(index=False, name=None)
-            ]
+            rows = list(df.where(df.notna(), None).itertuples(index=False, name=None))
             for attempt in range(1, 4):
                 try:
                     cur.executemany(insert_sql, rows, batcherrors=True)
@@ -157,12 +150,7 @@ class OracleLoader(BaseLoader):
             conn.commit()
             bind_vars = ", ".join(f":{i+1}" for i in range(len(df.columns)))
             insert_sql = f"INSERT INTO {fqt_tmp} VALUES ({bind_vars})"
-            rows = [
-                tuple(None if (v is not None and not isinstance(v, str)
-                               and pd.isna(v)) else v
-                      for v in row)
-                for row in df.itertuples(index=False, name=None)
-            ]
+            rows = list(df.where(df.notna(), None).itertuples(index=False, name=None))
             cur.executemany(insert_sql, rows)
             conn.commit()
             non_key_cols = [c for c in df.columns if c not in natural_keys]
