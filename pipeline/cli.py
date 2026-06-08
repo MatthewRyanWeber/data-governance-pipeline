@@ -10,6 +10,7 @@ Revision history
 ----------------
 1.0   2026-06-07   Initial extraction from monolith.
 1.1   2026-06-08   Call validate_loader_config() before loader instantiation.
+1.2   2026-06-08   Add db:/api: source routing, --transform-config, --verify.
 """
 
 import argparse
@@ -59,7 +60,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # ── run ──────────────────────────────────────────────────────────────
     run_parser = subparsers.add_parser("run", help="Execute a pipeline run")
-    run_parser.add_argument("source", help="Source file or connection string")
+    run_parser.add_argument("source", help="Source file, connection string, or 'db:' / 'api:' prefix")
     run_parser.add_argument("destination", help="Destination db_type (e.g. postgresql, snowflake)")
     run_parser.add_argument("--config", dest="config_path", help="Path to YAML/JSON config file")
     run_parser.add_argument("--dry-run", action="store_true", help="Log what would happen without writing")
@@ -68,6 +69,9 @@ def _build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--parallel", action="store_true", help="Process source files in parallel")
     run_parser.add_argument("--table", default="pipeline_output", help="Destination table name")
     run_parser.add_argument("--sla", type=int, default=0, help="SLA deadline in seconds (0 = disabled)")
+    run_parser.add_argument("--verify", action="store_true", help="Verify row counts after loading")
+    run_parser.add_argument("--transform-config", dest="transform_config",
+                            help="Path to transform pipeline YAML/JSON config")
 
     # ── validate ─────────────────────────────────────────────────────────
     validate_parser = subparsers.add_parser("validate", help="Validate a source file against a schema")
@@ -150,18 +154,49 @@ def _cmd_run(args: argparse.Namespace) -> None:
     logger.info("Pipeline run complete.")
 
 
+def _extract_source(source, config, gov):
+    """Route extraction based on source type: file, database, or REST API."""
+    from pipeline.logging_setup import timed_operation
+
+    source_str = str(source)
+
+    if source_str.startswith("db:") or config.get("source_type") == "database":
+        from pipeline.extractors import DatabaseExtractor
+        db_ext = DatabaseExtractor(gov)
+        db_cfg = config.get("source", config)
+        query = db_cfg.get("query") or config.get("query")
+        table = db_cfg.get("table") or source_str.removeprefix("db:")
+        with timed_operation("extract:database"):
+            df = db_ext.extract(db_cfg, query=query, table=table if not query else None)
+
+    elif source_str.startswith("api:") or config.get("source_type") == "rest_api":
+        from pipeline.extractors import RESTExtractor
+        rest_ext = RESTExtractor(gov)
+        api_cfg = config.get("source", config)
+        if not api_cfg.get("url"):
+            api_cfg["url"] = source_str.removeprefix("api:")
+        with timed_operation("extract:rest_api"):
+            df = rest_ext.extract(api_cfg)
+
+    else:
+        from pipeline.extract import Extractor
+        extractor = Extractor(gov)
+        with timed_operation("extract:file"):
+            df = extractor.extract(source_str)
+
+    return df
+
+
 def _run_single_file(source, args, config, gov, metrics) -> None:
     """Extract, transform, load a single source file."""
-    from pipeline.extract import Extractor
     from pipeline.transform import Transformer
     from pipeline.loaders import resolve_loader, validate_loader_config
     from pipeline.profiler import DataProfiler
     from pipeline.logging_setup import timed_operation
 
+    # ── Extract ──────────────────────────────────────────────────────
     metrics.start_stage("extract")
-    extractor = Extractor(gov)
-    with timed_operation("extract"):
-        df = extractor.extract(str(source))
+    df = _extract_source(source, config, gov)
     metrics.end_stage("extract", rows=len(df))
 
     if df.empty:
@@ -170,16 +205,25 @@ def _run_single_file(source, args, config, gov, metrics) -> None:
 
     # ── Transform ────────────────────────────────────────────────────
     metrics.start_stage("transform")
-    transformer = Transformer(gov)
 
-    if not args.skip_pii:
-        from pipeline.helpers import detect_pii
-        pii_findings = detect_pii(list(df.columns))
+    transform_config_path = getattr(args, "transform_config", None)
+    if transform_config_path:
+        from pipeline.transform_pipeline import TransformPipeline
+        tp_config = _load_config(transform_config_path)
+        tp = TransformPipeline(gov)
+        with timed_operation("transform:pipeline"):
+            df = tp.run(df, tp_config)
     else:
-        pii_findings = []
+        transformer = Transformer(gov)
 
-    with timed_operation("transform"):
-        df = transformer.transform(df, pii_findings, "mask", drop_cols=[])
+        if not args.skip_pii:
+            from pipeline.helpers import detect_pii
+            pii_findings = detect_pii(list(df.columns))
+        else:
+            pii_findings = []
+
+        with timed_operation("transform"):
+            df = transformer.transform(df, pii_findings, "mask", drop_cols=[])
     metrics.end_stage("transform", rows=len(df))
 
     # ── Profile ──────────────────────────────────────────────────────
@@ -203,6 +247,20 @@ def _run_single_file(source, args, config, gov, metrics) -> None:
     with timed_operation(f"load:{destination}"):
         loader.load(df, config, table_name)
     metrics.end_stage("load", rows=len(df))
+
+    # ── Verify ───────────────────────────────────────────────────────
+    if getattr(args, "verify", False) and not args.dry_run:
+        from pipeline.load_verifier import LoadVerifier
+        verifier = LoadVerifier(gov)
+        verify_cfg = dict(config)
+        verify_cfg["db_type"] = destination
+        with timed_operation("verify"):
+            result = verifier.verify_row_count(df, verify_cfg, table_name)
+        if result.get("match") is False:
+            logger.warning(
+                "Load verification FAILED: %d source rows vs %d destination rows.",
+                result["source_rows"], result["dest_rows"],
+            )
 
 
 def _cmd_validate(args: argparse.Namespace) -> None:
