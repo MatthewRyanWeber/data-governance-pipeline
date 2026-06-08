@@ -24,6 +24,51 @@ from pipeline.helpers import file_hash
 
 logger = logging.getLogger(__name__)
 
+_REGION_PREFIX_TO_COUNTRY: dict[str, str] = {
+    "us": "US", "eu": "EU", "ap": "SG", "ca": "CA",
+    "sa": "BR", "me": "AE", "a": "ZA", "au": "AU",
+}
+
+
+def _infer_cross_border_transfer(db: str, name: str) -> dict | None:
+    """Infer a GDPR Chapter V cross-border transfer from cloud provider endpoint format."""
+    if db == "snowflake" and "/" in name:
+        account = name.split("/")[0]
+        parts = account.split(".")
+        if len(parts) >= 2:
+            region = parts[1]
+            dest_cc = _REGION_PREFIX_TO_COUNTRY.get(region.split("-")[0].lower(), "US")
+            return dict(
+                source_country="US", dest_country=dest_cc,
+                transfer_type="SNOWFLAKE_CLOUD_REGION", safeguard="SCC",
+            )
+
+    elif db == "redshift" and "/" in name:
+        host = name.split("/")[0]
+        for part in host.split("."):
+            pfx = part.split("-")[0].lower()
+            if pfx in _REGION_PREFIX_TO_COUNTRY:
+                return dict(
+                    source_country="US", dest_country=_REGION_PREFIX_TO_COUNTRY[pfx],
+                    transfer_type="REDSHIFT_CLOUD_REGION", safeguard="SCC",
+                )
+
+    elif db == "bigquery" and "@" in name:
+        location = name.split("@")[-1].upper()
+        if "EU" in location or "EUROPE" in location:
+            return dict(
+                source_country="EU", dest_country="EU",
+                transfer_type="INTRA_EU",
+                safeguard="EU/EEA intra-zone — no restrictions",
+            )
+        bq_region_map = {"US": "US", "ASIA": "SG", "AUSTRALIA-SOUTHEAST1": "AU"}
+        return dict(
+            source_country="US", dest_country=bq_region_map.get(location, "US"),
+            transfer_type="BIGQUERY_REGION", safeguard="SCC",
+        )
+
+    return None
+
 
 class GovernanceLogger:
     """
@@ -202,52 +247,9 @@ class GovernanceLogger:
         self._event("LINEAGE", "DESTINATION_REGISTERED", {
             "db_type": db, "db_name": name, "table_or_collection": table,
         })
-
-        _pfx_cc = {
-            "us": "US", "eu": "EU", "ap": "SG", "ca": "CA",
-            "sa": "BR", "me": "AE", "a": "ZA", "au": "AU",
-        }
-
-        if db == "snowflake" and "/" in name:
-            account = name.split("/")[0]
-            parts = account.split(".")
-            if len(parts) >= 2:
-                region = parts[1]
-                dest_cc = _pfx_cc.get(region.split("-")[0].lower(), "US")
-                self.transfer_logged(
-                    source_country="US", dest_country=dest_cc,
-                    transfer_type="SNOWFLAKE_CLOUD_REGION", safeguard="SCC",
-                )
-
-        elif db == "redshift" and "/" in name:
-            host = name.split("/")[0]
-            for part in host.split("."):
-                pfx = part.split("-")[0].lower()
-                if pfx in _pfx_cc:
-                    dest_cc = _pfx_cc[pfx]
-                    self.transfer_logged(
-                        source_country="US", dest_country=dest_cc,
-                        transfer_type="REDSHIFT_CLOUD_REGION", safeguard="SCC",
-                    )
-                    break
-
-        elif db == "bigquery" and "@" in name:
-            location = name.split("@")[-1].upper()
-            if "EU" in location or "EUROPE" in location:
-                self.transfer_logged(
-                    source_country="EU", dest_country="EU",
-                    transfer_type="INTRA_EU",
-                    safeguard="EU/EEA intra-zone — no restrictions",
-                )
-            else:
-                region_map = {
-                    "US": "US", "ASIA": "SG", "AUSTRALIA-SOUTHEAST1": "AU",
-                }
-                dest_cc = region_map.get(location, "US")
-                self.transfer_logged(
-                    source_country="US", dest_country=dest_cc,
-                    transfer_type="BIGQUERY_REGION", safeguard="SCC",
-                )
+        transfer = _infer_cross_border_transfer(db, name)
+        if transfer:
+            self.transfer_logged(**transfer)
 
     def load_complete(self, rows: int, table: str) -> None:
         self._event("LINEAGE", "LOAD_COMPLETE", {

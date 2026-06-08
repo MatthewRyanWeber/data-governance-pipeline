@@ -13,35 +13,13 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from pipeline.constants import DEFAULT_RUN_CONTEXT
-from pipeline.helpers import mask_value
+from pipeline.helpers import flatten_record as _flatten_record, mask_value
 
 if TYPE_CHECKING:
     import pandas as pd
     from pipeline.governance_logger import GovernanceLogger
 
 logger = logging.getLogger(__name__)
-
-
-def _flatten_record(record, parent_key="", separator="__"):
-    """Recursively flatten nested dicts/lists into a single-level dict."""
-    items = []
-    if isinstance(record, dict):
-        for key, value in record.items():
-            new_key = f"{parent_key}{separator}{key}" if parent_key else str(key)
-            if isinstance(value, (dict, list)):
-                items.extend(_flatten_record(value, new_key, separator).items())
-            else:
-                items.append((new_key, value))
-    elif isinstance(record, list):
-        for index, value in enumerate(record):
-            new_key = f"{parent_key}{separator}{index}" if parent_key else str(index)
-            if isinstance(value, (dict, list)):
-                items.extend(_flatten_record(value, new_key, separator).items())
-            else:
-                items.append((new_key, value))
-    else:
-        return {parent_key: record}
-    return dict(items)
 
 
 class Transformer:
@@ -141,8 +119,8 @@ class Transformer:
             if col in df.columns:
                 try:
                     df[col] = df[col].astype(dtype)
-                except (ValueError, TypeError):
-                    pass
+                except (ValueError, TypeError) as exc:
+                    logger.debug("Could not coerce %s to %s: %s", col, dtype, exc)
         return df
 
     def apply_business_rules(self, df, rules: list):
