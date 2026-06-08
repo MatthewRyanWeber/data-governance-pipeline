@@ -109,13 +109,11 @@ class ColumnProfiler:
                         "empty_count": int((str_vals == "").sum()),
                     })
 
-            if 0 < prof["unique_count"] <= top_n * 2:
+            if prof["unique_count"] > 0:
                 vc = non_null.value_counts().head(top_n)
                 prof["top_values"] = {str(k): int(v) for k, v in vc.items()}
-            elif prof["unique_count"] > top_n * 2:
-                vc = non_null.value_counts().head(top_n)
-                prof["top_values"] = {str(k): int(v) for k, v in vc.items()}
-                prof["top_values_truncated"] = True
+                if prof["unique_count"] > top_n * 2:
+                    prof["top_values_truncated"] = True
 
             columns.append(prof)
 

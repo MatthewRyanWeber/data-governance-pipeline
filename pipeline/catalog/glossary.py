@@ -13,6 +13,7 @@ Revision history
 
 import json
 import logging
+import tempfile
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -69,9 +70,17 @@ class BusinessGlossary:
                 "updated_utc": datetime.now(timezone.utc).isoformat(),
                 "terms": self._glossary,
             }
-            self.glossary_file.write_text(
-                json.dumps(payload, indent=2), encoding="utf-8"
+            data = json.dumps(payload, indent=2)
+            tmp_fd, tmp_path = tempfile.mkstemp(
+                dir=str(self.glossary_file.parent), suffix=".tmp",
             )
+            try:
+                with open(tmp_fd, "w", encoding="utf-8") as fh:
+                    fh.write(data)
+                Path(tmp_path).replace(self.glossary_file)
+            except BaseException:
+                Path(tmp_path).unlink(missing_ok=True)
+                raise
 
     def add_term(
         self,

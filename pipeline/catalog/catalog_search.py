@@ -16,14 +16,12 @@ import sqlite3
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from pipeline.constants import BASE_DIR
+from pipeline.catalog.catalog_store import _CATALOG_DB
 
 if TYPE_CHECKING:
     from pipeline.governance_logger import GovernanceLogger
 
 logger = logging.getLogger(__name__)
-
-_CATALOG_DB = BASE_DIR / "config" / "catalog.db"
 
 
 class CatalogSearch:

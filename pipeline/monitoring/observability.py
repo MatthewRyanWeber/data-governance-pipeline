@@ -9,6 +9,7 @@ Layer 3 — imports from Layer 0 (constants), Layer 1 (governance_logger).
 Revision history
 ────────────────
 1.0   2026-06-08   Initial release.
+1.1   2026-06-08   Fix drift detection: persist column_stats in observations.
 """
 
 import json
@@ -85,7 +86,7 @@ class DataObserver:
             "observed_utc": datetime.now(timezone.utc).isoformat(),
         }
 
-        self._save_observation(report)
+        self._save_observation(report, df)
 
         if alerts:
             self.gov.transformation_applied("OBSERVABILITY_ALERTS", {
@@ -213,9 +214,20 @@ class DataObserver:
 
         return alerts
 
-    def _save_observation(self, report: dict) -> None:
+    def _save_observation(self, report: dict, df: "pd.DataFrame") -> None:
         """Persist observation with column stats for future drift detection."""
         entry = dict(report)
+        column_stats = []
+        for col in df.select_dtypes(include="number").columns:
+            series = df[col].dropna()
+            if series.empty:
+                continue
+            column_stats.append({
+                "name": col,
+                "mean": round(float(series.mean()), 6),
+                "std": round(float(series.std()), 6) if len(series) > 1 else 0.0,
+            })
+        entry["column_stats"] = column_stats
         with open(self.history_file, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(entry, default=str) + "\n")
 

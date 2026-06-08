@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 _OL_SCHEMA = "https://openlineage.io/spec/2-0-2/OpenLineage.json"
 _PRODUCER = f"data-governance-pipeline/{VERSION}"
+_DEFAULT_QUALITY_THRESHOLD = 70.0
 
 
 class OpenLineageEmitter:
@@ -57,6 +58,7 @@ class OpenLineageEmitter:
             else gov.log_dir / "openlineage_events.jsonl"
         )
         self.http_endpoint = http_endpoint
+        self.quality_threshold = _DEFAULT_QUALITY_THRESHOLD
         self._run_id = str(uuid.uuid4())
 
     def emit_start(
@@ -128,7 +130,7 @@ class OpenLineageEmitter:
                 "_schemaURL": _OL_SCHEMA,
                 "assertions": [{
                     "assertion": "qualityScore",
-                    "success": quality_score >= 70,
+                    "success": quality_score >= self.quality_threshold,
                     "column": "*",
                 }],
             }

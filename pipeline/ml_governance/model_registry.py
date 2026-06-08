@@ -13,6 +13,7 @@ Revision history
 
 import json
 import logging
+import tempfile
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -65,10 +66,17 @@ class ModelRegistry:
     def _save(self) -> None:
         with _LOCK:
             self._registry["updated_utc"] = datetime.now(timezone.utc).isoformat()
-            self.registry_file.write_text(
-                json.dumps(self._registry, indent=2, default=str),
-                encoding="utf-8",
+            data = json.dumps(self._registry, indent=2, default=str)
+            tmp_fd, tmp_path = tempfile.mkstemp(
+                dir=str(self.registry_file.parent), suffix=".tmp",
             )
+            try:
+                with open(tmp_fd, "w", encoding="utf-8") as fh:
+                    fh.write(data)
+                Path(tmp_path).replace(self.registry_file)
+            except BaseException:
+                Path(tmp_path).unlink(missing_ok=True)
+                raise
 
     def register_model(
         self,

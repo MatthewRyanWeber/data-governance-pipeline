@@ -233,6 +233,21 @@ class TestAccessPolicy(unittest.TestCase):
         self.assertEqual(len(result), 1)
         self.assertEqual(result.iloc[0]["name"], "Alice")
 
+    def test_missing_role_raises(self):
+        from pipeline.security.access_policy import AccessPolicy
+        pol = AccessPolicy(self.gov, policy_file=self.policy_file)
+        df = pd.DataFrame({"x": [1]})
+        with self.assertRaises(ValueError):
+            pol.enforce(df, role="nonexistent_role")
+
+    def test_row_filter_injection_blocked(self):
+        from pipeline.security.access_policy import AccessPolicy
+        pol = AccessPolicy(self.gov, policy_file=self.policy_file)
+        pol.add_role("evil", row_filter="__import__('os').system('echo pwned')")
+        df = pd.DataFrame({"x": [1]})
+        with self.assertRaises(ValueError):
+            pol.enforce(df, role="evil")
+
 
 class TestDataObserver(unittest.TestCase):
     def setUp(self):
@@ -258,6 +273,18 @@ class TestDataObserver(unittest.TestCase):
         report = obs.observe(df, dataset="stale", timestamp_col="ts")
         freshness_alerts = [a for a in report["alerts"] if a["type"] == "FRESHNESS"]
         self.assertGreater(len(freshness_alerts), 0)
+
+    def test_column_stats_persisted_for_drift(self):
+        import json as _json
+        from pipeline.monitoring.observability import DataObserver
+        obs = DataObserver(self.gov)
+        df = pd.DataFrame({"metric": [10.0, 20.0, 30.0]})
+        obs.observe(df, dataset="drift_test")
+        lines = obs.history_file.read_text(encoding="utf-8").strip().splitlines()
+        record = _json.loads(lines[-1])
+        self.assertIn("column_stats", record)
+        self.assertEqual(len(record["column_stats"]), 1)
+        self.assertAlmostEqual(record["column_stats"][0]["mean"], 20.0, places=2)
 
 
 class TestOpenLineageEmitter(unittest.TestCase):

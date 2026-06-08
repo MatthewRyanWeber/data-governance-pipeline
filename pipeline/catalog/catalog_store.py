@@ -9,8 +9,10 @@ Layer 3 — imports from Layer 0 (constants), Layer 1 (governance_logger).
 Revision history
 ────────────────
 1.0   2026-06-08   Initial release.
+1.1   2026-06-08   Hoist hashlib import, log FTS rebuild failures.
 """
 
+import hashlib
 import json
 import logging
 import sqlite3
@@ -127,7 +129,6 @@ class CatalogStore:
         quality_score: float | None = None,
     ) -> str:
         """Register or update a dataset in the catalog. Returns dataset_id."""
-        import hashlib
         dataset_id = hashlib.sha256(name.encode()).hexdigest()[:16]
         now = datetime.now(timezone.utc).isoformat()
         tag_list = tags or []
@@ -180,8 +181,8 @@ class CatalogStore:
 
                 try:
                     conn.executescript(_REBUILD_FTS)
-                except sqlite3.OperationalError:
-                    pass
+                except sqlite3.OperationalError as exc:
+                    logger.warning("[CATALOG] FTS rebuild failed: %s", exc)
 
                 conn.commit()
             finally:
@@ -198,7 +199,6 @@ class CatalogStore:
 
     def get_dataset(self, name: str) -> dict | None:
         """Look up a dataset by name."""
-        import hashlib
         dataset_id = hashlib.sha256(name.encode()).hexdigest()[:16]
         conn = self._conn()
         try:
@@ -245,7 +245,6 @@ class CatalogStore:
         glossary_term: str = "", tags: list[str] | None = None,
     ) -> None:
         """Update metadata for a specific column."""
-        import hashlib
         dataset_id = hashlib.sha256(dataset_name.encode()).hexdigest()[:16]
         col_id = f"{dataset_id}_{column_name}"
         with _LOCK:
@@ -266,7 +265,6 @@ class CatalogStore:
 
     def update_quality_score(self, dataset_name: str, score: float) -> None:
         """Update the quality score for a dataset."""
-        import hashlib
         dataset_id = hashlib.sha256(dataset_name.encode()).hexdigest()[:16]
         now = datetime.now(timezone.utc).isoformat()
         with _LOCK:
@@ -283,7 +281,6 @@ class CatalogStore:
 
     def delete_dataset(self, name: str) -> bool:
         """Remove a dataset and its columns from the catalog."""
-        import hashlib
         dataset_id = hashlib.sha256(name.encode()).hexdigest()[:16]
         with _LOCK:
             conn = self._conn()

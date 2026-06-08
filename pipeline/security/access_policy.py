@@ -9,10 +9,13 @@ Layer 3 — imports from Layer 0 (constants).
 Revision history
 ────────────────
 1.0   2026-06-08   Initial release.
+1.1   2026-06-08   Fail-closed on missing role, sanitize row_filter, atomic writes.
 """
 
 import json
 import logging
+import re
+import tempfile
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -65,9 +68,17 @@ class AccessPolicy:
     def _save(self) -> None:
         with _LOCK:
             self._policies["updated_utc"] = datetime.now(timezone.utc).isoformat()
-            self.policy_file.write_text(
-                json.dumps(self._policies, indent=2), encoding="utf-8"
+            data = json.dumps(self._policies, indent=2)
+            tmp_fd, tmp_path = tempfile.mkstemp(
+                dir=str(self.policy_file.parent), suffix=".tmp",
             )
+            try:
+                with open(tmp_fd, "w", encoding="utf-8") as fh:
+                    fh.write(data)
+                Path(tmp_path).replace(self.policy_file)
+            except BaseException:
+                Path(tmp_path).unlink(missing_ok=True)
+                raise
 
     def add_role(
         self,
@@ -152,9 +163,10 @@ class AccessPolicy:
 
         policy = self._policies["roles"].get(effective_role)
         if not policy:
-            logger.warning("[RBAC] Role '%s' not found — returning full DataFrame",
-                          effective_role)
-            return df
+            raise ValueError(
+                f"Role '{effective_role}' not found — cannot enforce access policy. "
+                f"Available roles: {list(self._policies['roles'])}"
+            )
 
         result = df.copy()
         columns_dropped = []
@@ -172,8 +184,17 @@ class AccessPolicy:
 
         rows_before = len(result)
         if policy["row_filter"]:
+            row_filter = policy["row_filter"]
+            _FORBIDDEN = re.compile(
+                r"__\w+__|import\s*\(|exec\s*\(|eval\s*\(|open\s*\(|compile\s*\(",
+                re.IGNORECASE,
+            )
+            if _FORBIDDEN.search(row_filter):
+                raise ValueError(
+                    f"Row filter contains forbidden pattern: {row_filter!r}"
+                )
             try:
-                result = result.query(policy["row_filter"])
+                result = result.query(row_filter)
             except Exception as exc:
                 logger.warning("[RBAC] Row filter failed: %s", exc)
 

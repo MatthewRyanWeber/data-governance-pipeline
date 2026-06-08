@@ -199,19 +199,14 @@ class NLPPIIDetector:
         return findings
 
     def _deduplicate(self, findings: list[dict]) -> list[dict]:
-        seen: set[tuple] = set()
-        result = []
+        merged: dict[tuple, dict] = {}
         for f in findings:
             key = (f["column"], f["entity_type"])
-            if key not in seen:
-                seen.add(key)
-                result.append(f)
+            if key not in merged:
+                merged[key] = f
             else:
-                for existing in result:
-                    if (existing["column"], existing["entity_type"]) == key:
-                        existing["count"] = max(existing["count"], f["count"])
-                        break
-        return result
+                merged[key]["count"] = max(merged[key]["count"], f["count"])
+        return list(merged.values())
 
     def scan_and_classify(
         self,

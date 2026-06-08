@@ -99,11 +99,6 @@ class TestGenerator:
                 "meta": meta,
             })
 
-        if col.get("unique_count") == col.get("null_count", -1) + len(
-            col.get("top_values", {})
-        ):
-            pass
-
         dtype = col.get("dtype", "")
 
         if "int" in dtype or "float" in dtype:
