@@ -66,6 +66,7 @@ MAX_DECOMPRESSED_SIZE: int = int(
 BASE_DIR = Path(__file__).resolve().parent.parent
 WATERMARK_FILE = BASE_DIR / "config" / "pipeline_watermark.json"
 CHECKPOINT_FILE = BASE_DIR / "config" / "pipeline_checkpoint.json"
+RUN_STATE_DIR = BASE_DIR / "config" / "run_state"
 
 STATE_FILE_LOCK = threading.RLock()
 
