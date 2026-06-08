@@ -67,7 +67,9 @@ class DataQualityScorer:
     ) -> None:
         self.gov          = gov
         self.history_file = Path(history_file) if history_file else gov.log_dir / "quality_history.jsonl"
-        self.weights      = weights or self.DEFAULT_WEIGHTS
+        raw_weights       = weights or self.DEFAULT_WEIGHTS
+        total             = sum(raw_weights.values())
+        self.weights      = {k: v / total for k, v in raw_weights.items()} if total else raw_weights
 
     # ── Dimension calculators ─────────────────────────────────────────────
 
@@ -123,7 +125,7 @@ class DataQualityScorer:
             try:
                 s_naive = s.dt.tz_convert('UTC').dt.tz_localize(None)
             except TypeError:
-                s_naive = s.dt.tz_localize(None)
+                s_naive = s
             days_old = (now - s_naive).dt.days
             fresh    = (days_old <= max_days).mean()
             scores.append(fresh * 100)

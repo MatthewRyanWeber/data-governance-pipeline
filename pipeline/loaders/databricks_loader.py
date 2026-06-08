@@ -208,7 +208,7 @@ class DatabricksLoader(BaseLoader):
             row = cur.fetchone()
             return int(row[0]) if row else None
         except Exception as exc:
-            logger.debug("Cleanup failed: %s", exc)
+            logger.debug("Version query failed for %s: %s", fqt, exc)
             return None
 
     def _log_delta_version(self, table, version, operation):

@@ -118,13 +118,16 @@ class CompressionHandler:
 
         if ext == ".zip":
             zf = zipfile.ZipFile(path, "r")
-            members = [m for m in zf.namelist() if not m.endswith("/")]
-            if not members:
+            try:
+                members = [m for m in zf.namelist() if not m.endswith("/")]
+                if not members:
+                    raise ValueError(f"ZIP archive is empty: {path}")
+                _validate_archive_member(members[0])
+                inner = zf.open(members[0])
+                return SizeLimitedReader(inner, limit)
+            except Exception:
                 zf.close()
-                raise ValueError(f"ZIP archive is empty: {path}")
-            _validate_archive_member(members[0])
-            inner = zf.open(members[0])
-            return SizeLimitedReader(inner, limit)
+                raise
 
         if ext == ".zst":
             if not HAS_ZSTD:
@@ -145,16 +148,18 @@ class CompressionHandler:
         if ext == ".tgz":
             import tarfile
             tf = tarfile.open(path, "r:gz")
-            members = [m for m in tf.getmembers() if m.isfile()]
-            if not members:
+            try:
+                members = [m for m in tf.getmembers() if m.isfile()]
+                if not members:
+                    raise ValueError(f"TGZ archive is empty: {path}")
+                _validate_archive_member(members[0].name)
+                inner = tf.extractfile(members[0])
+                if inner is None:
+                    raise ValueError(f"Could not extract member from TGZ: {path}")
+                return SizeLimitedReader(inner, limit)
+            except Exception:
                 tf.close()
-                raise ValueError(f"TGZ archive is empty: {path}")
-            _validate_archive_member(members[0].name)
-            inner = tf.extractfile(members[0])
-            if inner is None:
-                tf.close()
-                raise ValueError(f"Could not extract member from TGZ: {path}")
-            return SizeLimitedReader(inner, limit)
+                raise
 
         return _builtin_open(str(path), "rb")
 

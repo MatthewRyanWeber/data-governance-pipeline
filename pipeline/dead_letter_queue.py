@@ -10,6 +10,7 @@ Layer 2 — imports from Layer 0 (constants), Layer 1 (governance_logger).
 import logging
 import threading
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from pipeline.constants import DEFAULT_RUN_CONTEXT
@@ -35,8 +36,7 @@ class DeadLetterQueue:
     def __init__(self, gov: "GovernanceLogger", run_context=None) -> None:
         self.gov = gov
         self.run_context = run_context or DEFAULT_RUN_CONTEXT
-        self.dlq_path = gov.dlq_file
-        self._header_written = False
+        self.dlq_path = Path(gov.dlq_file)
         self._lock = threading.Lock()
 
     def write(self, df: "pd.DataFrame", bad_indices: list[int],
@@ -54,11 +54,11 @@ class DeadLetterQueue:
         rejected_df["_dlq_timestamp"] = datetime.now(timezone.utc).isoformat()
 
         with self._lock:
+            write_header = not self.dlq_path.exists() or self.dlq_path.stat().st_size == 0
             rejected_df.to_csv(
                 self.dlq_path, mode="a",
-                header=not self._header_written, index=False,
+                header=write_header, index=False,
                 encoding="utf-8",
             )
-            self._header_written = True
         self.gov.dlq_written(len(rejected_df), reason)
         return clean_df

@@ -105,7 +105,8 @@ class DLQReplayer:
 
         if original_count == 0:
             logger.info("DLQ file %s is empty — nothing to replay.", dlq_file.name)
-            self._archive(dlq_file)
+            if not self.dry_run:
+                self._archive(dlq_file)
             return 0
 
         # Strip DLQ metadata columns

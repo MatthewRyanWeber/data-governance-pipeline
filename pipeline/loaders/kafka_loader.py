@@ -71,17 +71,18 @@ class KafkaLoader(BaseLoader):
             producer.flush()
             producer.close()
 
-        self.gov._event(
-            "LOAD", "KAFKA_PUBLISH_COMPLETE",
-            {
-                "topic": topic,
-                "rows": rows,
-                "if_exists": if_exists,
-                "key_column": cfg.get("key_column"),
-                "acks": cfg.get("acks", "all"),
-                "compression": cfg.get("compression_type", "none"),
-            },
+        self.gov.load_complete(rows, topic)
+        self.gov.destination_registered(
+            "kafka", cfg.get("bootstrap_servers", ""), topic,
         )
+        self.gov.load_event("KAFKA_PUBLISH_COMPLETE", {
+            "topic": topic,
+            "rows": rows,
+            "if_exists": if_exists,
+            "key_column": cfg.get("key_column"),
+            "acks": cfg.get("acks", "all"),
+            "compression": cfg.get("compression_type", "none"),
+        })
         return rows
 
     def publish_governance_event(self, cfg, event, topic="governance_events"):

@@ -872,8 +872,10 @@ class TestKafkaLoader(unittest.TestCase):
         with patch("kafka.KafkaProducer", return_value=mock_producer):
             loader.load(self._df(), self._cfg())
 
-        self.gov._event.assert_called_once()
-        call_str = str(self.gov._event.call_args)
+        self.gov.load_complete.assert_called_once()
+        self.gov.destination_registered.assert_called_once()
+        self.gov.load_event.assert_called_once()
+        call_str = str(self.gov.load_event.call_args)
         self.assertIn("KAFKA_PUBLISH_COMPLETE", call_str)
 
     def test_table_param_overrides_cfg_topic(self):
@@ -889,7 +891,7 @@ class TestKafkaLoader(unittest.TestCase):
                         table="new_topic")
 
         # Verify new_topic was used in the governance event
-        call_str = str(self.gov._event.call_args)
+        call_str = str(self.gov.load_event.call_args)
         self.assertIn("new_topic", call_str)
 
     def test_publish_governance_event(self):

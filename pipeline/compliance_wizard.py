@@ -42,7 +42,7 @@ def run_compliance_wizard(gov: "GovernanceLogger", pii_findings: list[dict]) -> 
 
     if yes_no("\n[CCPA §1798.120] Will data be sold/shared with third parties?", False):
         optout = yes_no("Has subject opted OUT?", True)
-        gov._event("CONSENT", "CCPA_SALE_OPTOUT", {"opted_out": optout})
+        gov.consent_event("CCPA_SALE_OPTOUT", {"opted_out": optout})
         if optout:
             logger.info("Opt-out recorded.")
 

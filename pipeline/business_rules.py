@@ -119,7 +119,9 @@ class BusinessRuleEngine:
 
                 elif rule_type == "filter_out":
                     col = rule["column"]
-                    if col in df.columns:
+                    if col not in df.columns:
+                        logger.warning("[RULES] filter_out rule '%s' references missing column: %r", rule_name, col)
+                    elif col in df.columns:
                         mask = df[col].astype(str).str.lower() != str(rule["value"]).lower()
                         filtered = rows_before - int(mask.sum())
                         df = df[mask].reset_index(drop=True)
@@ -127,7 +129,9 @@ class BusinessRuleEngine:
 
                 elif rule_type == "flag":
                     col = rule["condition_column"]
-                    if col in df.columns:
+                    if col not in df.columns:
+                        logger.warning("[RULES] flag rule '%s' references missing column: %r", rule_name, col)
+                    elif col in df.columns:
                         op = rule.get("operator", "gt").lower()
                         thr = rule.get("threshold", 0)
                         ops = {

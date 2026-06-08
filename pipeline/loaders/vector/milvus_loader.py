@@ -88,6 +88,9 @@ class MilvusLoader(BaseLoader):
                 "DataFrame. Set cfg['vector_column'] or cfg['embed_columns']."
             )
 
+        if df.empty:
+            return 0
+
         import numpy as _np
         first_vec = df[vector_col].iloc[0]
         if isinstance(first_vec, _np.ndarray):

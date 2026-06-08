@@ -304,6 +304,9 @@ class GovernanceLogger:
             "user_confirmed": confirmed,
         })
 
+    def consent_event(self, action: str, detail: dict | None = None) -> None:
+        self._event("CONSENT", action, detail)
+
     def retention_policy(self, policy: str, days: int | None) -> None:
         self._event("RETENTION", "POLICY_RECORDED", {
             "policy": policy, "retention_days": days,

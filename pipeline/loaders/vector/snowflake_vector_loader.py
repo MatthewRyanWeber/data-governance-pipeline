@@ -88,6 +88,9 @@ class SnowflakeVectorLoader(BaseLoader):
                 "DataFrame."
             )
 
+        if df.empty:
+            return 0
+
         first_vec = df[vector_col].iloc[0]
         if isinstance(first_vec, _np.ndarray):
             first_vec = first_vec.tolist()

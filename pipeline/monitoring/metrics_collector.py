@@ -82,10 +82,16 @@ class MetricsCollector:
         self._stages[name] = {"start": self._stage_start, "duration_sec": None, "rows": 0}
 
     def end_stage(self, name: str, rows: int = 0) -> float:
-        duration = time.monotonic() - self._stages.get(name, {}).get("start", time.monotonic())
-        self._stages[name]["duration_sec"] = round(duration, 3)
-        self._stages[name]["rows"] = rows
-        self._stages[name]["rows_per_sec"] = round(rows / duration, 1) if duration > 0 else 0
+        stage = self._stages.get(name)
+        if stage is None:
+            logger.warning("end_stage(%r) called without start_stage — recording zero duration", name)
+            self._stages[name] = {"start": time.monotonic(), "duration_sec": 0.0, "rows": rows, "rows_per_sec": 0}
+            self._current = None
+            return 0.0
+        duration = time.monotonic() - stage.get("start", time.monotonic())
+        stage["duration_sec"] = round(duration, 3)
+        stage["rows"] = rows
+        stage["rows_per_sec"] = round(rows / duration, 1) if duration > 0 else 0
         self._current = None
         return duration
 

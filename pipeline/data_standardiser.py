@@ -102,6 +102,7 @@ class DataStandardiser:
         import pandas as pd
 
         if not HAS_PHONENUMBERS:
+            logger.warning("phonenumbers library not installed — phone_e164 normalization skipped")
             return series.copy(), 0
         import phonenumbers
 

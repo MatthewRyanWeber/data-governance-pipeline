@@ -71,13 +71,6 @@ def create_app(pipeline_fn=None) -> "Flask":
 
     def _run_pipeline(run_id: str, source: str, destination: str, config: dict) -> None:
         """Execute pipeline_fn in a background thread and update _state."""
-        with _state_lock:
-            _state["run_id"] = run_id
-            _state["status"] = "running"
-            _state["started_at"] = datetime.now(timezone.utc).isoformat()
-            _state["finished_at"] = None
-            _state["error"] = None
-
         logger.info("Pipeline run %s started — source=%s, dest=%s", run_id, source, destination)
         start = time.perf_counter()
 
@@ -109,13 +102,6 @@ def create_app(pipeline_fn=None) -> "Flask":
         if pipeline_fn is None:
             return jsonify({"error": "No pipeline function configured."}), 501
 
-        with _state_lock:
-            if _state["status"] == "running":
-                return jsonify({
-                    "error": "A pipeline run is already in progress.",
-                    "run_id": _state["run_id"],
-                }), 409
-
         body = request.get_json(silent=True) or {}
         source = body.get("source")
         destination = body.get("destination")
@@ -125,6 +111,19 @@ def create_app(pipeline_fn=None) -> "Flask":
             return jsonify({"error": "Both 'source' and 'destination' are required."}), 400
 
         run_id = str(uuid.uuid4())
+
+        with _state_lock:
+            if _state["status"] == "running":
+                return jsonify({
+                    "error": "A pipeline run is already in progress.",
+                    "run_id": _state["run_id"],
+                }), 409
+            _state["status"] = "running"
+            _state["run_id"] = run_id
+            _state["started_at"] = datetime.now(timezone.utc).isoformat()
+            _state["finished_at"] = None
+            _state["error"] = None
+
         thread = threading.Thread(
             target=_run_pipeline,
             args=(run_id, source, destination, config),

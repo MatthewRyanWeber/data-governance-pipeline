@@ -187,8 +187,12 @@ class QualityAnomalyAlerter:
             prev_val = prev_dims.get(dim)
             if prev_val is None:
                 continue
-            curr_val = float(curr_val)
-            prev_val = float(prev_val)
+            try:
+                curr_val = float(curr_val)
+                prev_val = float(prev_val)
+            except (ValueError, TypeError):
+                logger.debug("Non-numeric dimension %r values: curr=%r prev=%r — skipped", dim, curr_val, prev_val)
+                continue
             drop = prev_val - curr_val
             if drop > self.dimension_threshold:
                 severity = "HIGH" if drop > self.dimension_threshold * 1.5 else "MEDIUM"

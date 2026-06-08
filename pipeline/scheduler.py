@@ -13,6 +13,7 @@ Revision history
 
 import logging
 import threading
+import zoneinfo
 from datetime import datetime, timezone
 from typing import Callable
 
@@ -48,6 +49,11 @@ class PipelineScheduler:
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
 
+        try:
+            self._tz = zoneinfo.ZoneInfo(self.timezone_name)
+        except (KeyError, zoneinfo.ZoneInfoNotFoundError):
+            logger.warning("Unknown timezone %r — falling back to UTC", self.timezone_name)
+            self._tz = timezone.utc
         self._cron_parts = self._parse_cron(self.cron_expr)
         logger.info("PipelineScheduler initialised — cron=%s, tz=%s", self.cron_expr, self.timezone_name)
 
@@ -87,8 +93,8 @@ class PipelineScheduler:
         return result
 
     def _matches_now(self) -> bool:
-        """Check whether the current UTC time matches the cron expression."""
-        now = datetime.now(timezone.utc)
+        """Check whether the current time (in configured timezone) matches the cron expression."""
+        now = datetime.now(self._tz)
         return (
             now.minute in self._cron_parts["minute"]
             and now.hour in self._cron_parts["hour"]
