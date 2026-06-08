@@ -69,7 +69,20 @@ class SFTPLoader:
         body = self._serialise(df, fmt, cfg)
 
         ssh = paramiko.SSHClient()
-        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        if cfg.get("auto_add_host_key", False):
+            logger.warning(
+                "SFTPLoader: auto_add_host_key is enabled — accepting any "
+                "host key. This is vulnerable to MITM attacks."
+            )
+            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        else:
+            ssh.set_missing_host_key_policy(paramiko.RejectPolicy())
+            known_hosts = cfg.get("known_hosts_file")
+            if known_hosts:
+                import os
+                ssh.load_host_keys(os.path.expanduser(known_hosts))
+            else:
+                ssh.load_system_host_keys()
 
         connect_kwargs: dict = {
             "hostname": host,

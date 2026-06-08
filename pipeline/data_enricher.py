@@ -49,7 +49,7 @@ class DataEnricher:
 
         ext = Path(lookup_path).suffix.lower()
         if ext == ".csv":
-            lookup_df = pd.read_csv(lookup_path)
+            lookup_df = pd.read_csv(lookup_path, encoding="utf-8")
         elif ext == ".json":
             lookup_df = pd.read_json(lookup_path)
         elif ext in (".xlsx", ".xls"):

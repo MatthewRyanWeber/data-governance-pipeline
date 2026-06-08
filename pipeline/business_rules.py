@@ -77,6 +77,17 @@ class BusinessRuleEngine:
                     safe = re.sub(r"[^a-zA-Z0-9_\s\+\-\*/\(\)\.]", "", expr)
                     if safe != expr:
                         raise ValueError(f"Unsafe expression: {expr!r}")
+                    _blocked = [
+                        "__", "import", "exec", "eval", "compile",
+                        "getattr", "setattr", "delattr",
+                        "globals", "locals", "open", "system",
+                    ]
+                    _expr_lower = expr.lower()
+                    for _kw in _blocked:
+                        if _kw in _expr_lower:
+                            raise ValueError(
+                                f"Blocked keyword {_kw!r} in expression: {expr!r}"
+                            )
                     try:
                         df[rule["new_column"]] = pd.eval(
                             expr, local_dict=local_ns,

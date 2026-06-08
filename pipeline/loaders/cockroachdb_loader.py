@@ -86,7 +86,7 @@ class CockroachDBLoader:
             "table": table,
             "columns": cols,
             "row_count": count,
-            "engine_url": str(engine.url),
+            "engine_url": repr(engine.url.render_as_string(hide_password=True)),
         }
 
     def _engine(self, cfg: dict):

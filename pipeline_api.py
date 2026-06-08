@@ -91,10 +91,14 @@ def _execute_run(run_id: str, source: str, cfg: dict) -> None:
     import sys
     sys.path.insert(0, str(Path(__file__).parent))
 
-    from pipeline_v3 import (   # pylint: disable=import-outside-toplevel
-        GovernanceLogger, Extractor, Transformer, _detect_pii,
-        DataClassificationTagger, DeadLetterQueue, SchemaValidator, SQLLoader,
-    )
+    from pipeline.governance_logger import GovernanceLogger  # pylint: disable=import-outside-toplevel
+    from pipeline.extract import Extractor
+    from pipeline.transform import Transformer
+    from pipeline.helpers import detect_pii as _detect_pii
+    from pipeline.privacy.classification_tagger import DataClassificationTagger
+    from pipeline.dead_letter_queue import DeadLetterQueue
+    from pipeline.schema_validator import SchemaValidator
+    from pipeline.loaders.sql_loader import SQLLoader
     import io
     from contextlib import redirect_stdout, redirect_stderr
 
@@ -219,9 +223,9 @@ def create_app(scheduler=None) -> Flask:
         if not source:
             abort(400, description="'source' field is required")
         # Path traversal protection
-        import pathlib
-        source_resolved = str(pathlib.Path(source).resolve())
-        if ".." in source or source_resolved.startswith(("C:\\Windows", "/etc", "/proc")):
+        ALLOWED_BASE = Path(".").resolve()
+        source_resolved = Path(source).resolve()
+        if not source_resolved.is_relative_to(ALLOWED_BASE):
             abort(403, description="path not allowed")
 
         run_id = str(uuid.uuid4())

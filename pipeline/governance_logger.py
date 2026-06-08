@@ -104,7 +104,7 @@ class GovernanceLogger:
         self.log_dir = (Path(log_dir) if log_dir else Path(f"{stem} LOGS")).resolve()
         self.log_dir.mkdir(parents=True, exist_ok=True)
 
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
 
         self.log_file = self.log_dir / f"pipeline_{ts}.log"
         self.ledger_file = self.log_dir / f"audit_ledger_{ts}.jsonl"

@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 import pandas as pd
 
 from pipeline.constants import HAS_YAML
+from pipeline.exceptions import ContractViolationError
 
 if TYPE_CHECKING:
     from pipeline.governance_logger import GovernanceLogger
@@ -624,35 +625,3 @@ class DataContractEnforcer:
         }
 
 
-class ContractViolationError(Exception):
-    """
-    Raised by DataContractEnforcer.enforce() when one or more CRITICAL
-    or ERROR contract clauses are violated.
-
-    Attributes
-    ----------
-    contract_name : str        Name from the contract YAML.
-    violations    : list[dict] CRITICAL + ERROR violations.
-    warnings      : list[dict] WARNING violations (non-fatal).
-    """
-
-    def __init__(
-        self,
-        contract_name: str,
-        violations:    list[dict],
-        warnings:      list[dict],
-    ) -> None:
-        self.contract_name = contract_name
-        self.violations    = violations
-        self.warnings      = warnings
-        summary = (
-            f"Contract '{contract_name}' violated: "
-            f"{len(violations)} failure(s), {len(warnings)} warning(s)\n"
-        )
-        details = "\n".join(
-            f"  [{v['severity']}] {v['clause']}.{v['rule']}"
-            + (f" [{v['column']}]" if v.get("column") else "")
-            + f" — expected: {v['expected']}  actual: {v['actual']}"
-            for v in violations
-        )
-        super().__init__(summary + details)

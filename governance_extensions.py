@@ -60,14 +60,8 @@ try:
 except ImportError:
     HAS_YAML = False
 
-# ── Pipeline v3 import ────────────────────────────────────────────────────────
-try:
-    from pipeline_v3 import GovernanceLogger
-except ImportError as _exc:
-    raise ImportError(
-        "governance_extensions.py requires pipeline_v3.py in the same directory. "
-        f"Original error: {_exc}"
-    ) from _exc
+# ── Pipeline import ──────────────────────────────────────────────────────────
+from pipeline.governance_logger import GovernanceLogger
 
 logger = logging.getLogger(__name__)
 

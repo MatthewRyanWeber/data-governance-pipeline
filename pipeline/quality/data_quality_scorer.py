@@ -120,7 +120,11 @@ class DataQualityScorer:
             s   = date_cols[col].dropna()
             if len(s) == 0:
                 continue
-            days_old = (now - s.dt.tz_localize(None)).dt.days
+            try:
+                s_naive = s.dt.tz_convert('UTC').dt.tz_localize(None)
+            except TypeError:
+                s_naive = s.dt.tz_localize(None)
+            days_old = (now - s_naive).dt.days
             fresh    = (days_old <= max_days).mean()
             scores.append(fresh * 100)
         return round(sum(scores) / len(scores), 2) if scores else 100.0

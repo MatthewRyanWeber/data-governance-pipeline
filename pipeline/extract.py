@@ -126,9 +126,9 @@ class Extractor:
         import pandas as pd
 
         if ext == ".csv":
-            return pd.read_csv(path)
+            return pd.read_csv(path, encoding="utf-8")
         if ext == ".tsv":
-            return pd.read_csv(path, sep="\t")
+            return pd.read_csv(path, sep="\t", encoding="utf-8")
         if ext in (".xlsx", ".xls"):
             return pd.read_excel(path)
         if ext == ".fw":
@@ -191,9 +191,9 @@ class Extractor:
         import pandas as pd
 
         if ext == ".csv":
-            return pd.read_csv(stream)
+            return pd.read_csv(stream, encoding="utf-8")
         if ext == ".tsv":
-            return pd.read_csv(stream, sep="\t")
+            return pd.read_csv(stream, sep="\t", encoding="utf-8")
         if ext in (".jsonl", ".ndjson"):
             return pd.read_json(stream, lines=True)
         if ext == ".json":
@@ -248,14 +248,14 @@ class Extractor:
         })
 
         if real_ext == ".csv" and not self._compressor.is_compressed(path):
-            for i, chunk in enumerate(pd.read_csv(path, chunksize=chunk_size)):
+            for i, chunk in enumerate(pd.read_csv(path, chunksize=chunk_size, encoding="utf-8")):
                 self.gov.transformation_applied("CHUNK_EXTRACTED", {
                     "chunk_index": i, "rows": len(chunk),
                 })
                 yield chunk
 
         elif real_ext == ".tsv" and not self._compressor.is_compressed(path):
-            for i, chunk in enumerate(pd.read_csv(path, sep="\t", chunksize=chunk_size)):
+            for i, chunk in enumerate(pd.read_csv(path, sep="\t", chunksize=chunk_size, encoding="utf-8")):
                 self.gov.transformation_applied("CHUNK_EXTRACTED", {
                     "chunk_index": i, "rows": len(chunk),
                 })

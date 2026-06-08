@@ -51,7 +51,7 @@ class ReferentialIntegrityChecker:
 
         ext = Path(reference_path).suffix.lower()
         if ext == ".csv":
-            ref_df = pd.read_csv(reference_path)
+            ref_df = pd.read_csv(reference_path, encoding="utf-8")
         elif ext in (".xlsx", ".xls"):
             ref_df = pd.read_excel(reference_path)
         elif ext == ".json":

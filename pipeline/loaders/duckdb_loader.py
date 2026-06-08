@@ -8,9 +8,11 @@ Revision history
 ────────────────
 1.0   2026-06-07   Extracted from pipeline_v3.py (class DuckDBLoader).
 1.1   2026-06-07   Added Layer 4 docstring convention.
+1.2   2026-06-08   Fixed SQL injection: query() now rejects mutating statements.
 """
 
 import logging
+import re
 from typing import TYPE_CHECKING
 
 import pandas as pd
@@ -22,6 +24,18 @@ if TYPE_CHECKING:
     from pipeline.governance_logger import GovernanceLogger
 
 logger = logging.getLogger(__name__)
+
+# Statements that mutate data or schema -- rejected by query().
+_MUTATING_SQL_RE = re.compile(
+    r"^\s*(?:DROP|DELETE|INSERT|UPDATE|ALTER|CREATE|TRUNCATE)\b",
+    re.IGNORECASE,
+)
+
+# Allowed statement prefixes for the read-only query() method.
+_READONLY_SQL_RE = re.compile(
+    r"^\s*(?:SELECT|WITH|EXPLAIN)\b",
+    re.IGNORECASE,
+)
 
 
 class DuckDBLoader:
@@ -114,8 +128,28 @@ class DuckDBLoader:
         return len(df)
 
     def query(self, cfg: dict, sql: str) -> "pd.DataFrame":
-        """Run an arbitrary SQL query against a DuckDB database."""
+        """Run a read-only SQL query against a DuckDB database.
+
+        Only SELECT, WITH, and EXPLAIN statements are permitted.
+        Mutating statements (DROP, DELETE, INSERT, UPDATE, ALTER, CREATE,
+        TRUNCATE) are rejected before execution.
+        """
         import duckdb
+
+        if _MUTATING_SQL_RE.search(sql):
+            raise ValueError(
+                "DuckDBLoader.query(): mutating statements are not allowed. "
+                f"Got statement starting with: {sql.strip()[:40]!r}"
+            )
+        if not _READONLY_SQL_RE.match(sql):
+            raise ValueError(
+                "DuckDBLoader.query(): only SELECT, WITH, and EXPLAIN "
+                f"statements are allowed. Got: {sql.strip()[:40]!r}"
+            )
+        logger.warning(
+            "DuckDBLoader.query(): executing caller-supplied SQL. "
+            "This method is for read-only analytical queries only."
+        )
         conn = duckdb.connect(cfg["db_path"], read_only=True)
         try:
             return conn.execute(sql).df()

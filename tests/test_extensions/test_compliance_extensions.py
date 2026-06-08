@@ -144,7 +144,7 @@ class TestComplianceMonitor(_TmpMixin):
         db_path = pathlib.Path(self._tmp) / "consent.db"
         conn = sqlite3.connect(str(db_path))
         conn.execute(
-            "CREATE TABLE consent_records "
+            "CREATE TABLE consent "
             "(id INTEGER PRIMARY KEY, purpose TEXT)"
         )
         conn.commit()

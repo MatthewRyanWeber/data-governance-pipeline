@@ -163,13 +163,12 @@ class QdrantLoader:
                         try:
                             point_id = int(raw_id)
                         except (ValueError, TypeError):
-                            # Hash string IDs to UUID for Qdrant
                             import hashlib
                             import uuid as _uuid
                             point_id = str(_uuid.UUID(
-                                hashlib.md5(
+                                hashlib.sha256(
                                     str(raw_id).encode()
-                                ).hexdigest()
+                                ).hexdigest()[:32]
                             ))
                     else:
                         point_id = i + row_idx

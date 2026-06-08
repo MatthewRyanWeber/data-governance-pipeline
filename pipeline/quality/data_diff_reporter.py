@@ -73,8 +73,8 @@ class DataDiffReporter:
         new = df_new.copy().reset_index(drop=True)
 
         if key_columns:
-            old = old.set_index(key_columns)
-            new = new.set_index(key_columns)
+            old = old.drop_duplicates(subset=key_columns).set_index(key_columns)
+            new = new.drop_duplicates(subset=key_columns).set_index(key_columns)
 
         old_idx = set(old.index.tolist())
         new_idx = set(new.index.tolist())

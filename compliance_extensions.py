@@ -332,9 +332,9 @@ class ComplianceMonitor:
         try:
             import sqlite3
             conn = sqlite3.connect(str(consent_db), timeout=5)
-            conn.execute("SELECT COUNT(*) FROM consent_records")
+            conn.execute("SELECT COUNT(*) FROM consent")
             count = conn.execute(
-                "SELECT COUNT(*) FROM consent_records"
+                "SELECT COUNT(*) FROM consent"
             ).fetchone()[0]
             conn.close()
             return "OK", f"Consent database reachable — {count} consent record(s)."
@@ -1033,11 +1033,11 @@ class TrustReportGenerator:
             import sqlite3
             conn     = sqlite3.connect(str(db_file), timeout=5)
             total    = conn.execute(
-                "SELECT COUNT(*) FROM consent_records"
+                "SELECT COUNT(*) FROM consent"
             ).fetchone()[0]
             purposes = [
                 row[0] for row in conn.execute(
-                    "SELECT DISTINCT purpose FROM consent_records"
+                    "SELECT DISTINCT purpose FROM consent"
                 ).fetchall()
             ]
             conn.close()

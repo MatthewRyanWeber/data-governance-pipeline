@@ -39,13 +39,11 @@ class SynapseLoader:
             )
 
     def _connection_string(self, cfg: dict) -> str:
-        from azure.identity import ClientSecretCredential as _AzureCSC
         driver = cfg.get("driver", "ODBC Driver 17 for SQL Server")
         host = cfg["host"]
         port = cfg.get("port", 1433)
         db = cfg["database"]
         if cfg.get("tenant_id"):
-            _AzureCSC(cfg["tenant_id"], cfg["client_id"], cfg["client_secret"])
             return (
                 f"DRIVER={{{driver}}};SERVER={host},{port};DATABASE={db};"
                 "Authentication=ActiveDirectoryServicePrincipal;"

@@ -7,9 +7,12 @@ Layer 4 — imports from Layer 0 (constants), Layer 1 (governance_logger).
 Revision history
 ────────────────
 1.0   2026-06-07   Extracted from pipeline_v3.py (class PgvectorLoader).
+1.1   2026-06-08   Fixed SQL injection: validate select_cols and where clause
+                   in search().
 """
 
 import logging
+import re
 from typing import TYPE_CHECKING
 
 import pandas as pd
@@ -21,6 +24,27 @@ if TYPE_CHECKING:
     from pipeline.governance_logger import GovernanceLogger
 
 logger = logging.getLogger(__name__)
+
+# SQL keywords that must never appear in a user-supplied WHERE fragment.
+_UNSAFE_SQL_RE = re.compile(
+    r"(;|--"
+    r"|\bDROP\b|\bDELETE\b|\bINSERT\b|\bUPDATE\b"
+    r"|\bTRUNCATE\b|\bALTER\b|\bCREATE\b"
+    r"|\bEXEC\b|\bEXECUTE\b"
+    r"|/\*)",
+    re.IGNORECASE,
+)
+
+
+def _validate_where_clause(clause: str) -> str:
+    """Reject WHERE fragments that contain dangerous SQL constructs."""
+    if _UNSAFE_SQL_RE.search(clause):
+        raise ValueError(
+            f"PgvectorLoader.search(): 'where' clause contains disallowed "
+            f"SQL pattern. Only simple filter expressions are permitted. "
+            f"Got: {clause!r}"
+        )
+    return clause
 
 
 class PgvectorLoader:
@@ -189,10 +213,31 @@ class PgvectorLoader:
 
         op = self._DIST_OPS.get(distance, "<=>")
         if select_cols:
+            for col in select_cols:
+                validate_sql_identifier(col, "select_cols element")
             cols = ", ".join(select_cols)
         else:
-            cols = f"* EXCEPT ({vector_col})" if vector_col else "*"
+            # Enumerate columns from the table instead of BigQuery's
+            # * EXCEPT syntax, which is not valid PostgreSQL.
+            port = cfg.get("port", 5432)
+            probe_url = (
+                f"postgresql+psycopg2://{_qp(cfg['user'])}:{_qp(cfg['password'])}"
+                f"@{cfg['host']}:{port}/{cfg['db_name']}"
+            )
+            probe_engine = create_engine(probe_url)
+            with probe_engine.connect() as probe_conn:
+                col_rows = probe_conn.execute(
+                    sa_text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_name = :tbl ORDER BY ordinal_position"
+                    ),
+                    {"tbl": table},
+                ).fetchall()
+            all_cols = [r[0] for r in col_rows if r[0] != vector_col]
+            cols = ", ".join(all_cols) if all_cols else "*"
         vec_str = "[" + ",".join(str(v) for v in query_vector) + "]"
+        if where:
+            _validate_where_clause(where)
         where_clause = f"WHERE {where}" if where else ""
         sql = (
             f"SELECT {cols}, "

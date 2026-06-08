@@ -155,24 +155,24 @@ def _run_single_file(source, args, config, gov, metrics) -> None:
 
     metrics.start_stage("extract")
     extractor = Extractor(gov)
-    chunks = list(extractor.extract(str(source)))
-    metrics.end_stage("extract", rows=sum(len(c) for c in chunks))
+    df = extractor.extract(str(source))
+    metrics.end_stage("extract", rows=len(df))
 
-    import pandas as pd
-    if not chunks:
+    if df.empty:
         logger.warning("No data extracted from %s.", source)
         return
 
-    df = pd.concat(chunks, ignore_index=True)
-
     # ── Transform ────────────────────────────────────────────────────
     metrics.start_stage("transform")
-    transformer = Transformer(gov, dry_run=args.dry_run)
+    transformer = Transformer(gov)
 
     if not args.skip_pii:
-        df = transformer.apply_pii_strategy(df, strategy="mask")
-    df = transformer.deduplicate(df)
-    df = transformer.sanitise(df)
+        from pipeline.helpers import detect_pii
+        pii_findings = detect_pii(list(df.columns))
+    else:
+        pii_findings = []
+
+    df = transformer.transform(df, pii_findings, "mask", drop_cols=[])
     metrics.end_stage("transform", rows=len(df))
 
     # ── Profile ──────────────────────────────────────────────────────
@@ -187,13 +187,11 @@ def _run_single_file(source, args, config, gov, metrics) -> None:
 
     loader_class, needs_db_type, uses_mongo = resolve_loader(destination)
     if needs_db_type:
-        loader = loader_class(gov, db_type=destination, dry_run=args.dry_run)
-    elif uses_mongo:
-        loader = loader_class(gov, dry_run=args.dry_run)
+        loader = loader_class(gov, db_type=destination)
     else:
-        loader = loader_class(gov, dry_run=args.dry_run)
+        loader = loader_class(gov)
 
-    loader.load(df, table_name)
+    loader.load(df, config, table_name)
     metrics.end_stage("load", rows=len(df))
 
 
@@ -210,15 +208,13 @@ def _cmd_validate(args: argparse.Namespace) -> None:
     schema = json.loads(schema_text)
 
     from pipeline.extract import Extractor
-    import pandas as pd
 
     extractor = Extractor(gov)
-    chunks = list(extractor.extract(args.source))
-    if not chunks:
+    df = extractor.extract(args.source)
+    if df.empty:
         logger.warning("No data to validate.")
         return
 
-    df = pd.concat(chunks, ignore_index=True)
     result = validator.validate(df, schema)
     print(json.dumps(result, indent=2))
 
@@ -228,16 +224,13 @@ def _cmd_profile(args: argparse.Namespace) -> None:
     from pipeline.governance_logger import GovernanceLogger
     from pipeline.extract import Extractor
     from pipeline.profiler import DataProfiler
-    import pandas as pd
 
     gov = GovernanceLogger(source_name=args.source)
     extractor = Extractor(gov)
-    chunks = list(extractor.extract(args.source))
-    if not chunks:
+    df = extractor.extract(args.source)
+    if df.empty:
         logger.warning("No data to profile.")
         return
-
-    df = pd.concat(chunks, ignore_index=True)
     profiler = DataProfiler(gov)
     report = profiler.profile(df)
     print(json.dumps(report, indent=2, default=str))
@@ -246,13 +239,14 @@ def _cmd_profile(args: argparse.Namespace) -> None:
 def _cmd_replay_dlq(args: argparse.Namespace) -> None:
     """Replay records from the dead-letter queue."""
     from pipeline.governance_logger import GovernanceLogger
-    from pipeline.dead_letter_queue import DeadLetterQueue
+    from pipeline.advanced.dlq_replayer import DLQReplayer
 
     gov = GovernanceLogger(source_name="dlq-replay")
-    dlq = DeadLetterQueue(gov, queue_dir=args.dlq_dir)
-    replayed = dlq.replay()
-    logger.info("Replayed %d DLQ records.", replayed)
-    print(f"Replayed {replayed} records from DLQ.")
+    replayer = DLQReplayer(gov, dlq_dir=args.dlq_dir)
+    summary = replayer.replay_all()
+    total = summary["total_rows"]
+    logger.info("Replayed %d DLQ records.", total)
+    print(f"Replayed {total} records from DLQ.")
 
 
 def _cmd_schedule(args: argparse.Namespace) -> None:

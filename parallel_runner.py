@@ -17,17 +17,16 @@ import logging
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-try:
-    from pipeline import Extractor, Transformer, SQLLoader, MongoLoader
-    from pipeline import GovernanceLogger, _detect_pii
-except ImportError:
-    from pipeline_v3 import Extractor, Transformer, SQLLoader, MongoLoader
-    from pipeline_v3 import GovernanceLogger, _detect_pii
+from pipeline.governance_logger import GovernanceLogger
+from pipeline.extract import Extractor
+from pipeline.transform import Transformer
+from pipeline.loaders.sql_loader import SQLLoader
+from pipeline.loaders.mongo_loader import MongoLoader
+from pipeline.helpers import detect_pii as _detect_pii
 
 
 def run_parallel(files, db_type, db_config, *, table_prefix="",
@@ -107,7 +106,7 @@ def _process_one_file(source, db_type, db_config, table_prefix,
     started = time.time()
     basename = os.path.basename(source)
 
-    gov = GovernanceLogger()
+    gov = GovernanceLogger(source_name=basename)
     gov.pipeline_start({"source": source, "parallel": True})
 
     # Extract

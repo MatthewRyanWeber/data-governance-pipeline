@@ -7,6 +7,8 @@ Layer 4 — imports from Layer 0 (constants), Layer 1 (governance_logger).
 Revision history
 ────────────────
 1.0   2026-06-07   Extracted from pipeline_v3.py (class SnowflakeVectorLoader).
+1.1   2026-06-08   Fixed SQL injection: validate table, vector_col, and
+                   select_cols in search() and load().
 """
 
 import logging
@@ -15,7 +17,7 @@ from typing import TYPE_CHECKING
 import pandas as pd
 
 from pipeline.constants import HAS_SNOWFLAKE
-from pipeline.loaders.base import validate_float_vector
+from pipeline.loaders.base import validate_sql_identifier, validate_float_vector
 
 if TYPE_CHECKING:
     from pipeline.governance_logger import GovernanceLogger
@@ -63,11 +65,13 @@ class SnowflakeVectorLoader:
             raise ValueError(
                 "SnowflakeVectorLoader: table name is required."
             )
+        validate_sql_identifier(table, "table")
 
         if df.empty:
             return 0
 
         vector_col = cfg.get("vector_column", "embedding")
+        validate_sql_identifier(vector_col, "vector_column")
         embed_cols = cfg.get("embed_columns")
         embed_model = cfg.get("embed_model", "all-MiniLM-L6-v2")
 
@@ -137,6 +141,8 @@ class SnowflakeVectorLoader:
                 "a non-empty list of floats."
             )
         query_vector = validate_float_vector(query_vector, "query_vector")
+        validate_sql_identifier(table, "table")
+        validate_sql_identifier(vector_col, "vector_col")
 
         fn_map = {
             "cosine": "VECTOR_COSINE_SIMILARITY",
@@ -145,7 +151,12 @@ class SnowflakeVectorLoader:
         }
         fn = fn_map.get(distance, "VECTOR_COSINE_SIMILARITY")
         order = "DESC" if distance == "cosine" else "ASC"
-        cols = ", ".join(select_cols) if select_cols else "*"
+        if select_cols:
+            for col in select_cols:
+                validate_sql_identifier(col, "select_cols element")
+            cols = ", ".join(select_cols)
+        else:
+            cols = "*"
         vec_str = "[" + ",".join(str(v) for v in query_vector) + "]"
         n = len(query_vector)
         sql = (

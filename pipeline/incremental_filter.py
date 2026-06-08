@@ -61,7 +61,8 @@ class IncrementalFilter:
             ws = pd.to_datetime(df[col], errors="coerce")
             wv = pd.to_datetime(last_wm)
             df = df[ws > wv].copy()
-        except Exception:
+        except Exception as exc:
+            logger.debug("Datetime comparison failed for %s: %s, falling back to raw comparison", col, exc)
             df = df[df[col] > last_wm].copy()
         self.gov.watermark_event("READ", col, last_wm, rows_filtered=before - len(df))
         logger.info("[INCR] Filtered %d rows | %d new", before - len(df), len(df))

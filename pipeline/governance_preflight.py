@@ -336,61 +336,59 @@ def run_governance_preflight(
     if consent_db_path.exists():
         summary["checks_discovered"] += 1
         try:
-            conn = sqlite3.connect(str(consent_db_path))
-            cursor = conn.cursor()
+            with sqlite3.connect(str(consent_db_path)) as conn:
+                cursor = conn.cursor()
 
-            # Check if the consent table exists
-            cursor.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='consent'",
-            )
-            if cursor.fetchone():
-                cursor.execute("SELECT COUNT(*) FROM consent")
-                total_consents = cursor.fetchone()[0]
+                # Check if the consent table exists
+                cursor.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='consent'",
+                )
+                if cursor.fetchone():
+                    cursor.execute("SELECT COUNT(*) FROM consent")
+                    total_consents = cursor.fetchone()[0]
 
-                # Look for a subject_id column in the DataFrame to match against consent records
-                subject_columns = [
-                    c for c in df.columns
-                    if any(k in c.lower() for k in ("subject_id", "user_id", "customer_id", "email"))
-                ]
+                    # Look for a subject_id column in the DataFrame to match against consent records
+                    subject_columns = [
+                        c for c in df.columns
+                        if any(k in c.lower() for k in ("subject_id", "user_id", "customer_id", "email"))
+                    ]
 
-                if subject_columns and total_consents > 0:
-                    subject_col = subject_columns[0]
-                    print(f"\n  [6/7] CONSENT DATABASE — {total_consents:,} consent record(s)")
-                    print("  " + "-" * 40)
-                    print(f"    Matching on column: {subject_col}")
+                    if subject_columns and total_consents > 0:
+                        subject_col = subject_columns[0]
+                        print(f"\n  [6/7] CONSENT DATABASE — {total_consents:,} consent record(s)")
+                        print("  " + "-" * 40)
+                        print(f"    Matching on column: {subject_col}")
 
-                    if yes_no("  Filter rows without consent?", False):
-                        # Fetch all consented subject IDs
-                        cursor.execute("SELECT subject_id FROM consent WHERE consented = 1")
-                        consented_ids = {row[0] for row in cursor.fetchall()}
+                        if yes_no("  Filter rows without consent?", False):
+                            # Fetch all consented subject IDs
+                            cursor.execute("SELECT subject_id FROM consent WHERE consented = 1")
+                            consented_ids = {row[0] for row in cursor.fetchall()}
 
-                        before_count = len(df)
-                        df = df[df[subject_col].astype(str).isin(
-                            {str(cid) for cid in consented_ids}
-                        )]
-                        blocked = before_count - len(df)
-                        summary["consent_blocked_rows"] = blocked
-                        summary["checks_applied"] += 1
+                            before_count = len(df)
+                            df = df[df[subject_col].astype(str).isin(
+                                {str(cid) for cid in consented_ids}
+                            )]
+                            blocked = before_count - len(df)
+                            summary["consent_blocked_rows"] = blocked
+                            summary["checks_applied"] += 1
 
-                        print(f"    Blocked {blocked:,} row(s) without consent.")
-                        gov.transformation_applied("CONSENT_FILTER_APPLIED", {
-                            "subject_column": subject_col,
-                            "rows_before": before_count,
-                            "rows_after": len(df),
-                            "rows_blocked": blocked,
-                        })
+                            print(f"    Blocked {blocked:,} row(s) without consent.")
+                            gov.transformation_applied("CONSENT_FILTER_APPLIED", {
+                                "subject_column": subject_col,
+                                "rows_before": before_count,
+                                "rows_after": len(df),
+                                "rows_blocked": blocked,
+                            })
+                        else:
+                            summary["checks_skipped"] += 1
+                            print("    Skipped — all rows retained.")
                     else:
-                        summary["checks_skipped"] += 1
-                        print("    Skipped — all rows retained.")
+                        if total_consents == 0:
+                            print("\n  [6/7] Consent database : empty (no records)")
+                        else:
+                            print("\n  [6/7] Consent database : no matchable subject column in DataFrame")
                 else:
-                    if total_consents == 0:
-                        print("\n  [6/7] Consent database : empty (no records)")
-                    else:
-                        print("\n  [6/7] Consent database : no matchable subject column in DataFrame")
-            else:
-                print("\n  [6/7] Consent database : no 'consent' table found")
-
-            conn.close()
+                    print("\n  [6/7] Consent database : no 'consent' table found")
         except Exception as exc:
             logger.error("Consent database check failed: %s", exc)
             print(f"\n  [6/7] Consent database check error: {exc}")

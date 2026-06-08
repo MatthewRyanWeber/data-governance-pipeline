@@ -167,12 +167,18 @@ class ChromaLoader:
         if if_exists == "overwrite":
             try:
                 client.delete_collection(name)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug(
+                    "Could not delete collection %r before overwrite: %s",
+                    name, exc,
+                )
             return client.create_collection(name)
         try:
             return client.get_collection(name)
-        except Exception:
+        except Exception as exc:
+            logger.debug(
+                "Collection %r not found, creating new: %s", name, exc,
+            )
             return client.create_collection(name)
 
     @staticmethod
