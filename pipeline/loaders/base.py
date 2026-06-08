@@ -2,15 +2,17 @@
 Shared helper functions and base class for loader modules.
 
 Provides SQL-injection-safe identifier validation, float-vector validation,
-DataFrame column name validation, and a BaseLoader class with dry_run support
-and config validation used by all loader subclasses.
+DataFrame column name validation, and a BaseLoader class with dry_run support,
+config validation, and engine lifecycle management used by all loader subclasses.
 
 Revision history
 ────────────────
 1.0   2026-06-07   Initial extraction from pipeline_v3.py.
 1.1   2026-06-08   Added BaseLoader, validate_column_names.
+1.2   2026-06-08   Added _engine_scope context manager.
 """
 
+import contextlib
 import math
 import re
 import logging
@@ -140,3 +142,20 @@ class BaseLoader:
             f"{row_count:,}", table, self.__class__.__name__,
         )
         return True
+
+    @contextlib.contextmanager
+    def _engine_scope(self, cfg: dict):
+        """
+        Create a SQLAlchemy engine, yield it, and guarantee disposal.
+
+        Subclasses that define ``_engine(cfg)`` get automatic lifecycle
+        management::
+
+            with self._engine_scope(cfg) as engine:
+                df.to_sql(table, engine, ...)
+        """
+        engine = self._engine(cfg)
+        try:
+            yield engine
+        finally:
+            engine.dispose()

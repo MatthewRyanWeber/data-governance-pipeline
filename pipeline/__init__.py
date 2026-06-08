@@ -36,6 +36,7 @@ def __getattr__(name: str):
         "SecretsManager": "pipeline.secrets_manager",
         "RunContext": "pipeline.constants",
         "DEFAULT_RUN_CONTEXT": "pipeline.constants",
+        "default_run_context": "pipeline.constants",
     }
     if name in _IMPORTS:
         import importlib

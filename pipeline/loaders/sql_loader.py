@@ -67,14 +67,11 @@ class SQLLoader(BaseLoader):
         validate_sql_identifier(table, "table")
         if self._dry_run_guard(table, len(df)):
             return
-        engine = self._engine(cfg)
-        try:
+        with self._engine_scope(cfg) as engine:
             if natural_keys:
                 self._upsert(df, engine, table, natural_keys)
             else:
                 self._load_with_retry(df, engine, table, if_exists)
-        finally:
-            engine.dispose()
         self.gov.load_complete(len(df), table)
         db_identifier = cfg.get("database") or cfg.get("db_name", "")
         self.gov.destination_registered(self.db_type, db_identifier, table)
@@ -104,10 +101,10 @@ class SQLLoader(BaseLoader):
             existing = pd.read_sql_table(table, _conn)
         merged = new_df.merge(existing, on=natural_keys, how="outer",
                               suffixes=("", "_old"), indicator=True)
-        merged.drop(
+        merged = merged.drop(
             columns=[c for c in merged.columns if c.endswith("_old")]
             + ["_merge"],
-            inplace=True, errors="ignore",
+            errors="ignore",
         )
         self._load_with_retry(merged, engine, table, "replace")
         self.gov.transformation_applied(

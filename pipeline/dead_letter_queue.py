@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from pipeline.constants import DEFAULT_RUN_CONTEXT
+from pipeline.constants import default_run_context
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -35,7 +35,7 @@ class DeadLetterQueue:
 
     def __init__(self, gov: "GovernanceLogger", run_context=None) -> None:
         self.gov = gov
-        self.run_context = run_context or DEFAULT_RUN_CONTEXT
+        self.run_context = run_context or default_run_context()
         self.dlq_path = Path(gov.dlq_file)
         self._lock = threading.Lock()
 

@@ -588,7 +588,7 @@ class TestWatchdogBackoff(unittest.TestCase):
             self.assertAlmostEqual(first_sleep, 5.0)
 
 
-# ── CheckpointManager tests ────────────────────────────────────────────────
+# ── Checkpoint tests (RunStateManager.{load,save,clear}_checkpoint) ────────
 
 
 class TestCheckpointSaveAndLoad(unittest.TestCase):
@@ -597,34 +597,46 @@ class TestCheckpointSaveAndLoad(unittest.TestCase):
         self.tmp = tempfile.mkdtemp()
         self.cp_file = Path(self.tmp) / "checkpoint.json"
         self.gov = MockGov()
-        self.mgr = CheckpointManager(self.gov)
-        self._orig_file = self.mgr.state_file
-        self.mgr.state_file = self.cp_file
+        self.rsm = RunStateManager(state_dir=Path(self.tmp) / "run_state")
+        # Point checkpoint methods at our temp file
+        import pipeline.run_state as _mod
+        self._orig_cp = _mod.CHECKPOINT_FILE
+        _mod.CHECKPOINT_FILE = self.cp_file
 
     def tearDown(self):
+        import pipeline.run_state as _mod
+        _mod.CHECKPOINT_FILE = self._orig_cp
         shutil.rmtree(self.tmp)
 
     def test_save_and_load_checkpoint(self):
-        self.mgr.save_checkpoint("data.csv", "customers", chunk_idx=5, rows=5000)
-        loaded = self.mgr.load_checkpoint("data.csv", "customers")
+        self.rsm.save_checkpoint(self.gov, "data.csv", "customers", chunk_idx=5, rows=5000)
+        loaded = self.rsm.load_checkpoint(self.gov, "data.csv", "customers")
         self.assertEqual(loaded, 5)
 
     def test_load_no_checkpoint_returns_negative_one(self):
-        loaded = self.mgr.load_checkpoint("data.csv", "orders")
+        loaded = self.rsm.load_checkpoint(self.gov, "data.csv", "orders")
         self.assertEqual(loaded, -1)
 
     def test_clear_checkpoint(self):
-        self.mgr.save_checkpoint("data.csv", "customers", chunk_idx=3, rows=3000)
-        self.mgr.clear_checkpoint("data.csv", "customers")
-        loaded = self.mgr.load_checkpoint("data.csv", "customers")
+        self.rsm.save_checkpoint(self.gov, "data.csv", "customers", chunk_idx=3, rows=3000)
+        self.rsm.clear_checkpoint("data.csv", "customers")
+        loaded = self.rsm.load_checkpoint(self.gov, "data.csv", "customers")
         self.assertEqual(loaded, -1)
 
     def test_multiple_sources(self):
-        self.mgr.save_checkpoint("a.csv", "t1", chunk_idx=2, rows=2000)
-        self.mgr.save_checkpoint("b.csv", "t2", chunk_idx=7, rows=7000)
+        self.rsm.save_checkpoint(self.gov, "a.csv", "t1", chunk_idx=2, rows=2000)
+        self.rsm.save_checkpoint(self.gov, "b.csv", "t2", chunk_idx=7, rows=7000)
 
-        self.assertEqual(self.mgr.load_checkpoint("a.csv", "t1"), 2)
-        self.assertEqual(self.mgr.load_checkpoint("b.csv", "t2"), 7)
+        self.assertEqual(self.rsm.load_checkpoint(self.gov, "a.csv", "t1"), 2)
+        self.assertEqual(self.rsm.load_checkpoint(self.gov, "b.csv", "t2"), 7)
+
+    def test_backward_compat_shim(self):
+        """CheckpointManager shim delegates to RunStateManager."""
+        cp = CheckpointManager(self.gov)
+        cp.save_checkpoint("x.csv", "t", chunk_idx=1, rows=100)
+        self.assertEqual(cp.load_checkpoint("x.csv", "t"), 1)
+        cp.clear_checkpoint("x.csv", "t")
+        self.assertEqual(cp.load_checkpoint("x.csv", "t"), -1)
 
 
 if __name__ == "__main__":

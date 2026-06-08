@@ -199,23 +199,23 @@ def _extract_source(source, config, gov):
     return df
 
 
-_cached_transform_config: dict | None = None
+_transform_config_cache: dict | None = None
 
 
 def _transform_chunk(chunk, args, config, gov):
     """Apply transformation to a single chunk."""
-    global _cached_transform_config
+    global _transform_config_cache
     from pipeline.transform import Transformer
     from pipeline.logging_setup import timed_operation
 
     transform_config_path = getattr(args, "transform_config", None)
     if transform_config_path:
         from pipeline.transform_pipeline import TransformPipeline
-        if _cached_transform_config is None:
-            _cached_transform_config = _load_config(transform_config_path)
+        if _transform_config_cache is None:
+            _transform_config_cache = _load_config(transform_config_path)
         tp = TransformPipeline(gov)
         with timed_operation("transform:pipeline"):
-            return tp.run(chunk, _cached_transform_config)
+            return tp.run(chunk, _transform_config_cache)
     else:
         transformer = Transformer(gov)
         if not args.skip_pii:
@@ -248,17 +248,18 @@ def _run_chunked(
 ) -> None:
     """Process source in chunks: extract → transform → load → checkpoint per chunk."""
     from pipeline.extract import Extractor
-    from pipeline.checkpoint import CheckpointManager
     from pipeline.logging_setup import timed_operation
 
     chunk_size = getattr(args, "chunk_size", 50_000)
     destination = args.destination
     table_name = args.table
 
-    cp = CheckpointManager(gov)
+    if state_manager is None:
+        from pipeline.run_state import RunStateManager
+        state_manager = RunStateManager()
 
     if resume_from_chunk < 0:
-        resume_from_chunk = cp.load_checkpoint(str(source), table_name)
+        resume_from_chunk = state_manager.load_checkpoint(gov, str(source), table_name)
 
     loader = _make_loader(args, config, gov)
 
@@ -289,7 +290,7 @@ def _run_chunked(
                 loader.load(chunk, config, table_name)
 
             total_rows += len(chunk)
-            cp.save_checkpoint(str(source), table_name, i, total_rows)
+            state_manager.save_checkpoint(gov, str(source), table_name, i, total_rows)
 
             if state_manager and run_state:
                 state_manager.update_chunk(run_state.run_id, i, total_rows)
@@ -320,7 +321,7 @@ def _run_chunked(
                 loader.load(chunk, config, table_name)
 
             total_rows += len(chunk)
-            cp.save_checkpoint(str(source), table_name, chunk_idx, total_rows)
+            state_manager.save_checkpoint(gov, str(source), table_name, chunk_idx, total_rows)
 
             if state_manager and run_state:
                 state_manager.update_chunk(run_state.run_id, chunk_idx, total_rows)
@@ -332,7 +333,7 @@ def _run_chunked(
             chunk_idx += 1
             metrics.start_stage("extract")
 
-    cp.clear_checkpoint(str(source), table_name)
+    state_manager.clear_checkpoint(str(source), table_name)
     logger.info("[PIPELINE] All chunks loaded — %d rows total.", total_rows)
 
     if getattr(args, "verify", False) and not args.dry_run:

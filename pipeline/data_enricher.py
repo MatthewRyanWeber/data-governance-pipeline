@@ -69,7 +69,7 @@ class DataEnricher:
         )
 
         if lookup_key != join_col and lookup_key in df.columns:
-            df.drop(columns=[lookup_key], inplace=True, errors="ignore")
+            df = df.drop(columns=[lookup_key], errors="ignore")
 
         new_cols = set(df.columns) - before_cols
         rows_matched = int(df[list(new_cols)].notna().any(axis=1).sum()) if new_cols else 0

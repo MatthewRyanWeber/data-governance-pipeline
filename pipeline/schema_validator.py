@@ -10,8 +10,8 @@ Layer 2 — imports from Layer 0 (constants), Layer 1 (governance_logger).
 import logging
 from typing import TYPE_CHECKING
 
-from pipeline.constants import HAS_GX, DEFAULT_RUN_CONTEXT
-from pipeline.helpers import prompt
+from pipeline.constants import HAS_GX, default_run_context
+from pipeline.helpers import interactive_prompt
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -37,7 +37,7 @@ class SchemaValidator:
                  run_context=None) -> None:
         self.gov = gov
         self.dlq = dlq
-        rc = run_context or DEFAULT_RUN_CONTEXT
+        rc = run_context or default_run_context()
         self.suite_name = f"pipeline_suite_{rc.pipeline_id[:8]}"
         self.expectation_configs: list[dict] = []
 
@@ -79,11 +79,11 @@ class SchemaValidator:
         logger.info("[GREAT_EXPECTATIONS] Add custom expectations (0 to finish):")
         while True:
             print("  1.Not-null  2.Unique  3.Range  4.Allowed-values  5.Regex  6.Min-rows  0.Done")
-            c = prompt("Add", "0")
+            c = interactive_prompt("Add", "0")
             if c == "0":
                 break
             if c in ("1", "2", "3", "4", "5"):
-                col = prompt(f"Column ({', '.join(cols[:8])}…)")
+                col = interactive_prompt(f"Column ({', '.join(cols[:8])}…)")
                 if col not in cols:
                     print(f"  '{col}' not found.")
                     continue
@@ -93,8 +93,8 @@ class SchemaValidator:
                 expectations.append(gxe.ExpectColumnValuesToBeUnique(column=col))
             elif c == "3":
                 try:
-                    mn = float(prompt(f"Min {col}"))
-                    mx = float(prompt(f"Max {col}"))
+                    mn = float(interactive_prompt(f"Min {col}"))
+                    mx = float(interactive_prompt(f"Max {col}"))
                     expectations.append(gxe.ExpectColumnValuesToBeBetween(
                         column=col, min_value=mn, max_value=mx,
                     ))
@@ -110,7 +110,7 @@ class SchemaValidator:
                     expectations.append(gxe.ExpectColumnValuesToMatchRegex(column=col, regex=pat))
             elif c == "6":
                 try:
-                    n = int(prompt("Min rows"))
+                    n = int(interactive_prompt("Min rows"))
                     expectations.append(gxe.ExpectTableRowCountToBeBetween(min_value=n))
                 except ValueError:
                     print("  Invalid number.")
@@ -122,7 +122,7 @@ class SchemaValidator:
 
         import great_expectations as gx
 
-        rc = DEFAULT_RUN_CONTEXT
+        rc = default_run_context()
         logger.info("[GREAT_EXPECTATIONS] Running schema validation…")
         ctx = gx.get_context(mode="ephemeral")
         ds = ctx.data_sources.add_pandas("pipeline_ds")

@@ -84,8 +84,14 @@ class RunContext:
     base_directory: Path = field(default_factory=lambda: BASE_DIR)
 
 
-# Default instance — backward compat for code that references the globals.
-DEFAULT_RUN_CONTEXT = RunContext()
+def default_run_context() -> RunContext:
+    """Factory — each call returns a fresh RunContext with a new pipeline_id."""
+    return RunContext()
+
+
+# Module-level fallback for callers that use ``or DEFAULT_RUN_CONTEXT``.
+# Replaced by default_run_context() for new code.
+DEFAULT_RUN_CONTEXT = default_run_context()
 PIPELINE_ID = DEFAULT_RUN_CONTEXT.pipeline_id
 RUN_START = DEFAULT_RUN_CONTEXT.run_start
 

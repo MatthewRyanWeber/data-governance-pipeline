@@ -84,14 +84,14 @@ def mask_value(value: Any) -> str | None:
     return "MASKED_" + hashlib.sha256(str(value).encode()).hexdigest()[:12]
 
 
-def prompt(message: str, default: str = "") -> str:
+def interactive_prompt(message: str, default: str = "") -> str:
     """Interactive prompt with optional default shown in brackets."""
     display = f"{message} [{default}]: " if default else f"{message}: "
     response = input(display).strip()
     return response if response else default
 
 
-def yes_no(message: str, default: bool = True) -> bool:
+def confirm_yes_no(message: str, default: bool = True) -> bool:
     """Yes/No prompt. Returns bool; accepts default on empty input."""
     suffix = "[Y/n]" if default else "[y/N]"
     response = input(f"{message} {suffix}: ").strip().lower()
@@ -149,7 +149,7 @@ def read_jsonl_tail(
     return records
 
 
-def not_na(value: Any) -> bool:
+def is_present(value: Any) -> bool:
     """Check if a value is not None/NaN/empty — safe for non-pandas contexts."""
     if value is None:
         return False

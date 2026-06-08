@@ -59,47 +59,48 @@ class PostGISLoader(BaseLoader):
             f"@{cfg['host']}:{port}/{cfg['db_name']}"
         )
         engine = create_engine(url, pool_pre_ping=True)
-
-        with engine.connect() as conn:
-            conn.execute(sa_text("CREATE EXTENSION IF NOT EXISTS postgis"))
-            conn.commit()
-
-        df_meta = (df.drop(columns=[geom_col]) if geom_col in df.columns
-                   else df)
-        df_meta.to_sql(table, engine, if_exists=if_exists,
-                       index=False, method="multi", chunksize=500)
-
-        if geom_col in df.columns:
+        try:
             with engine.connect() as conn:
-                conn.execute(sa_text(
-                    f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS "
-                    f"{geom_col} geometry"
-                ))
+                conn.execute(sa_text("CREATE EXTENSION IF NOT EXISTS postgis"))
                 conn.commit()
-                # Count total rows to offset into newly appended rows
-                row_count = conn.execute(
-                    sa_text(f"SELECT COUNT(*) FROM {table}")
-                ).scalar() or 0
-                base_offset = row_count - len(df)
-                if base_offset < 0:
-                    base_offset = 0
 
-                params = [
-                    {"wkt": wkt, "srid": srid, "idx": base_offset + i}
-                    for i, wkt in enumerate(df[geom_col])
-                    if wkt is not None and wkt != ""
-                ]
-                if params:
-                    conn.execute(
-                        sa_text(
-                            f"UPDATE {table} SET {geom_col} = "
-                            f"ST_GeomFromText(:wkt, :srid) "
-                            f"WHERE ctid = (SELECT ctid FROM {table} "
-                            f"ORDER BY ctid OFFSET :idx LIMIT 1)"
-                        ),
-                        params,
-                    )
-                conn.commit()
+            df_meta = (df.drop(columns=[geom_col]) if geom_col in df.columns
+                       else df)
+            df_meta.to_sql(table, engine, if_exists=if_exists,
+                           index=False, method="multi", chunksize=500)
+
+            if geom_col in df.columns:
+                with engine.connect() as conn:
+                    conn.execute(sa_text(
+                        f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS "
+                        f"{geom_col} geometry"
+                    ))
+                    conn.commit()
+                    row_count = conn.execute(
+                        sa_text(f"SELECT COUNT(*) FROM {table}")
+                    ).scalar() or 0
+                    base_offset = row_count - len(df)
+                    if base_offset < 0:
+                        base_offset = 0
+
+                    params = [
+                        {"wkt": wkt, "srid": srid, "idx": base_offset + i}
+                        for i, wkt in enumerate(df[geom_col])
+                        if wkt is not None and wkt != ""
+                    ]
+                    if params:
+                        conn.execute(
+                            sa_text(
+                                f"UPDATE {table} SET {geom_col} = "
+                                f"ST_GeomFromText(:wkt, :srid) "
+                                f"WHERE ctid = (SELECT ctid FROM {table} "
+                                f"ORDER BY ctid OFFSET :idx LIMIT 1)"
+                            ),
+                            params,
+                        )
+                    conn.commit()
+        finally:
+            engine.dispose()
 
         self.gov._event(
             "LOAD", "POSTGIS_WRITE_COMPLETE",

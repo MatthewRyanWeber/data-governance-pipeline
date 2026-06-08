@@ -12,7 +12,7 @@ import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
-from pipeline.constants import DEFAULT_RUN_CONTEXT
+from pipeline.constants import default_run_context
 from pipeline.helpers import flatten_record as _flatten_record, mask_value
 
 if TYPE_CHECKING:
@@ -50,7 +50,7 @@ class Transformer:
         self._join_sep = join_sep
         self._max_depth = max_depth
         self._sep = sep
-        self.run_context = run_context or DEFAULT_RUN_CONTEXT
+        self.run_context = run_context or default_run_context()
 
     def _flatten_kw(self) -> dict:
         return {"separator": self._sep}
@@ -94,13 +94,13 @@ class Transformer:
     def fill_nulls(self, df, fill: dict | None = None):
         df = df.copy()
         if fill:
-            df.fillna(fill, inplace=True)
+            df = df.fillna(fill)
         else:
             for col in df.columns:
                 if df[col].dtype == object:
-                    df[col].fillna("", inplace=True)
+                    df[col] = df[col].fillna("")
                 else:
-                    df[col].fillna(0, inplace=True)
+                    df[col] = df[col].fillna(0)
         return df
 
     def standardise_names(self, df):
@@ -167,8 +167,8 @@ class Transformer:
             self.gov.transformation_applied("FLATTEN_NESTED", {"flattened_columns": obj_cols})
 
         if drop_cols:
-            df.drop(columns=[c for c in drop_cols if c in df.columns],
-                    inplace=True, errors="ignore")
+            df = df.drop(columns=[c for c in drop_cols if c in df.columns],
+                         errors="ignore")
             self.gov.data_minimization(original_cols, list(df.columns), drop_cols)
 
         for field in {f["field"]: f for f in pii_findings if f["field"] in df.columns}:
@@ -177,7 +177,7 @@ class Transformer:
                 self.gov.pii_action(field, "MASKED")
                 self.pii_actions[field] = "MASKED"
             elif pii_strategy == "drop":
-                df.drop(columns=[field], inplace=True, errors="ignore")
+                df = df.drop(columns=[field], errors="ignore")
                 self.gov.pii_action(field, "DROPPED")
                 self.pii_actions[field] = "DROPPED"
             else:
@@ -185,14 +185,14 @@ class Transformer:
                 self.pii_actions[field] = "RETAINED_WITH_CONSENT"
 
         null_before = int(df.isnull().sum().sum())
-        df.dropna(how="all", inplace=True)
+        df = df.dropna(how="all")
         self.gov.transformation_applied("NULL_HANDLING", {
             "null_cells_before": null_before,
             "null_cells_after": int(df.isnull().sum().sum()),
         })
 
         rows_before = len(df)
-        df.drop_duplicates(inplace=True)
+        df = df.drop_duplicates()
         self.gov.transformation_applied("DEDUPLICATION", {
             "rows_before": rows_before, "rows_after": len(df),
             "duplicates_removed": rows_before - len(df),

@@ -10,7 +10,7 @@ Layer 6 — imports from Layer 0 (helpers), Layer 1 (governance_logger).
 import logging
 from typing import TYPE_CHECKING
 
-from pipeline.helpers import prompt, yes_no
+from pipeline.helpers import interactive_prompt, confirm_yes_no
 
 if TYPE_CHECKING:
     from pipeline.governance_logger import GovernanceLogger
@@ -35,13 +35,13 @@ def run_compliance_wizard(gov: "GovernanceLogger", pii_findings: list[dict]) -> 
     for k, v in bases.items():
         print(f"  {k}. {v}")
 
-    lawful_basis = bases.get(prompt("\n[GDPR Art.6] Lawful basis", "2"), "Contract")
-    purpose = prompt("Processing purpose", "Data analysis")
-    confirmed = yes_no("Data owner consents?", True)
+    lawful_basis = bases.get(interactive_prompt("\n[GDPR Art.6] Lawful basis", "2"), "Contract")
+    purpose = interactive_prompt("Processing purpose", "Data analysis")
+    confirmed = confirm_yes_no("Data owner consents?", True)
     gov.consent_recorded(purpose, lawful_basis, confirmed)
 
-    if yes_no("\n[CCPA §1798.120] Will data be sold/shared with third parties?", False):
-        optout = yes_no("Has subject opted OUT?", True)
+    if confirm_yes_no("\n[CCPA §1798.120] Will data be sold/shared with third parties?", False):
+        optout = confirm_yes_no("Has subject opted OUT?", True)
         gov.consent_event("CCPA_SALE_OPTOUT", {"opted_out": optout})
         if optout:
             logger.info("Opt-out recorded.")
@@ -54,19 +54,19 @@ def run_compliance_wizard(gov: "GovernanceLogger", pii_findings: list[dict]) -> 
             print(f"  - {f['field']}{special}")
         print("\n  1.Mask (SHA-256)  2.Drop  3.Retain (with consent)")
         pii_strategy = {"1": "mask", "2": "drop", "3": "retain"}.get(
-            prompt("Choice", "1"), "mask"
+            interactive_prompt("Choice", "1"), "mask"
         )
 
     print("\n[GDPR Art.5(1)(e)] Retention:  1.30d  2.90d  3.1yr  4.2yr  5.5yr  6.Indefinite")
     ret_map = {"1": 30, "2": 90, "3": 365, "4": 730, "5": 1825, "6": None}
-    retention_days = ret_map.get(prompt("Choice", "3"), 365)
+    retention_days = ret_map.get(interactive_prompt("Choice", "3"), 365)
     gov.retention_policy(
         f"Retain {retention_days} days" if retention_days else "Indefinite",
         retention_days,
     )
 
     drop_cols: list[str] = []
-    if yes_no("\n[GDPR Art.5(1)(c)] Drop specific columns?", False):
+    if confirm_yes_no("\n[GDPR Art.5(1)(c)] Drop specific columns?", False):
         drop_cols = [c.strip() for c in input("Columns (comma-sep): ").split(",") if c.strip()]
 
     return {

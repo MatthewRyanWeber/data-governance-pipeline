@@ -192,8 +192,8 @@ from pipeline.helpers import (  # noqa: F401
     detect_pii as _detect_pii,
     flatten_record as _flatten_record,
     mask_value as _mask_value,
-    prompt as _prompt,
-    yes_no as _yn,
+    interactive_prompt as _prompt,
+    confirm_yes_no as _yn,
 )
 
 # ── Wizard functions ─────────────────────────────────────────────────────────

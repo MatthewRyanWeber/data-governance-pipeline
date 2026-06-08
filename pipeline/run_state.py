@@ -1,15 +1,19 @@
 """
-Persistent run-state tracking for crash recovery.
+Persistent run-state tracking and chunk-level checkpointing for crash recovery.
 
 Writes a JSON state file for each active pipeline run. If the process dies
 mid-run, the state file stays in 'running' status — crash_recovery.py
 detects this on the next startup and resumes from the last checkpoint.
 
-Layer 2 — imports from Layer 0 (constants).
+Chunk-level checkpoints track progress within a single run so that a
+crashed pipeline resumes from the last successful chunk.
+
+Layer 2 — imports from Layer 0 (constants), Layer 1 (governance_logger).
 
 Revision history
 ────────────────
 1.0   2026-06-08   Initial release.
+1.1   2026-06-08   Merged CheckpointManager into RunStateManager.
 """
 
 import json
@@ -19,10 +23,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from pipeline.constants import RUN_STATE_DIR, STATE_FILE_LOCK
+from pipeline.constants import CHECKPOINT_FILE, RUN_STATE_DIR, STATE_FILE_LOCK
 
 if TYPE_CHECKING:
-    pass
+    from pipeline.governance_logger import GovernanceLogger
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +135,51 @@ class RunStateManager:
                 logger.warning("[RUN_STATE] Corrupt state file %s: %s", path, exc)
 
         return incomplete
+
+    # ── Chunk-level checkpoint methods ─────────────────────────────────────
+
+    def load_checkpoint(self, gov: "GovernanceLogger", source: str, table: str) -> int:
+        """Return the last completed chunk index, or -1 if none."""
+        key = f"{source}::{table}"
+        with STATE_FILE_LOCK:
+            if not CHECKPOINT_FILE.exists():
+                return -1
+            with open(CHECKPOINT_FILE, encoding="utf-8") as f:
+                state = json.load(f)
+        last = state.get(key, -1)
+        if last >= 0:
+            gov.checkpoint_event("RESTORED", last, 0)
+            logger.info(
+                "[CHECKPOINT] Resuming from chunk %d (skipping %d already-completed chunks)",
+                last + 1, last + 1,
+            )
+        return last
+
+    def save_checkpoint(self, gov: "GovernanceLogger", source: str, table: str,
+                        chunk_idx: int, rows: int) -> None:
+        """Persist the index of the last successfully loaded chunk."""
+        key = f"{source}::{table}"
+        with STATE_FILE_LOCK:
+            state: dict = {}
+            if CHECKPOINT_FILE.exists():
+                with open(CHECKPOINT_FILE, encoding="utf-8") as f:
+                    state = json.load(f)
+            state[key] = chunk_idx
+            with open(CHECKPOINT_FILE, "w", encoding="utf-8") as f:
+                json.dump(state, f, indent=2)
+        gov.checkpoint_event("SAVED", chunk_idx, rows)
+
+    def clear_checkpoint(self, source: str, table: str) -> None:
+        """Remove the checkpoint for a completed, successful run."""
+        key = f"{source}::{table}"
+        with STATE_FILE_LOCK:
+            if not CHECKPOINT_FILE.exists():
+                return
+            with open(CHECKPOINT_FILE, encoding="utf-8") as f:
+                state = json.load(f)
+            state.pop(key, None)
+            with open(CHECKPOINT_FILE, "w", encoding="utf-8") as f:
+                json.dump(state, f, indent=2)
 
     def cleanup_old_runs(self, keep_days: int = 7) -> int:
         """Remove completed/failed state files older than keep_days."""

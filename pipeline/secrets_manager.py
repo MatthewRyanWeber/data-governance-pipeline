@@ -12,7 +12,7 @@ import os
 from pathlib import Path
 
 from pipeline.constants import HAS_DOTENV
-from pipeline.helpers import prompt
+from pipeline.helpers import interactive_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +42,7 @@ class SecretsManager:
             return self._env[key]
         if key in os.environ:
             return os.environ[key]
-        return prompt(prompt_msg or key, default)
+        return interactive_prompt(prompt_msg or key, default)
 
     def get_password(self, key: str, prompt_msg: str = "Password",
                      explicit: str | None = None) -> str:

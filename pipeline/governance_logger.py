@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from pipeline.constants import DEFAULT_RUN_CONTEXT, EventCategory, RunContext
+from pipeline.constants import default_run_context, EventCategory, RunContext
 from pipeline.helpers import file_hash
 
 if TYPE_CHECKING:
@@ -101,7 +101,7 @@ class GovernanceLogger:
         run_context: RunContext | None = None,
         dry_run: bool = False,
     ) -> None:
-        self.run_context = run_context or DEFAULT_RUN_CONTEXT
+        self.run_context = run_context or default_run_context()
         self.dry_run = dry_run
 
         stem = Path(source_name).stem if source_name else "pipeline"

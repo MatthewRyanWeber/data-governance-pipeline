@@ -50,15 +50,14 @@ class CockroachDBLoader(BaseLoader):
         if df.empty:
             return 0
 
-        engine = self._engine(cfg)
-
-        if if_exists == "upsert" and natural_keys:
-            rows = self._upsert(df, engine, table, natural_keys)
-        else:
-            pg_if_exists = "replace" if if_exists == "replace" else "append"
-            df.to_sql(table, engine, if_exists=pg_if_exists,
-                      index=False, method="multi", chunksize=500)
-            rows = len(df)
+        with self._engine_scope(cfg) as engine:
+            if if_exists == "upsert" and natural_keys:
+                rows = self._upsert(df, engine, table, natural_keys)
+            else:
+                pg_if_exists = "replace" if if_exists == "replace" else "append"
+                df.to_sql(table, engine, if_exists=pg_if_exists,
+                          index=False, method="multi", chunksize=500)
+                rows = len(df)
 
         self.gov._event(
             "LOAD", "COCKROACHDB_WRITE_COMPLETE",
@@ -78,18 +77,19 @@ class CockroachDBLoader(BaseLoader):
         from sqlalchemy import inspect as sa_inspect, text as sa_text
 
         validate_sql_identifier(table, "table")
-        engine = self._engine(cfg)
-        insp = sa_inspect(engine)
-        cols = [c["name"] for c in insp.get_columns(table)]
-        with engine.connect() as conn:
-            count = conn.execute(
-                sa_text(f"SELECT COUNT(*) FROM {table}")
-            ).scalar()
+        with self._engine_scope(cfg) as engine:
+            insp = sa_inspect(engine)
+            cols = [c["name"] for c in insp.get_columns(table)]
+            with engine.connect() as conn:
+                count = conn.execute(
+                    sa_text(f"SELECT COUNT(*) FROM {table}")
+                ).scalar()
+            url_repr = repr(engine.url.render_as_string(hide_password=True))
         return {
             "table": table,
             "columns": cols,
             "row_count": count,
-            "engine_url": repr(engine.url.render_as_string(hide_password=True)),
+            "engine_url": url_repr,
         }
 
     def _engine(self, cfg: dict):

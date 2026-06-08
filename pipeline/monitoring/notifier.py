@@ -13,7 +13,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import TYPE_CHECKING
 
-from pipeline.constants import HAS_REQUESTS, DEFAULT_RUN_CONTEXT
+from pipeline.constants import HAS_REQUESTS, default_run_context
 
 if TYPE_CHECKING:
     from pipeline.governance_logger import GovernanceLogger
@@ -37,7 +37,7 @@ class Notifier:
         self.gov = gov
         self.email_cfg = email_cfg or {}
         self.slack_cfg = slack_cfg or {}
-        self.run_context = run_context or DEFAULT_RUN_CONTEXT
+        self.run_context = run_context or default_run_context()
 
     def send(self, success: bool, stats: dict) -> None:
         if self.email_cfg:

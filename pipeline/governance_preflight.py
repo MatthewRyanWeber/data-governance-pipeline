@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING
 import pandas as pd
 
 from pipeline.constants import BASE_DIR, HAS_YAML
-from pipeline.helpers import yes_no
+from pipeline.helpers import confirm_yes_no
 
 if TYPE_CHECKING:
     from pipeline.governance_logger import GovernanceLogger
@@ -117,7 +117,7 @@ def run_governance_preflight(
                         "removed": removed,
                     }
 
-                    if yes_no("  Accept schema changes and continue?", True):
+                    if confirm_yes_no("  Accept schema changes and continue?", True):
                         summary["checks_applied"] += 1
                         # Update registry with new schema
                         registry[src_label] = {
@@ -187,7 +187,7 @@ def run_governance_preflight(
                         print(f"    - {anomaly}")
                     summary["anomalies"] = anomalies
 
-                    if yes_no("  Continue despite anomalies?", True):
+                    if confirm_yes_no("  Continue despite anomalies?", True):
                         summary["checks_applied"] += 1
                     else:
                         summary["checks_aborted"] += 1
@@ -251,7 +251,7 @@ def run_governance_preflight(
                         print(f"    Purpose    : {required_purpose}")
                         print(f"    Excess cols: {', '.join(excess)}")
 
-                        if yes_no("  Drop columns not in the allowed set?", False):
+                        if confirm_yes_no("  Drop columns not in the allowed set?", False):
                             df = df.drop(columns=[c for c in excess if c in df.columns])
                             summary["columns_dropped"].extend(excess)
                             summary["checks_applied"] += 1
@@ -289,7 +289,7 @@ def run_governance_preflight(
             for yf in yaml_files:
                 print(f"    - {yf.name}")
 
-            if yes_no("  Enforce data contracts?", True):
+            if confirm_yes_no("  Enforce data contracts?", True):
                 from pipeline.quality.data_contract_enforcer import DataContractEnforcer
 
                 all_violations: list[dict] = []
@@ -359,7 +359,7 @@ def run_governance_preflight(
                         print("  " + "-" * 40)
                         print(f"    Matching on column: {subject_col}")
 
-                        if yes_no("  Filter rows without consent?", False):
+                        if confirm_yes_no("  Filter rows without consent?", False):
                             # Fetch all consented subject IDs
                             cursor.execute("SELECT subject_id FROM consent WHERE consented = 1")
                             consented_ids = {row[0] for row in cursor.fetchall()}
