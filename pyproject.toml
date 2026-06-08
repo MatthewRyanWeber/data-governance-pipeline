@@ -187,14 +187,14 @@ Changelog     = "https://github.com/matthewryanweber/data-governance-pipeline/bl
 
 [project.scripts]
 # Run the full interactive pipeline wizard
-pipeline = "pipeline_v3:main"
+pipeline = "pipeline.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["pipeline*", "governance*", "epic*", "catalog*", "metadata*"]
+include = ["pipeline*"]
 
 [tool.pytest.ini_options]
-testpaths     = ["."]
+testpaths     = ["tests"]
 python_files  = ["test_*.py"]
 python_classes= ["Test*"]
 python_functions = ["test_*"]

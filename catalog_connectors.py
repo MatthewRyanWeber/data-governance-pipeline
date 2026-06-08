@@ -484,7 +484,7 @@ def _safe_hash(path: str) -> str:
     """Compute file SHA-256 hash, returning empty string if file unreadable."""
     try:
         h = hashlib.sha256()
-        with open(path, "rb", encoding="utf-8") as f:
+        with open(path, "rb") as f:
             for chunk in iter(lambda: f.read(8192), b""): h.update(chunk)
         return h.hexdigest()
     except Exception:  # pylint: disable=broad-exception-caught

@@ -922,7 +922,7 @@ class DSARResponse:
             if safe:
                 pd.DataFrame(safe).to_csv(path, index=False)
             else:
-                path.write_text("no records found\n")
+                path.write_text("no records found\n", encoding="utf-8")
         else:
             path.write_text(json.dumps(safe, indent=2, default=str), encoding="utf-8")
 
@@ -1665,7 +1665,7 @@ class DifferentialPrivacyTransformer:
     def _load_budget(self) -> float:
         if self._budget_path.exists():
             try:
-                return float(json.loads(self._budget_path.read_text())
+                return float(json.loads(self._budget_path.read_text(encoding="utf-8"))
                              .get("total_spent", 0.0))
             except Exception as _exc:  # pylint: disable=broad-exception-caught
                 # Corrupt budget file — warn and reset to zero rather than silently
