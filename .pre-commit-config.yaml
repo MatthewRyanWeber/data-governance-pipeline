@@ -1,0 +1,17 @@
+repos:
+  - repo: https://github.com/PyCQA/pyflakes
+    rev: v3.2.0
+    hooks:
+      - id: pyflakes
+
+  - repo: https://github.com/psf/black
+    rev: 24.4.2
+    hooks:
+      - id: black
+        args: [--line-length=100]
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.4.8
+    hooks:
+      - id: ruff
+        args: [--fix]

@@ -10,12 +10,16 @@ Layer 6 — imports from Layer 0 (constants), Layer 1 (governance_logger),
 Revision history
 ----------------
 1.0   2026-06-07   Initial extraction from monolith.
+1.1   2026-06-08   Added API key authentication, rate limiting, input validation.
 """
 
+import functools
 import logging
+import os
 import threading
 import time
 import uuid
+from collections import defaultdict
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
@@ -25,6 +29,32 @@ try:
     HAS_FLASK = True
 except ImportError:
     HAS_FLASK = False
+
+
+def _load_api_keys() -> set[str]:
+    """Load allowed API keys from PIPELINE_API_KEYS env var (comma-separated)."""
+    raw = os.environ.get("PIPELINE_API_KEYS", "")
+    return {k.strip() for k in raw.split(",") if k.strip()}
+
+
+class _RateLimiter:
+    """Simple in-memory token-bucket rate limiter keyed by API key."""
+
+    def __init__(self, max_requests: int = 100, window_seconds: int = 60) -> None:
+        self._max = max_requests
+        self._window = window_seconds
+        self._lock = threading.Lock()
+        self._buckets: dict[str, list[float]] = defaultdict(list)
+
+    def allow(self, key: str) -> bool:
+        now = time.monotonic()
+        with self._lock:
+            bucket = self._buckets[key]
+            self._buckets[key] = [t for t in bucket if now - t < self._window]
+            if len(self._buckets[key]) >= self._max:
+                return False
+            self._buckets[key].append(now)
+            return True
 
 
 def create_app(pipeline_fn=None) -> "Flask":
@@ -55,6 +85,32 @@ def create_app(pipeline_fn=None) -> "Flask":
         )
 
     app = Flask(__name__)
+    api_keys = _load_api_keys()
+    rate_limiter = _RateLimiter()
+
+    # ── Authentication ──────────────────────────────────────────────────
+
+    def require_auth(fn):
+        """Decorator: reject requests without a valid API key."""
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            if not api_keys:
+                return fn(*args, **kwargs)
+
+            key = (
+                request.headers.get("X-API-Key")
+                or request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+            )
+            if not key or key not in api_keys:
+                logger.warning("[API] Unauthorized request to %s from %s",
+                               request.path, request.remote_addr)
+                return jsonify({"error": "Unauthorized. Provide a valid API key."}), 401
+
+            if not rate_limiter.allow(key):
+                return jsonify({"error": "Rate limit exceeded. Try again later."}), 429
+
+            return fn(*args, **kwargs)
+        return wrapper
 
     # ── Shared state ────────────────────────────────────────────────────
     _state = {
@@ -97,6 +153,7 @@ def create_app(pipeline_fn=None) -> "Flask":
     # ── Endpoints ───────────────────────────────────────────────────────
 
     @app.route("/run", methods=["POST"])
+    @require_auth
     def run_pipeline():
         """Trigger a pipeline run.  Expects JSON: {source, destination, config?}."""
         if pipeline_fn is None:
@@ -109,6 +166,20 @@ def create_app(pipeline_fn=None) -> "Flask":
 
         if not source or not destination:
             return jsonify({"error": "Both 'source' and 'destination' are required."}), 400
+
+        if not isinstance(source, str) or not isinstance(destination, str):
+            return jsonify({"error": "'source' and 'destination' must be strings."}), 400
+
+        if not isinstance(config, dict):
+            return jsonify({"error": "'config' must be a JSON object."}), 400
+
+        from pipeline.loaders import supported_db_types
+        known_destinations = supported_db_types()
+        if destination.lower() not in known_destinations:
+            return jsonify({
+                "error": f"Unknown destination '{destination}'.",
+                "valid_destinations": sorted(known_destinations),
+            }), 400
 
         run_id = str(uuid.uuid4())
 
@@ -134,6 +205,7 @@ def create_app(pipeline_fn=None) -> "Flask":
         return jsonify({"run_id": run_id, "status": "started"}), 202
 
     @app.route("/status", methods=["GET"])
+    @require_auth
     def get_status():
         """Return the current pipeline run status."""
         with _state_lock:
@@ -147,10 +219,11 @@ def create_app(pipeline_fn=None) -> "Flask":
 
     @app.route("/health", methods=["GET"])
     def health():
-        """Healthcheck endpoint."""
+        """Healthcheck endpoint — no auth required."""
         return jsonify({"status": "healthy", "timestamp": datetime.now(timezone.utc).isoformat()})
 
     @app.route("/metrics", methods=["GET"])
+    @require_auth
     def get_metrics():
         """Return the latest pipeline run metrics."""
         with _state_lock:
