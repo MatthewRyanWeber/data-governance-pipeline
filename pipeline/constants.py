@@ -67,7 +67,7 @@ CLASSIFICATION_LEVELS = ["RESTRICTED", "CONFIDENTIAL", "INTERNAL", "PUBLIC"]
 # ── PII field-name regex patterns (GDPR Art. 4 / CCPA §1798.140) ────────────
 # Pre-compiled for performance — avoids recompilation on every column scan.
 
-PII_FIELD_PATTERNS_RAW: list[str] = [
+_PII_FIELD_PATTERNS_RAW: list[str] = [
     r"\bemail\b", r"\be[-_]?mail\b",
     r"\bphone\b", r"\bmobile\b", r"\bcell\b",
     r"\bssn\b", r"\bsocial.?sec\b",
@@ -87,18 +87,18 @@ PII_FIELD_PATTERNS_RAW: list[str] = [
 ]
 
 PII_FIELD_PATTERNS: list[re.Pattern] = [
-    re.compile(p, re.IGNORECASE) for p in PII_FIELD_PATTERNS_RAW
+    re.compile(p, re.IGNORECASE) for p in _PII_FIELD_PATTERNS_RAW
 ]
 
 # GDPR Article 9 special-category patterns
-SENSITIVE_CATEGORIES_RAW: set[str] = {
+_SENSITIVE_CATEGORIES_RAW: set[str] = {
     r"\bhealth", r"\bmedical", r"\brace\b", r"\bethnicity\b",
     r"\breligion", r"\bpolitical", r"\bbiometric", r"\bgenetic",
     r"\bssn\b", r"\bpassport\b",
 }
 
 SENSITIVE_CATEGORIES: list[re.Pattern] = [
-    re.compile(p, re.IGNORECASE) for p in SENSITIVE_CATEGORIES_RAW
+    re.compile(p, re.IGNORECASE) for p in _SENSITIVE_CATEGORIES_RAW
 ]
 
 

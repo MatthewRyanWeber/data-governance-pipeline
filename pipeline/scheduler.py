@@ -19,10 +19,6 @@ from typing import Callable
 
 logger = logging.getLogger(__name__)
 
-from importlib.util import find_spec as _fs
-
-HAS_SCHEDULE = _fs("schedule") is not None
-
 
 class PipelineScheduler:
     """
