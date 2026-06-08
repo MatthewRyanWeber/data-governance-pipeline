@@ -97,6 +97,23 @@ from pipeline.advanced.table_copier import TableCopier  # noqa: F401
 from pipeline.advanced.dlq_replayer import DLQReplayer  # noqa: F401
 from pipeline.advanced.nl_pipeline_builder import NLPipelineBuilder  # noqa: F401
 
+# ── Catalog ─────────────────────────────────────────────────────────────────
+from pipeline.catalog.catalog_store import CatalogStore  # noqa: F401
+from pipeline.catalog.catalog_search import CatalogSearch  # noqa: F401
+from pipeline.catalog.glossary import BusinessGlossary  # noqa: F401
+
+# ── Security ────────────────────────────────────────────────────────────────
+from pipeline.security.access_policy import AccessPolicy  # noqa: F401
+
+# ── Lineage ─────────────────────────────────────────────────────────────────
+from pipeline.lineage.openlineage_emitter import OpenLineageEmitter  # noqa: F401
+
+# ── Versioning ──────────────────────────────────────────────────────────────
+from pipeline.versioning.snapshot_store import SnapshotStore  # noqa: F401
+
+# ── ML Governance ───────────────────────────────────────────────────────────
+from pipeline.ml_governance.model_registry import ModelRegistry  # noqa: F401
+
 # ── Constants and flags ──────────────────────────────────────────────────────
 from pipeline.constants import (  # noqa: F401
     VERSION,
