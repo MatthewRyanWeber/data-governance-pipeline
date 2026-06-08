@@ -7,7 +7,6 @@ Revision history
 1.0   2026-06-07   Extracted from pipeline_v3.py (class DatabricksLoader).
 """
 
-import time
 import logging
 from typing import TYPE_CHECKING
 
@@ -140,7 +139,8 @@ class DatabricksLoader(BaseLoader):
 
     def _upsert(self, df, cfg, table, natural_keys, schema_evolution):
         fqt = self._fqt(cfg, table)
-        tmp_view = f"_pipeline_stage_{table}_{int(time.time())}"
+        import uuid
+        tmp_view = f"_pipeline_stage_{table}_{uuid.uuid4().hex[:8]}"
         conn = self._connect(cfg)
         cur = conn.cursor()
         try:

@@ -160,6 +160,9 @@ class FireboltLoader(BaseLoader):
             if isinstance(v, bool):
                 return "TRUE" if v else "FALSE"
             if isinstance(v, (int, float)):
+                import math
+                if math.isnan(v) or math.isinf(v):
+                    return "NULL"
                 return str(v)
             return "'" + str(v).replace("'", "''") + "'"
 

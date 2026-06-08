@@ -71,7 +71,12 @@ class IncrementalFilter:
     def update_watermark(self, df, col: str, source: str) -> None:
         if col not in df.columns or df.empty:
             return
-        new_wm = str(df[col].max())
+        import pandas as pd
+        raw_max = df[col].max()
+        if pd.api.types.is_datetime64_any_dtype(df[col]):
+            new_wm = pd.Timestamp(raw_max).isoformat()
+        else:
+            new_wm = str(raw_max)
         key = self._key(source, col)
         with STATE_FILE_LOCK:
             state: dict = {}

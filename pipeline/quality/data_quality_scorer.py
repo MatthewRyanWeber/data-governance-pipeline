@@ -64,8 +64,10 @@ class DataQualityScorer:
         gov: "GovernanceLogger",
         history_file: str | Path | None = None,
         weights: dict | None = None,
+        dry_run: bool = False,
     ) -> None:
         self.gov          = gov
+        self.dry_run      = dry_run
         self.history_file = Path(history_file) if history_file else gov.log_dir / "quality_history.jsonl"
         raw_weights       = weights or self.DEFAULT_WEIGHTS
         total             = sum(raw_weights.values())
@@ -176,9 +178,12 @@ class DataQualityScorer:
             "generated_utc": datetime.now(timezone.utc).isoformat(),
         }
 
-        # Persist to history
-        with open(self.history_file, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(report, default=str) + "\n")
+        if not self.dry_run:
+            try:
+                with open(self.history_file, "a", encoding="utf-8") as fh:
+                    fh.write(json.dumps(report, default=str) + "\n")
+            except OSError as exc:
+                logger.warning("[Quality] Could not persist score history: %s", exc)
 
         self.gov.transformation_applied("QUALITY_SCORE_COMPUTED", {
             "score": composite, "grade": report["grade"],

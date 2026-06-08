@@ -12,6 +12,7 @@ Revision history
 
 import json
 import logging
+import re
 from typing import TYPE_CHECKING
 
 import pandas as pd
@@ -85,6 +86,8 @@ class QuickBooksExtractor:
         base = self._SANDBOX_BASE if env == "sandbox" else self._PROD_BASE
         return f"{base}/v3/company/{cfg['realm_id']}"
 
+    _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2})?$")
+
     def _build_query(self, entity, cfg, start, page_size) -> str:
         """Build a QBO SQL-like query string with optional date filters."""
         where_parts: list[str] = []
@@ -93,8 +96,12 @@ class QuickBooksExtractor:
             entity, "MetaData.LastUpdatedTime"
         )
         if cfg.get("date_from"):
+            if not self._DATE_RE.match(cfg["date_from"]):
+                raise ValueError(f"Invalid date_from format: {cfg['date_from']!r}")
             where_parts.append(f"{date_field} >= '{cfg['date_from']}'")
         if cfg.get("date_to"):
+            if not self._DATE_RE.match(cfg["date_to"]):
+                raise ValueError(f"Invalid date_to format: {cfg['date_to']!r}")
             where_parts.append(f"{date_field} <= '{cfg['date_to']}'")
         if cfg.get("extra_where"):
             where_parts.append(cfg["extra_where"])

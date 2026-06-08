@@ -109,7 +109,7 @@ class BusinessRuleEngine:
                     _validate_derive_expression(expr)
                     try:
                         df[rule["new_column"]] = pd.eval(
-                            expr, local_dict=local_ns,
+                            expr, local_dict=local_ns, global_dict={},
                         )
                     except Exception as eval_exc:
                         raise ValueError(

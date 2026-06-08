@@ -72,7 +72,7 @@ class DataEnricher:
             df.drop(columns=[lookup_key], inplace=True, errors="ignore")
 
         new_cols = set(df.columns) - before_cols
-        rows_matched = int(df[list(new_cols)[0]].notna().sum()) if new_cols else 0
+        rows_matched = int(df[list(new_cols)].notna().any(axis=1).sum()) if new_cols else 0
 
         self.gov.enrichment_applied(join_col, lookup_path, rows_matched, len(df))
         logger.info(

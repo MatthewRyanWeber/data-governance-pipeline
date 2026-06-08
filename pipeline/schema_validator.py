@@ -56,7 +56,7 @@ class SchemaValidator:
             expectations.append(gxe.ExpectColumnToExist(column=col))
             self.expectation_configs.append({"type": "ExpectColumnToExist", "column": col})
             if pd.api.types.is_numeric_dtype(df[col]):
-                if df[col].isnull().mean() == 0:
+                if df[col].isnull().sum() == 0:
                     expectations.append(gxe.ExpectColumnValuesToNotBeNull(column=col))
                 non_null = df[col].dropna()
                 if len(non_null):

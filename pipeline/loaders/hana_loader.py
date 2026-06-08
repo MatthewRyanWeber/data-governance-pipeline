@@ -84,7 +84,8 @@ class HanaLoader(BaseLoader):
 
     def _upsert(self, cur, schema, table, df, natural_keys):
         """HANA MERGE INTO via staging table."""
-        stage = f"{table}__stage_{id(df)}"
+        import uuid
+        stage = f"{table}__stage_{uuid.uuid4().hex[:8]}"
         self._ensure_table(cur, schema, stage, df)
         self._insert(cur, schema, stage, df)
 

@@ -135,8 +135,12 @@ class CompressionHandler:
             import zstandard
             dctx = zstandard.ZstdDecompressor()
             fh = _builtin_open(str(path), "rb")
-            stream = dctx.stream_reader(fh)
-            return SizeLimitedReader(stream, limit)
+            try:
+                stream = dctx.stream_reader(fh)
+                return SizeLimitedReader(stream, limit)
+            except Exception:
+                fh.close()
+                raise
 
         if ext == ".lz4":
             if not HAS_LZ4:

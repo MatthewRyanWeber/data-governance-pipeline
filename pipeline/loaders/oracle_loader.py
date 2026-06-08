@@ -128,18 +128,21 @@ class OracleLoader(BaseLoader):
                 cur.execute(f"DROP TABLE {fqt} PURGE")
             except Exception as exc:
                 logger.debug("Cleanup failed: %s", exc)
+        table_name_raw = fqt.split(".")[-1].strip('"')
         cur.execute(
             "DECLARE v_cnt NUMBER; BEGIN "
             "SELECT COUNT(*) INTO v_cnt FROM user_tables "
-            f"WHERE table_name = '{fqt.split('.')[-1].strip(chr(34))}'; "
+            "WHERE table_name = :tname; "
             "IF v_cnt = 0 THEN "
             f"EXECUTE IMMEDIATE 'CREATE TABLE {fqt} ({col_defs})'; "
-            "END IF; END;"
+            "END IF; END;",
+            {"tname": table_name_raw},
         )
 
     def _upsert(self, df, cfg, table, natural_keys):
         schema = cfg.get("schema", "").upper()
-        tmp_table = f"{table[:20]}_STG_{int(time.time()) % 100000}"
+        import uuid
+        tmp_table = f"{table[:20]}_STG_{uuid.uuid4().hex[:8]}"
         fqt = f'"{schema}"."{table}"' if schema else f'"{table}"'
         fqt_tmp = f'"{schema}"."{tmp_table}"' if schema else f'"{tmp_table}"'
         conn = self._connect(cfg)

@@ -97,7 +97,7 @@ class ColumnEncryptor:
                             fernet.decrypt(v[prefix_len:].encode()).decode()
                         )
                     except Exception as exc:
-                        logger.warning("Decryption failed: %s", exc)
+                        logger.error("Decryption failed for column '%s': %s — value left encrypted", col, exc)
                         decrypted.append(v)
                 df.loc[mask, col] = decrypted
         return df
