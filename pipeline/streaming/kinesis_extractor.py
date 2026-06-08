@@ -9,6 +9,7 @@ Layer 3 — imports from Layer 1 (governance_logger).
 Revision history
 ----------------
 1.0   2026-06-07   Initial extraction from monolith.
+1.1   2026-06-08   Paginate list_shards via NextToken for streams with many shards.
 """
 
 import json
@@ -65,9 +66,18 @@ class KinesisStreamExtractor:
         )
 
     def _get_shard_ids(self) -> list[str]:
-        """Retrieve all shard IDs for the configured stream."""
-        response = self._client.list_shards(StreamName=self.stream_name)
-        shard_ids = [shard["ShardId"] for shard in response.get("Shards", [])]
+        """Retrieve all shard IDs, paginating through NextToken if needed."""
+        shard_ids = []
+        kwargs = {"StreamName": self.stream_name}
+        while True:
+            response = self._client.list_shards(**kwargs)
+            shard_ids.extend(
+                shard["ShardId"] for shard in response.get("Shards", [])
+            )
+            next_token = response.get("NextToken")
+            if not next_token:
+                break
+            kwargs = {"NextToken": next_token}
         logger.info("Found %d shards for stream %s.", len(shard_ids), self.stream_name)
         return shard_ids
 

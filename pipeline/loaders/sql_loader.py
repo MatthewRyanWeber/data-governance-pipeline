@@ -5,13 +5,13 @@ and snowflake via SQLAlchemy.
 Revision history
 ────────────────
 1.0   2026-06-07   Extracted from pipeline_v3.py (class SQLLoader).
+1.1   2026-06-08   Upsert uses staging table + DELETE/INSERT instead of loading
+                   entire target table into memory.
 """
 
 import time
 import logging
 from typing import TYPE_CHECKING
-
-import pandas as pd
 
 from pipeline.constants import HAS_SNOWFLAKE
 from pipeline.loaders.base import BaseLoader, validate_sql_identifier
@@ -93,21 +93,44 @@ class SQLLoader(BaseLoader):
                 time.sleep(wait)
 
     def _upsert(self, new_df, engine, table, natural_keys):
-        from sqlalchemy import inspect as sai
+        """Database-native upsert via staging table — never loads target into memory."""
+        from sqlalchemy import inspect as sai, text
+
         if table not in sai(engine).get_table_names():
             self._load_with_retry(new_df, engine, table, "replace")
             return
-        with engine.connect() as _conn:
-            existing = pd.read_sql_table(table, _conn)
-        merged = new_df.merge(existing, on=natural_keys, how="outer",
-                              suffixes=("", "_old"), indicator=True)
-        merged = merged.drop(
-            columns=[c for c in merged.columns if c.endswith("_old")]
-            + ["_merge"],
-            errors="ignore",
+
+        staging = f"_upsert_staging_{table}"
+        validate_sql_identifier(staging, "staging table")
+
+        def q(name):
+            return f"`{name}`" if self.db_type == "mysql" else f'"{name}"'
+
+        all_cols = list(new_df.columns)
+        cols_str = ", ".join(q(c) for c in all_cols)
+        key_match = " AND ".join(
+            f"{q(table)}.{q(k)} = {q(staging)}.{q(k)}" for k in natural_keys
         )
-        self._load_with_retry(merged, engine, table, "replace")
+
+        with engine.begin() as conn:
+            new_df.to_sql(staging, conn, if_exists="replace", index=False,
+                          chunksize=500)
+
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(
+                    f"DELETE FROM {q(table)} WHERE EXISTS "
+                    f"(SELECT 1 FROM {q(staging)} WHERE {key_match})"
+                ))
+                conn.execute(text(
+                    f"INSERT INTO {q(table)} ({cols_str}) "
+                    f"SELECT {cols_str} FROM {q(staging)}"
+                ))
+        finally:
+            with engine.begin() as conn:
+                conn.execute(text(f"DROP TABLE IF EXISTS {q(staging)}"))
+
         self.gov.transformation_applied(
             "UPSERT_COMPLETE",
-            {"table": table, "final_rows": len(merged)},
+            {"table": table, "final_rows": len(new_df)},
         )
