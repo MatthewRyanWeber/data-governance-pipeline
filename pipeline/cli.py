@@ -9,6 +9,7 @@ Layer 6 — imports from everything.
 Revision history
 ----------------
 1.0   2026-06-07   Initial extraction from monolith.
+1.1   2026-06-08   Call validate_loader_config() before loader instantiation.
 """
 
 import argparse
@@ -150,7 +151,7 @@ def _run_single_file(source, args, config, gov, metrics) -> None:
     """Extract, transform, load a single source file."""
     from pipeline.extract import Extractor
     from pipeline.transform import Transformer
-    from pipeline.loaders import resolve_loader
+    from pipeline.loaders import resolve_loader, validate_loader_config
     from pipeline.profiler import DataProfiler
 
     metrics.start_stage("extract")
@@ -185,6 +186,7 @@ def _run_single_file(source, args, config, gov, metrics) -> None:
     destination = args.destination
     table_name = args.table
 
+    validate_loader_config(destination, config, table_name)
     loader_class, needs_db_type, uses_mongo = resolve_loader(destination)
     if needs_db_type:
         loader = loader_class(gov, db_type=destination)

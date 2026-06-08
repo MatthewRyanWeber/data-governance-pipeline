@@ -43,27 +43,25 @@ class MetricsCollector:
         self.start_stage("extract")
         self._stages["extract"]["rows"] = rows
         self._stages["extract"]["elapsed"] = elapsed
-        self.gov.transformation_applied("EXTRACT_METRICS", {"rows": rows, "elapsed_s": elapsed})
+        self.gov.stage_metrics("extract", rows, elapsed)
 
     def record_transform(self, rows: int, elapsed: float) -> None:
         self.start_stage("transform")
         self._stages["transform"]["rows"] = rows
         self._stages["transform"]["elapsed"] = elapsed
-        self.gov.transformation_applied("TRANSFORM_METRICS", {"rows": rows, "elapsed_s": elapsed})
+        self.gov.stage_metrics("transform", rows, elapsed)
 
     def record_load(self, rows: int, elapsed: float) -> None:
         self.start_stage("load")
         self._stages["load"]["rows"] = rows
         self._stages["load"]["elapsed"] = elapsed
-        self.gov.transformation_applied("LOAD_METRICS", {"rows": rows, "elapsed_s": elapsed})
+        self.gov.stage_metrics("load", rows, elapsed)
 
     def record_validate(self, rows_total: int, rows_failed: int, elapsed: float) -> None:
         self.start_stage("validate")
         self._stages["validate"]["rows"] = rows_total
         self._stages["validate"]["elapsed"] = elapsed
-        self.gov.transformation_applied("VALIDATE_METRICS", {
-            "rows_total": rows_total, "rows_failed": rows_failed, "elapsed_s": elapsed,
-        })
+        self.gov.stage_metrics("validate", rows_total, elapsed)
 
     def record(self, metric: str, value, stage: str | None = None) -> None:
         _stage = stage or "custom"

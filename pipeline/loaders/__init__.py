@@ -7,10 +7,13 @@ without importing all SDKs at module load time.
 Revision history
 ────────────────
 1.0   2026-06-07   Initial extraction from pipeline_v3.py.
+1.1   2026-06-08   Added validate_loader_config() for parse-time config checks.
 """
 
 import importlib
 import logging
+
+from pipeline.loaders.base import validate_sql_identifier
 
 logger = logging.getLogger(__name__)
 
@@ -97,3 +100,84 @@ def resolve_loader(db_type: str) -> tuple[type, bool, bool]:
 def supported_db_types() -> list[str]:
     """Return a sorted list of all supported db_type strings."""
     return sorted(_LAZY_DISPATCH.keys())
+
+
+# ── Config validation ────────────────────────────────────────────────────────
+
+# db_types whose table names are SQL identifiers
+_SQL_TYPES: frozenset[str] = frozenset({
+    "sqlite", "postgresql", "postgres", "mysql", "mssql",
+    "snowflake", "redshift", "synapse", "databricks", "clickhouse",
+    "oracle", "db2", "firebolt", "yellowbrick",
+    "hana", "datasphere",
+    "cockroachdb", "postgis",
+})
+
+# Vector db_types that store into SQL-backed tables
+_SQL_VECTOR_TYPES: frozenset[str] = frozenset({
+    "pgvector", "snowflake_vector", "bigquery_vector",
+})
+
+# All vector db_types (SQL-backed + non-SQL)
+_VECTOR_TYPES: frozenset[str] = _SQL_VECTOR_TYPES | frozenset({
+    "chroma", "milvus", "pinecone", "weaviate", "qdrant", "lancedb",
+})
+
+# Minimum required cfg keys per db_type category.
+# Each entry is (set_of_db_types, list_of_required_keys).
+_REQUIRED_KEYS: list[tuple[frozenset[str], list[str]]] = [
+    (frozenset({"sqlite"}),                               ["db_name"]),
+    (_SQL_TYPES - {"sqlite"},                              ["host"]),
+    (frozenset({"sftp"}),                                  ["host", "username"]),
+    (frozenset({"s3", "gcs", "azure_blob"}),               ["bucket"]),
+    (frozenset({"mongodb"}),                               ["connection_string|host"]),
+    (frozenset({"pgvector"}),                              ["host", "db_name"]),
+    (frozenset({"snowflake_vector"}),                      ["host"]),
+    (frozenset({"bigquery_vector"}),                       ["host"]),
+]
+
+
+def validate_loader_config(db_type: str, cfg: dict, table: str = "") -> None:
+    """
+    Validate loader configuration at parse-time, before loader instantiation.
+
+    Checks that required cfg keys are present and that table names are valid
+    SQL identifiers where appropriate.  Raises ValueError on any problem.
+    """
+    key = db_type.strip().lower()
+
+    if key not in _LAZY_DISPATCH:
+        raise ValueError(
+            f"Unknown db_type '{db_type}'. "
+            f"Known types: {sorted(_LAZY_DISPATCH.keys())}"
+        )
+
+    # ── Table name validation ───────────────────────────────────────────
+    if table:
+        if key in _SQL_TYPES or key in _SQL_VECTOR_TYPES:
+            validate_sql_identifier(table, "table")
+
+    # ── Required config keys ────────────────────────────────────────────
+    for type_set, required in _REQUIRED_KEYS:
+        if key not in type_set:
+            continue
+        for req in required:
+            if "|" in req:
+                # At least one of the alternatives must be present
+                alternatives = req.split("|")
+                if not any(cfg.get(alt) for alt in alternatives):
+                    raise ValueError(
+                        f"Loader config for '{db_type}' requires at least "
+                        f"one of: {', '.join(alternatives)}"
+                    )
+            else:
+                if not cfg.get(req):
+                    raise ValueError(
+                        f"Loader config for '{db_type}' is missing required "
+                        f"key: '{req}'"
+                    )
+
+    logger.debug(
+        "Loader config validated for db_type='%s', table='%s'.",
+        db_type, table,
+    )

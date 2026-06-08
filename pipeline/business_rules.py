@@ -7,9 +7,9 @@ Non-developers can define transformation logic without writing Python.
 Layer 2 — imports from Layer 1 (governance_logger).
 """
 
+import ast
 import json
 import logging
-import re
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -17,6 +17,38 @@ if TYPE_CHECKING:
     from pipeline.governance_logger import GovernanceLogger
 
 logger = logging.getLogger(__name__)
+
+_SAFE_AST_NODES: frozenset[type] = frozenset({
+    ast.Expression, ast.BinOp, ast.UnaryOp, ast.Compare,
+    ast.BoolOp, ast.Name, ast.Constant, ast.IfExp,
+    ast.Add, ast.Sub, ast.Mult, ast.Div, ast.FloorDiv,
+    ast.Mod, ast.Pow, ast.USub, ast.UAdd, ast.Not, ast.Invert,
+    ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE,
+    ast.In, ast.NotIn, ast.Is, ast.IsNot,
+    ast.And, ast.Or, ast.Load,
+})
+
+
+def _validate_derive_expression(expr: str) -> None:
+    """Validate a derive-rule expression by walking its AST.
+
+    Rejects function calls, attribute access, imports, lambdas, and any
+    construct that could execute arbitrary code via pd.eval(engine='python').
+    """
+    try:
+        tree = ast.parse(expr, mode="eval")
+    except SyntaxError as exc:
+        raise ValueError(
+            f"Expression is not valid Python: {expr!r}"
+        ) from exc
+
+    for node in ast.walk(tree):
+        if type(node) not in _SAFE_AST_NODES:
+            raise ValueError(
+                f"Disallowed construct {type(node).__name__} in expression: "
+                f"{expr!r}. Only arithmetic, comparison, and variable "
+                "references are permitted."
+            )
 
 
 class BusinessRuleEngine:
@@ -74,20 +106,7 @@ class BusinessRuleEngine:
                     expr = rule["expression"]
                     src_cols = rule.get("source_columns", [])
                     local_ns = {col: df[col] for col in src_cols if col in df.columns}
-                    safe = re.sub(r"[^a-zA-Z0-9_\s\+\-\*/\(\)\.]", "", expr)
-                    if safe != expr:
-                        raise ValueError(f"Unsafe expression: {expr!r}")
-                    _blocked = [
-                        "__", "import", "exec", "eval", "compile",
-                        "getattr", "setattr", "delattr",
-                        "globals", "locals", "open", "system",
-                    ]
-                    _expr_lower = expr.lower()
-                    for _kw in _blocked:
-                        if _kw in _expr_lower:
-                            raise ValueError(
-                                f"Blocked keyword {_kw!r} in expression: {expr!r}"
-                            )
+                    _validate_derive_expression(expr)
                     try:
                         df[rule["new_column"]] = pd.eval(
                             expr, local_dict=local_ns,

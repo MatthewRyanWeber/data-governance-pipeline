@@ -134,6 +134,11 @@ class GovernanceLogger:
         self._event_lock = threading.RLock()
 
     # ── Core event writer with chained hash ──────────────────────────────
+    # Performance: each _event() call serialises JSON + computes SHA-256 +
+    # writes to disk.  For high-volume pipelines (>100k chunks), consider
+    # buffering events in self.ledger_entries and flushing once per
+    # checkpoint interval instead of per-event.  Current design prioritises
+    # durability (no events lost on crash) over throughput.
 
     def _event(
         self,
@@ -230,6 +235,23 @@ class GovernanceLogger:
 
     def transformation_applied(self, name: str, detail: dict | None = None) -> None:
         self._event("TRANSFORMATION", name, detail)
+
+    def extract_event(self, action: str, detail: dict | None = None) -> None:
+        self._event("EXTRACT", action, detail)
+
+    def load_event(self, action: str, detail: dict | None = None) -> None:
+        self._event("LOAD", action, detail)
+
+    def quality_event(self, action: str, detail: dict | None = None) -> None:
+        self._event("QUALITY", action, detail)
+
+    def schema_event(self, action: str, detail: dict | None = None) -> None:
+        self._event("SCHEMA", action, detail)
+
+    def stage_metrics(self, stage: str, rows: int, elapsed: float) -> None:
+        self._event("METRICS", f"{stage.upper()}_METRICS", {
+            "rows": rows, "elapsed_s": elapsed,
+        })
 
     # ── Lineage events ───────────────────────────────────────────────────
 

@@ -107,7 +107,7 @@ class Extractor:
     def extract(self, path: str):
         """Read the full source file into a DataFrame."""
         real_ext = self._compressor.inner_extension(path)
-        self.gov.transformation_applied("EXTRACT_START", {"source": path, "format": real_ext})
+        self.gov.extract_event("EXTRACT_START", {"source": path, "format": real_ext})
 
         if self._compressor.is_compressed(path):
             with self._compressor.open(path) as fh:
@@ -117,7 +117,7 @@ class Extractor:
 
         self.gov.source_registered(path, real_ext, len(df), len(df.columns))
         dtype_map = {col: str(df[col].dtype) for col in df.columns}
-        self.gov.transformation_applied("EXTRACT_COMPLETE", {
+        self.gov.extract_event("EXTRACT_COMPLETE", {
             "rows": len(df), "columns": list(df.columns), "dtypes": dtype_map,
         })
         return df
@@ -243,27 +243,27 @@ class Extractor:
         import pandas as pd
 
         real_ext = self._compressor.inner_extension(path)
-        self.gov.transformation_applied("CHUNKED_EXTRACT_START", {
+        self.gov.extract_event("CHUNKED_EXTRACT_START", {
             "source": path, "chunk_size": chunk_size,
         })
 
         if real_ext == ".csv" and not self._compressor.is_compressed(path):
             for i, chunk in enumerate(pd.read_csv(path, chunksize=chunk_size, encoding="utf-8")):
-                self.gov.transformation_applied("CHUNK_EXTRACTED", {
+                self.gov.extract_event("CHUNK_EXTRACTED", {
                     "chunk_index": i, "rows": len(chunk),
                 })
                 yield chunk
 
         elif real_ext == ".tsv" and not self._compressor.is_compressed(path):
             for i, chunk in enumerate(pd.read_csv(path, sep="\t", chunksize=chunk_size, encoding="utf-8")):
-                self.gov.transformation_applied("CHUNK_EXTRACTED", {
+                self.gov.extract_event("CHUNK_EXTRACTED", {
                     "chunk_index": i, "rows": len(chunk),
                 })
                 yield chunk
 
         elif real_ext in (".jsonl", ".ndjson") and not self._compressor.is_compressed(path):
             for i, chunk in enumerate(pd.read_json(path, lines=True, chunksize=chunk_size)):
-                self.gov.transformation_applied("CHUNK_EXTRACTED", {
+                self.gov.extract_event("CHUNK_EXTRACTED", {
                     "chunk_index": i, "rows": len(chunk),
                 })
                 yield chunk
@@ -274,7 +274,7 @@ class Extractor:
             i = 0
             for batch in pf.iter_batches(batch_size=chunk_size):
                 chunk = batch.to_pandas()
-                self.gov.transformation_applied("CHUNK_EXTRACTED", {
+                self.gov.extract_event("CHUNK_EXTRACTED", {
                     "chunk_index": i, "rows": len(chunk),
                 })
                 yield chunk
@@ -285,7 +285,7 @@ class Extractor:
             n = (len(df) + chunk_size - 1) // chunk_size
             for i in range(n):
                 chunk = df.iloc[i * chunk_size:(i + 1) * chunk_size].copy()
-                self.gov.transformation_applied("CHUNK_EXTRACTED", {
+                self.gov.extract_event("CHUNK_EXTRACTED", {
                     "chunk_index": i, "rows": len(chunk), "total_chunks": n,
                 })
                 yield chunk
