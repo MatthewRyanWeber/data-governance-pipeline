@@ -1,0 +1,14 @@
+services:
+  pipeline-api:
+    build: .
+    ports:
+      - "5000:5000"
+    environment:
+      - PIPELINE_API_KEYS=${PIPELINE_API_KEYS:-dev-key}
+    command: ["python", "-m", "pipeline.api"]
+
+  test:
+    build: .
+    command: ["python", "-m", "pytest", "tests/", "-q", "--tb=short"]
+    profiles:
+      - test
