@@ -8,7 +8,7 @@ Layer 3 — imports from Layer 0 (constants), Layer 1 (governance_logger).
 
 import logging
 import smtplib
-from datetime import datetime
+from datetime import datetime, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import TYPE_CHECKING
@@ -46,21 +46,23 @@ class Notifier:
             self._send_slack(success, stats)
 
     def _build_subject(self, ok: bool) -> str:
-        ts = datetime.now().strftime("%Y-%m-%d %H:%M")
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
         status = "SUCCESS" if ok else "FAILED"
         return f"[Pipeline v4] {status} — {ts} UTC"
 
     def _build_html(self, ok: bool, stats: dict) -> str:
+        from html import escape
         color = "#28a745" if ok else "#dc3545"
         status = "COMPLETED SUCCESSFULLY" if ok else "FAILED"
         rows = "".join(
-            f"<tr><td><b>{k}</b></td><td>{v}</td></tr>" for k, v in stats.items()
+            f"<tr><td><b>{escape(str(k))}</b></td><td>{escape(str(v))}</td></tr>"
+            for k, v in stats.items()
         )
         return (
             f"<html><body><h2 style='color:{color}'>Pipeline {status}</h2>"
-            f"<p><b>Pipeline ID:</b> {self.run_context.pipeline_id}</p>"
+            f"<p><b>Pipeline ID:</b> {escape(str(self.run_context.pipeline_id))}</p>"
             f"<table border='1'>{rows}</table>"
-            f"<p>Artefacts: {self.gov.log_dir}</p></body></html>"
+            f"<p>Artefacts: {escape(str(self.gov.log_dir))}</p></body></html>"
         )
 
     def _send_email(self, ok: bool, stats: dict) -> None:

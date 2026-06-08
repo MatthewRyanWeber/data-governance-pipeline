@@ -47,9 +47,10 @@ class ColumnEncryptor:
             self._fernet = Fernet(new_key)
             logger.warning(
                 "[ENCRYPT] No key provided — generated new key. "
-                "SAVE THIS KEY or encrypted data cannot be recovered:\n  %s",
-                new_key.decode(),
+                "Retrieve it via ColumnEncryptor.generate_key() or store "
+                "the key returned by this constructor before it is lost.",
             )
+            self._generated_key = new_key.decode()
 
     @staticmethod
     def generate_key() -> str:

@@ -76,8 +76,16 @@ class PostGISLoader(BaseLoader):
                     f"{geom_col} geometry"
                 ))
                 conn.commit()
+                # Count total rows to offset into newly appended rows
+                row_count = conn.execute(
+                    sa_text(f"SELECT COUNT(*) FROM {table}")
+                ).scalar() or 0
+                base_offset = row_count - len(df)
+                if base_offset < 0:
+                    base_offset = 0
+
                 params = [
-                    {"wkt": wkt, "srid": srid, "idx": i}
+                    {"wkt": wkt, "srid": srid, "idx": base_offset + i}
                     for i, wkt in enumerate(df[geom_col])
                     if wkt is not None and wkt != ""
                 ]

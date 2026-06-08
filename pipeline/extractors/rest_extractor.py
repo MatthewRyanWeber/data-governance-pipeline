@@ -218,7 +218,11 @@ class RESTExtractor:
             try:
                 resp = session.get(url, params=params, timeout=timeout)
                 if resp.status_code == 429:
-                    retry_after = int(resp.headers.get("Retry-After", 2 ** attempt))
+                    raw_retry = resp.headers.get("Retry-After", str(2 ** attempt))
+                    try:
+                        retry_after = int(raw_retry)
+                    except ValueError:
+                        retry_after = 2 ** attempt
                     logger.warning(
                         "[REST_EXTRACT] Rate limited (429) — waiting %ds", retry_after,
                     )

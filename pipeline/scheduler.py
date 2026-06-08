@@ -91,12 +91,14 @@ class PipelineScheduler:
     def _matches_now(self) -> bool:
         """Check whether the current time (in configured timezone) matches the cron expression."""
         now = datetime.now(self._tz)
+        # Python weekday(): Mon=0..Sun=6; cron weekday: Sun=0..Sat=6
+        cron_weekday = (now.weekday() + 1) % 7
         return (
             now.minute in self._cron_parts["minute"]
             and now.hour in self._cron_parts["hour"]
             and now.day in self._cron_parts["day"]
             and now.month in self._cron_parts["month"]
-            and now.weekday() in self._cron_parts["weekday"]
+            and cron_weekday in self._cron_parts["weekday"]
         )
 
     def _run_loop(self) -> None:
@@ -105,7 +107,7 @@ class PipelineScheduler:
         last_fire_minute: int | None = None
 
         while not self._stop_event.is_set():
-            now = datetime.now(timezone.utc)
+            now = datetime.now(self._tz)
             current_minute = now.hour * 60 + now.minute
 
             if self._matches_now() and current_minute != last_fire_minute:

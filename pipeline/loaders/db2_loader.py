@@ -59,10 +59,11 @@ class Db2Loader(BaseLoader):
     def _engine(self, cfg: dict):
         """SQLAlchemy engine via ibm_db_sa dialect."""
         from sqlalchemy import create_engine as _ce
+        from urllib.parse import quote_plus
         ssl_str = "?Security=SSL" if cfg.get("ssl") else ""
         port = cfg.get("port", 50000)
         url = (
-            f"ibm_db_sa+ibm_db://{cfg['user']}:{cfg['password']}"
+            f"ibm_db_sa+ibm_db://{quote_plus(cfg['user'])}:{quote_plus(cfg['password'])}"
             f"@{cfg['host']}:{port}/{cfg['database']}{ssl_str}"
         )
         return _ce(url)

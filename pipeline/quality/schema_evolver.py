@@ -95,10 +95,10 @@ class SchemaEvolver:
         -------
         dict  Evolution report: columns_added, columns_dropped, columns_unchanged.
         """
+        active_engine = engine if engine is not None else self.engine
+        _orig_engine = self.engine
         if engine is not None:
-            _orig, self.engine = self.engine, engine
-        else:
-            _orig = None
+            self.engine = engine
         existing = self._get_existing_columns(table_name, schema)
         incoming = {
             col: self.DTYPE_TO_SQL.get(str(df[col].dtype), "TEXT")
@@ -107,16 +107,19 @@ class SchemaEvolver:
 
         from sqlalchemy import text  # pylint: disable=import-outside-toplevel
 
-        qualified = f'"{schema}"."{table_name}"' if schema else f'"{table_name}"'
+        safe_schema = schema.replace('"', '""') if schema else None
+        safe_table = table_name.replace('"', '""')
+        qualified = f'"{safe_schema}"."{safe_table}"' if schema else f'"{safe_table}"'
         added    = []
         dropped  = []
         unchanged = []
 
-        with self.engine.begin() as conn:
+        with active_engine.begin() as conn:
             # Add new columns
             for col, sql_type in incoming.items():
                 if col not in existing:
-                    stmt = f'ALTER TABLE {qualified} ADD COLUMN "{col}" {sql_type}'
+                    safe_col = col.replace('"', '""')
+                    stmt = f'ALTER TABLE {qualified} ADD COLUMN "{safe_col}" {sql_type}'
                     try:
                         conn.execute(text(stmt))
                         added.append(col)
@@ -136,7 +139,8 @@ class SchemaEvolver:
             if drop_missing:
                 for col in existing:
                     if col not in incoming:
-                        stmt = f'ALTER TABLE {qualified} DROP COLUMN "{col}"'
+                        safe_col = col.replace('"', '""')
+                        stmt = f'ALTER TABLE {qualified} DROP COLUMN "{safe_col}"'
                         try:
                             conn.execute(text(stmt))
                             dropped.append(col)
@@ -172,6 +176,6 @@ class SchemaEvolver:
         })
         logger.info("[SchemaEvolver] %s: +%d added, -%d dropped, %d unchanged",
                     table_name, len(added), len(dropped), len(unchanged))
-        if _orig is not None:
-            self.engine = _orig
+        if engine is not None:
+            self.engine = _orig_engine
         return report

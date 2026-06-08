@@ -74,11 +74,14 @@ class SensitiveDataFilter(logging.Filter):
 
     def filter(self, record):
         msg = record.getMessage()
+        matched = False
         for pattern in _SENSITIVE_PATTERNS:
             if pattern.search(msg):
-                record.msg = pattern.sub("***REDACTED***", str(record.msg))
-                record.args = None
-                break
+                msg = pattern.sub("***REDACTED***", msg)
+                matched = True
+        if matched:
+            record.msg = msg
+            record.args = None
         return True
 
 

@@ -11,9 +11,8 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
-import numpy as np
 import pandas as pd
 
 

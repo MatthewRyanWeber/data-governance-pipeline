@@ -168,9 +168,19 @@ class LoadVerifier:
             logger.warning("[LOAD_VERIFY] Row count query failed for '%s': %s", table, exc)
             return None
 
+    @staticmethod
+    def _validate_identifier(name: str) -> str:
+        """Validate and quote a SQL identifier to prevent injection."""
+        import re
+        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name):
+            raise ValueError(f"Invalid SQL identifier: {name!r}")
+        return f'"{name}"'
+
     def _count_sql(self, cfg: dict, table: str) -> int:
         """Count rows via SQLAlchemy."""
         from sqlalchemy import create_engine, text
+
+        safe_table = self._validate_identifier(table)
 
         connection_string = cfg.get("connection_string")
         if not connection_string:
@@ -201,7 +211,7 @@ class LoadVerifier:
         engine = create_engine(connection_string)
         try:
             with engine.connect() as conn:
-                result = conn.execute(text(f"SELECT COUNT(*) FROM {table}"))
+                result = conn.execute(text(f"SELECT COUNT(*) FROM {safe_table}"))
                 return result.scalar()
         finally:
             engine.dispose()

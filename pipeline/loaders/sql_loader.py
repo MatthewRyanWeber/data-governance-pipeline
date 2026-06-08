@@ -68,10 +68,13 @@ class SQLLoader(BaseLoader):
         if self._dry_run_guard(table, len(df)):
             return
         engine = self._engine(cfg)
-        if natural_keys:
-            self._upsert(df, engine, table, natural_keys)
-        else:
-            self._load_with_retry(df, engine, table, if_exists)
+        try:
+            if natural_keys:
+                self._upsert(df, engine, table, natural_keys)
+            else:
+                self._load_with_retry(df, engine, table, if_exists)
+        finally:
+            engine.dispose()
         self.gov.load_complete(len(df), table)
         db_identifier = cfg.get("database") or cfg.get("db_name", "")
         self.gov.destination_registered(self.db_type, db_identifier, table)

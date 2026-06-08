@@ -122,8 +122,8 @@ class ProcessWatchdog:
                 for line in self._process.stdout:
                     sys.stdout.write(line)
                     sys.stdout.flush()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("[WATCHDOG] Error reading child stdout: %s", exc)
 
             exit_code = self._process.wait()
             uptime = time.monotonic() - self._last_start

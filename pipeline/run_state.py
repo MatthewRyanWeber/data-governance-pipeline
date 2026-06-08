@@ -149,8 +149,8 @@ class RunStateManager:
                     if started < cutoff:
                         path.unlink()
                         removed += 1
-            except (json.JSONDecodeError, KeyError, OSError):
-                pass
+            except (json.JSONDecodeError, KeyError, OSError) as exc:
+                logger.warning("[RUN_STATE] Error processing state file %s: %s", path, exc)
 
         if removed:
             logger.info("[RUN_STATE] Cleaned up %d old state files.", removed)

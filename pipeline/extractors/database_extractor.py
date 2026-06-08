@@ -86,6 +86,14 @@ class DatabaseExtractor:
         connect_args = cfg.get("connect_args", {})
         return create_engine(url, connect_args=connect_args)
 
+    @staticmethod
+    def _validate_identifier(name: str) -> str:
+        """Validate and quote a SQL identifier to prevent injection."""
+        import re
+        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name):
+            raise ValueError(f"Invalid SQL identifier: {name!r}")
+        return f'"{name}"'
+
     def extract(
         self,
         cfg: dict,
@@ -120,9 +128,10 @@ class DatabaseExtractor:
             if query:
                 df = pd.read_sql(text(query), engine)
             else:
-                col_list = ", ".join(columns) if columns else "*"
-                schema_prefix = f"{schema}." if schema else ""
-                sql = f"SELECT {col_list} FROM {schema_prefix}{table}"
+                safe_table = self._validate_identifier(table)
+                col_list = ", ".join(self._validate_identifier(c) for c in columns) if columns else "*"
+                schema_prefix = f"{self._validate_identifier(schema)}." if schema else ""
+                sql = f"SELECT {col_list} FROM {schema_prefix}{safe_table}"
                 if where:
                     sql += f" WHERE {where}"
                 df = pd.read_sql(text(sql), engine)
@@ -173,8 +182,9 @@ class DatabaseExtractor:
             if query:
                 base_sql = query
             else:
-                schema_prefix = f"{schema}." if schema else ""
-                base_sql = f"SELECT * FROM {schema_prefix}{table}"
+                safe_table = self._validate_identifier(table)
+                schema_prefix = f"{self._validate_identifier(schema)}." if schema else ""
+                base_sql = f"SELECT * FROM {schema_prefix}{safe_table}"
 
             offset = 0
             chunk_index = 0

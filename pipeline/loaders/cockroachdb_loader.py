@@ -77,10 +77,10 @@ class CockroachDBLoader(BaseLoader):
         """Return basic metadata about a CockroachDB table."""
         from sqlalchemy import inspect as sa_inspect, text as sa_text
 
+        validate_sql_identifier(table, "table")
         engine = self._engine(cfg)
         insp = sa_inspect(engine)
         cols = [c["name"] for c in insp.get_columns(table)]
-        validate_sql_identifier(table, "table")
         with engine.connect() as conn:
             count = conn.execute(
                 sa_text(f"SELECT COUNT(*) FROM {table}")

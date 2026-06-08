@@ -342,7 +342,7 @@ def _run_chunked(
         verify_cfg["db_type"] = destination
         with timed_operation("verify"):
             import pandas as pd
-            dummy = pd.DataFrame({"_": range(total_rows)})
+            dummy = pd.DataFrame(index=range(total_rows))
             result = verifier.verify_row_count(dummy, verify_cfg, table_name)
         if result.get("match") is False:
             logger.warning(
@@ -497,8 +497,12 @@ def _cmd_service(args: argparse.Namespace) -> None:
         install_service()
     elif action == "remove":
         from pipeline.service import main as svc_main
-        sys.argv = [sys.argv[0], "remove"]
-        svc_main()
+        saved_argv = sys.argv[:]
+        try:
+            sys.argv = [sys.argv[0], "remove"]
+            svc_main()
+        finally:
+            sys.argv = saved_argv
     elif action == "start":
         import subprocess
         subprocess.run(["sc", "start", "DataGovernancePipeline"], check=True)

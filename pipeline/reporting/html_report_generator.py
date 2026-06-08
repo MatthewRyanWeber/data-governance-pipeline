@@ -117,11 +117,12 @@ class HTMLReportGenerator:
             f"<tr><td>{c}</td><td>{n}</td></tr>" for c, n in top_cols
         ) if top_cols else "<tr><td colspan=2>No changes detected</td></tr>"
 
+        from html import escape
         ledger_html = ""
         for entry in reversed(ledger_entries):
-            action  = entry.get("action", "")
-            detail  = str(entry.get("detail", ""))[:120]
-            ts_str  = entry.get("timestamp_utc", "")[:19]
+            action  = escape(str(entry.get("action", "")))
+            detail  = escape(str(entry.get("detail", ""))[:120])
+            ts_str  = escape(str(entry.get("timestamp_utc", ""))[:19])
             ledger_html += f"<tr><td>{ts_str}</td><td>{action}</td><td>{detail}</td></tr>"
 
         html = f"""<!DOCTYPE html>

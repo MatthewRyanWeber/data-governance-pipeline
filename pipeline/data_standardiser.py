@@ -115,7 +115,7 @@ class DataStandardiser:
                     parsed, phonenumbers.PhoneNumberFormat.E164,
                 )
             except Exception as exc:
-                logger.debug("Could not parse phone '%s': %s", val, exc)
+                logger.debug("Could not parse phone value: %s", exc)
                 return val
 
         result = series.apply(_parse_one)

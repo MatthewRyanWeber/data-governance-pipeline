@@ -42,10 +42,11 @@ class CheckpointManager:
     def load_checkpoint(self, source: str, table: str) -> int:
         """Return the last completed chunk index, or -1 if none."""
         key = self._key(source, table)
-        if not self.state_file.exists():
-            return -1
-        with open(self.state_file, encoding="utf-8") as f:
-            state = json.load(f)
+        with STATE_FILE_LOCK:
+            if not self.state_file.exists():
+                return -1
+            with open(self.state_file, encoding="utf-8") as f:
+                state = json.load(f)
         last = state.get(key, -1)
         if last >= 0:
             self.gov.checkpoint_event("RESTORED", last, 0)

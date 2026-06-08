@@ -48,10 +48,11 @@ class SizeLimitedReader(io.RawIOBase):
     bytes read exceed max_bytes (zip bomb protection).
     """
 
-    def __init__(self, stream: io.IOBase, max_bytes: int) -> None:
+    def __init__(self, stream: io.IOBase, max_bytes: int, owner=None) -> None:
         self._stream = stream
         self._max_bytes = max_bytes
         self._bytes_read = 0
+        self._owner = owner
 
     def readable(self):
         return True
@@ -83,6 +84,11 @@ class SizeLimitedReader(io.RawIOBase):
 
     def close(self):
         self._stream.close()
+        if self._owner is not None:
+            try:
+                self._owner.close()
+            except Exception:
+                pass
         super().close()
 
 
@@ -124,7 +130,7 @@ class CompressionHandler:
                     raise ValueError(f"ZIP archive is empty: {path}")
                 _validate_archive_member(members[0])
                 inner = zf.open(members[0])
-                return SizeLimitedReader(inner, limit)
+                return SizeLimitedReader(inner, limit, owner=zf)
             except Exception:
                 zf.close()
                 raise
@@ -137,7 +143,7 @@ class CompressionHandler:
             fh = _builtin_open(str(path), "rb")
             try:
                 stream = dctx.stream_reader(fh)
-                return SizeLimitedReader(stream, limit)
+                return SizeLimitedReader(stream, limit, owner=fh)
             except Exception:
                 fh.close()
                 raise
@@ -160,7 +166,7 @@ class CompressionHandler:
                 inner = tf.extractfile(members[0])
                 if inner is None:
                     raise ValueError(f"Could not extract member from TGZ: {path}")
-                return SizeLimitedReader(inner, limit)
+                return SizeLimitedReader(inner, limit, owner=tf)
             except Exception:
                 tf.close()
                 raise

@@ -119,9 +119,23 @@ def read_jsonl_tail(
     """Read the last *count* records from a JSONL file, newest first."""
     if not path.exists():
         return []
-    lines = path.read_text(encoding="utf-8").strip().splitlines()
+    # Read from end of file to avoid loading entire file into memory
+    lines: list[str] = []
+    buf_size = 8192
+    with open(path, "rb") as f:
+        f.seek(0, 2)
+        remaining = f.tell()
+        while remaining > 0 and len(lines) < count * 3:
+            read_size = min(buf_size, remaining)
+            remaining -= read_size
+            f.seek(remaining)
+            chunk = f.read(read_size).decode("utf-8", errors="replace")
+            lines = chunk.splitlines() + lines
     records: list[dict] = []
     for line in reversed(lines):
+        line = line.strip()
+        if not line:
+            continue
         try:
             record = json.loads(line)
         except json.JSONDecodeError:

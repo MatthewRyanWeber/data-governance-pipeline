@@ -83,22 +83,29 @@ class DataDiffReporter:
         deleted_keys = sorted(old_idx - new_idx, key=str)
         common_keys  = list(old_idx & new_idx)
 
-        # Find changed rows among common keys
+        # Find changed rows among common keys — vectorized comparison
         shared_cols = [c for c in old.columns if c in new.columns]
         changed_rows = []
         col_change_counts: dict[str, int] = {c: 0 for c in shared_cols}
 
-        for key in common_keys:
-            old_row = old.loc[key]
-            new_row = new.loc[key]
-            diffs   = {}
+        if common_keys and shared_cols:
+            old_common = old.loc[old.index.isin(set(common_keys)), shared_cols].astype(str)
+            new_common = new.loc[new.index.isin(set(common_keys)), shared_cols].astype(str)
+            old_common, new_common = old_common.align(new_common, join="inner")
+
+            diff_mask = old_common != new_common
+            changed_idx = diff_mask.any(axis=1)
+
             for col in shared_cols:
-                ov = old_row[col] if col in old_row.index else None
-                nv = new_row[col] if col in new_row.index else None
-                if str(ov) != str(nv):          # string compare handles NaN / types
-                    diffs[col] = {"before": str(ov), "after": str(nv)}
-                    col_change_counts[col] += 1
-            if diffs:
+                col_change_counts[col] = int(diff_mask[col].sum())
+
+            for key in changed_idx[changed_idx].index:
+                row_diff = diff_mask.loc[key]
+                changed_cols = row_diff[row_diff].index
+                diffs = {
+                    col: {"before": old_common.at[key, col], "after": new_common.at[key, col]}
+                    for col in changed_cols
+                }
                 changed_rows.append({"key": str(key), "changes": diffs})
 
         report = {

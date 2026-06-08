@@ -88,7 +88,7 @@ class ReversibleLoader:
     @staticmethod
     def _run_id() -> str:
         """Generate a unique run identifier: YYYYMMDD_HHMMSS_<6hex>."""
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         return f"{ts}_{secrets.token_hex(3)}"
 
     @staticmethod
@@ -132,22 +132,23 @@ class ReversibleLoader:
     def _engine(cfg: dict, db_type: str = "sqlite"):
         """Build a SQLAlchemy engine from a config dict."""
         from sqlalchemy import create_engine
+        from urllib.parse import quote_plus
 
         if db_type == "sqlite":
             return create_engine(f"sqlite:///{cfg['db_name']}.db")
         if db_type == "postgresql":
             return create_engine(
-                f"postgresql+psycopg2://{cfg['user']}:{cfg['password']}"
+                f"postgresql+psycopg2://{quote_plus(cfg['user'])}:{quote_plus(cfg['password'])}"
                 f"@{cfg['host']}:{cfg.get('port', 5432)}/{cfg['db_name']}"
             )
         if db_type == "mysql":
             return create_engine(
-                f"mysql+pymysql://{cfg['user']}:{cfg['password']}"
+                f"mysql+pymysql://{quote_plus(cfg['user'])}:{quote_plus(cfg['password'])}"
                 f"@{cfg['host']}:{cfg.get('port', 3306)}/{cfg['db_name']}"
             )
         if db_type == "mssql":
             return create_engine(
-                f"mssql+pyodbc://{cfg['user']}:{cfg['password']}"
+                f"mssql+pyodbc://{quote_plus(cfg['user'])}:{quote_plus(cfg['password'])}"
                 f"@{cfg['host']}:{cfg.get('port', 1433)}/{cfg['db_name']}"
                 f"?driver={cfg.get('driver', 'ODBC+Driver+17+for+SQL+Server')}"
             )
@@ -170,10 +171,13 @@ class ReversibleLoader:
     def _read_table(self, cfg: dict, table: str) -> pd.DataFrame | None:
         """Read the full contents of a table, or None if it does not exist."""
         engine = self._engine(cfg, self.db_type)
-        if not self._table_exists(engine, table):
-            return None
-        with engine.connect() as conn:
-            return pd.read_sql_table(table, conn)
+        try:
+            if not self._table_exists(engine, table):
+                return None
+            with engine.connect() as conn:
+                return pd.read_sql_table(table, conn)
+        finally:
+            engine.dispose()
 
     # ── Core operations ──────────────────────────────────────────────────
 
@@ -213,8 +217,11 @@ class ReversibleLoader:
         if "shadow" in self.strategy and existing is not None and len(existing) > 0:
             shadow_table = f"{table}_shadow_{run_id}"
             engine = self._engine(cfg, self.db_type)
-            with engine.begin() as conn:
-                existing.to_sql(shadow_table, conn, if_exists="replace", index=False)
+            try:
+                with engine.begin() as conn:
+                    existing.to_sql(shadow_table, conn, if_exists="replace", index=False)
+            finally:
+                engine.dispose()
             logger.info("Shadow table written: %s", shadow_table)
 
         # 4. Append manifest record
@@ -279,8 +286,11 @@ class ReversibleLoader:
 
         restored_df = pd.read_parquet(snapshot_path)
         engine = self._engine(cfg, self.db_type)
-        with engine.begin() as conn:
-            restored_df.to_sql(table, conn, if_exists="replace", index=False)
+        try:
+            with engine.begin() as conn:
+                restored_df.to_sql(table, conn, if_exists="replace", index=False)
+        finally:
+            engine.dispose()
 
         self.gov.transformation_applied("ROLLBACK_EXECUTED", {
             "run_id": run_id,

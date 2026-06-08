@@ -7,9 +7,7 @@ and the full transform() pipeline.
 """
 
 import hashlib
-import tempfile
 import unittest
-from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pandas as pd

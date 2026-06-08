@@ -169,10 +169,8 @@ class AccessPolicy:
             effective_role = dp.get("default_role")
 
         if not effective_role:
-            # Fail-open by design: callers without a role see unfiltered data.
-            # This matches the "public by default" model — lock down via roles.
-            logger.warning("[RBAC] No role resolved — returning full DataFrame")
-            return df
+            logger.warning("[RBAC] No role resolved — returning empty DataFrame (fail-closed)")
+            return df.iloc[0:0]
 
         policy = self._policies["roles"].get(effective_role)
         if not policy:
