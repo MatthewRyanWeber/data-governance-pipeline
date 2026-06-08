@@ -22,14 +22,16 @@ For healthcare data from Epic EHR systems, `epic_extensions.py` adds a complete 
 
 **ETL core**
 - 12 source formats: CSV, JSON, Excel, XML, Parquet, Avro, ORC, SQL tables, Kafka, Kinesis, Pub/Sub, QuickBooks Online
-- 42 destination loaders: PostgreSQL, MySQL, SQL Server, MongoDB, Snowflake, Redshift, BigQuery, Azure Synapse, Databricks, ClickHouse, Oracle, DB2, Firebolt, Yellowbrick, SAP HANA, SAP Datasphere, QuickBooks, LanceDB, Kafka, CockroachDB, DuckDB, MotherDuck, Parquet, Delta Lake, Iceberg, S3, GCS, Azure Blob, Athena, SFTP, Microsoft Fabric, PostGIS, Pinecone, Weaviate, Qdrant, Chroma, Milvus, pgvector, Snowflake Vector, BigQuery Vector
-- Chunked parallel processing, compression (gz/bz2/zip), incremental loading, checkpoint/resume
-- **Multi-file parallel runner** — process entire directories of files simultaneously with `parallel_runner.py` (ThreadPoolExecutor, configurable workers)
+- 37 destination loaders (28 standard + 9 vector): PostgreSQL, MySQL, SQL Server, MongoDB, Snowflake, Redshift, BigQuery, Azure Synapse, Databricks, ClickHouse, Oracle, DB2, Firebolt, Yellowbrick, SAP HANA, SAP Datasphere, QuickBooks, Kafka, CockroachDB, DuckDB, Parquet, Delta Lake, Iceberg, S3, Athena, SFTP, Microsoft Fabric, PostGIS
+- 9 vector database loaders: pgvector, Snowflake Vector, BigQuery Vector, Chroma, Milvus, Pinecone, Weaviate, Qdrant, LanceDB
+- Chunked parallel processing, compression (gz/bz2/zip/zstd/lz4), incremental loading, checkpoint/resume
+- Modular architecture: 112 Python files across 13 packages with a 7-layer import DAG
 
 **Data governance — GDPR / CCPA**
 - Tamper-evident SHA-256 audit ledger — every event is chained; any modification is detectable
 - PII discovery with GDPR Article / CCPA section annotations and HTML report
-- GDPR Art. 17 erasure across all 42 destinations in a single call
+- NLP-powered PII detection — spaCy NER + regex fallback for unstructured text (50+ entity types)
+- GDPR Art. 17 erasure across all destinations in a single call
 - Consent management with per-subject, per-purpose consent, expiry, and withdrawal
 - Purpose limitation — drops columns not approved for the declared purpose
 - Pseudonymization vault with Fernet encryption, context separation, and key rotation
@@ -39,66 +41,42 @@ For healthcare data from Epic EHR systems, `epic_extensions.py` adds a complete 
 - Breach detector with statistical anomaly patterns
 - Data contracts (YAML-defined schema/SLA/quality) with CRITICAL/ERROR/WARNING enforcement
 - Schema drift detection, anomaly alerting, cross-border transfer logging
+- RBAC access policies — column whitelist/blacklist, row-level filtering, fail-closed enforcement
+
+**Data catalog and metadata**
+- SQLite-backed data catalog with FTS5 full-text search
+- Business glossary — maps business terms to physical columns with domain tagging
+- Automated column profiling — null rates, cardinality, distributions, value frequency
+- Automated test generation — creates Great Expectations suites from column profiles
+- ML model registry — tracks models, training datasets, lineage, and version comparison
+- Data versioning — content-addressable snapshots with diff and time-travel checkout
+- OpenLineage event emitter — interoperable lineage in OpenLineage JSON spec v2.0.2
+
+**Data observability**
+- Freshness monitoring, volume anomaly detection, distribution drift alerts
+- Column-level data lineage graph with HTML visualisation
+- Quality scoring, anomaly alerts, SLA monitoring, run metrics
+- Cost estimator (pre-run), reversible loads with snapshot rollback
+- Natural language pipeline builder (Claude API)
+- REST API server and cron-style scheduler
 
 **Healthcare / HIPAA** — `epic_extensions.py`
 - HIPAA Safe Harbor de-identification (45 CFR §164.514(b)) — all 18 identifier types, ZIP restriction rules, age-≥-90 capping
 - Epic Clarity extractor with automatic ZC_ code-table decoding and ETL refresh-window guard
 - Business Associate Agreement (BAA) registry — gates every PHI load
-- IRB/QI protocol registry — column-level enforcement of approved data elements, JSONL usage log for annual reporting
+- IRB/QI protocol registry — column-level enforcement of approved data elements
 - OMOP CDM v5.4 transformer — maps 6 Clarity tables to research-standard domain tables
 - k-anonymity and l-diversity checker with suppress / report / raise enforcement modes
 
 **Continuous compliance monitoring** — `compliance_extensions.py`
-- Continuous controls monitoring — 8 automated checks (audit ledger integrity, encryption keys, consent DB, BAA/IRB expiry, vendor reviews, log directory) with OK / WARN / FAIL status and hourly scheduling support
-- Vendor risk registry — SOC 2 certification status, DPA tracking, risk level classification, overdue review alerting, HTML register report
-- Trust report generator — compiles a single customer-facing security posture HTML report from all governance data: audit events, active BAAs, consent records, vendor coverage, live controls status, and compliance framework coverage table
-
-**Observability**
-- Column-level data lineage graph with HTML visualisation
-- Quality scoring, anomaly alerts, SLA monitoring, run metrics
-- Cost estimator (pre-run), reversible loads with snapshot rollback
-- Natural language pipeline builder (Claude API)
-- Data catalog connectors: Collibra, Alation, Atlan, Informatica
-- REST API server and cron-style scheduler
-- Apache Kafka destination loader — publish governed, PII-masked DataFrames to Kafka topics with configurable keying, compression, delivery guarantees, and upsert/tombstone support for log-compacted topics; real-time governance event publishing to a dedicated Kafka topic
-
-**Vector database destinations**
-- pgvector — PostgreSQL + pgvector extension; nearest-neighbour search via cosine/L2/inner-product operators; IVFFlat and HNSW index support; no separate database needed — works on any existing PostgreSQL instance
-- Snowflake Vector — native VECTOR(FLOAT, N) type and VECTOR_COSINE_SIMILARITY() / VECTOR_L2_DISTANCE() functions; store embeddings alongside structured data in your Snowflake warehouse
-- BigQuery Vector — ARRAY<FLOAT64> vector columns and VECTOR_SEARCH() table-valued function; ANN search with optional vector index; no separate service required
-- Chroma — embedded open-source vector database; in-memory, persistent, or server mode; no infrastructure needed; ideal for local AI development and RAG prototyping
-- Milvus — enterprise-grade vector database for billion-scale workloads; Lite (local file), Standalone, and Cluster modes; full upsert and search API
-- Pinecone — managed cloud vector database with upsert batching, metadata filtering, and namespace support
-- Weaviate — open-source vector database with hybrid search, auto-UUID generation, and collection management
-- Qdrant — high-performance open-source vector database with local file, in-memory, and server modes; full search API
-- LanceDB — serverless embedded vector database backed by Apache Arrow
-
-- CockroachDB — distributed PostgreSQL-compatible database
-
-**Data lake & file format destinations**
-- DuckDB / MotherDuck — embedded analytical SQL (most popular local analytical database); in-memory, persistent file, or cloud via MotherDuck
-- Parquet — columnar file format to local disk, S3, GCS, or Azure Blob; partitioned datasets supported
-- Delta Lake — open table format for Databricks and Spark; ACID transactions, time travel, MERGE upsert
-- Apache Iceberg — open table format for AWS Glue, Athena, and Spark; REST, Glue, Hive, and SQL catalog backends
-- Amazon S3 / GCS / Azure Blob — write CSV, JSON, JSONL, or Parquet to any major object store
-- AWS Athena — serverless SQL over S3; writes Parquet to staging then repairs Athena table metadata
-- SFTP — upload CSV, JSON, JSONL, or Parquet to remote SFTP servers; password or private key auth
-- Microsoft Fabric / OneLake — write Parquet or Delta Lake tables to Fabric Lakehouses via ADLS Gen2
-- PostGIS — PostgreSQL with native geospatial geometry columns; WKT strings converted via ST_GeomFromText(); ON CONFLICT upsert
-- DuckDB / MotherDuck — embedded analytical database and cloud-hosted variant
-- Parquet — columnar file format to local disk, S3, GCS, or Azure Blob
-- Delta Lake — open table format with ACID transactions and MERGE upsert
-- Apache Iceberg — open table format for AWS Glue, Athena, Snowflake, and Spark
-- S3 / GCS / Azure Blob — object storage destinations (CSV, JSON, JSONL, Parquet)
-- AWS Athena — serverless SQL over S3 via Parquet staging
-- SFTP — write files to remote servers via SSH (password or private key)
-- Microsoft Fabric / OneLake — write to Fabric Lakehouses via ADLS Gen2
-- PostGIS — PostgreSQL with native geospatial geometry columns; uses the dedicated `cockroachdb://` SQLAlchemy dialect when available with automatic retry logic; falls back to `psycopg2` for zero-extra-dependency installs; supports CockroachDB Cloud (SSL), local dev, and ON CONFLICT upsert
+- 8 automated controls: audit ledger integrity, encryption keys, consent DB, BAA/IRB expiry, vendor reviews, log directory
+- Vendor risk registry — SOC 2 status, DPA tracking, risk classification
+- Trust report generator — customer-facing security posture HTML report
 
 **Grafana integration** — `grafana_extensions.py`
-- MetricsSink — writes pipeline run summaries, per-stage timing, and compliance control status to a SQLite database that Grafana queries via its SQLite data source plugin
-- PrometheusExporter — exposes pipeline and compliance metrics on a local `/metrics` HTTP endpoint in Prometheus text format for Grafana's Prometheus data source; no extra infrastructure required
-- GrafanaDashboardGenerator — generates a ready-to-import Grafana dashboard JSON pre-wired with panels for pipeline throughput, run status, compliance controls, audit event volume, PII detection trends, and DLQ row counts
+- MetricsSink — SQLite for Grafana's SQLite data source plugin
+- PrometheusExporter — `/metrics` HTTP endpoint in Prometheus text format
+- GrafanaDashboardGenerator — ready-to-import JSON dashboard
 
 ---
 
@@ -106,56 +84,64 @@ For healthcare data from Epic EHR systems, `epic_extensions.py` adds a complete 
 
 ```
 data-governance-pipeline/
-├── pipeline_v3.py                 # Main pipeline — 53 classes, 42 loaders, wizard
-├── governance_extensions.py       # 8 GDPR/CCPA governance classes
-├── epic_extensions.py             # 6 Epic EHR / HIPAA classes
-├── compliance_extensions.py       # 3 continuous compliance monitoring classes
-├── grafana_extensions.py          # 3 Grafana observability classes
-├── metadata_extensions.py         # 16 metadata and lineage classes
-├── pipeline_additions.py          # 10 data product and observability classes
-├── catalog_connectors.py          # 4 data catalog connectors (Collibra, Alation, Atlan, Informatica)
-├── pipeline_streaming.py          # Kafka extractor + KafkaLoader destination
-├── pipeline_scheduler.py          # Cron-style pipeline scheduler
-├── pipeline_api.py                # REST API server (/run, /status endpoints)
-├── pipeline_v2.py                 # Earlier standalone pipeline (5 destinations)
-├── pipeline.py                    # Original minimal pipeline
-├── test_loader_dispatch.py        # 214 loader dispatch tests (42 destinations)
-├── test_governance_extensions.py  # 81 GDPR/CCPA governance tests
-├── test_epic_extensions.py        # 76 Epic EHR / HIPAA tests
-├── test_compliance_extensions.py  # 56 compliance monitoring tests
-├── test_grafana_extensions.py     # 60 Grafana integration tests
-├── requirements.txt               # Core dependencies
-├── requirements_v2.txt            # Optional cloud/enterprise drivers
-├── pyproject.toml                 # Package metadata and optional install extras
-├── CHANGELOG.md                   # Version history
-├── LICENSE                        # MIT license
-├── CLAUDE.md                      # Coding standards for Claude Code
-├── sample_data.json               # Synthetic sample data (4 rows)
-├── sample_data_v3.json            # Extended synthetic sample (4 rows, nested)
-├── CONTRIBUTING.md                # How to contribute
-└── .env.example                   # Credential template — copy to .env
+├── pipeline_v3.py                    # Backward-compat shim — re-exports all public names
+├── pipeline/                         # Modular package (112 files, 13 subpackages)
+│   ├── constants.py                  # Layer 0 — flags, paths, version
+│   ├── governance_logger.py          # Layer 1 — tamper-evident audit ledger
+│   ├── extract.py                    # Layer 2 — 12-format extractor
+│   ├── transform.py                  # Layer 2 — cleaning, dedup, PII masking
+│   ├── profiler.py                   # Layer 2 — column profiling
+│   ├── schema_validator.py           # Layer 2 — Great Expectations integration
+│   ├── business_rules.py             # Layer 2 — rule engine
+│   ├── loaders/                      # 28 standard + 9 vector destination loaders
+│   │   ├── base.py                   # BaseLoader, SQL identifier validation
+│   │   ├── sql_loader.py             # PostgreSQL / MySQL / SQL Server
+│   │   ├── snowflake_loader.py
+│   │   ├── bigquery_loader.py
+│   │   ├── vector/                   # 9 vector DB loaders
+│   │   └── ...
+│   ├── privacy/                      # PII detection, encryption, erasure, GDPR
+│   │   ├── nlp_pii_detector.py       # NER-based PII scanner
+│   │   ├── column_encryptor.py
+│   │   ├── erasure_handler.py
+│   │   └── ...
+│   ├── quality/                      # Scoring, anomalies, contracts, profiling
+│   │   ├── column_profiler.py        # Automated column statistics
+│   │   ├── test_generator.py         # Auto-generate Great Expectations
+│   │   ├── data_quality_scorer.py
+│   │   └── ...
+│   ├── catalog/                      # Data catalog + business glossary
+│   │   ├── catalog_store.py          # SQLite-backed metadata store
+│   │   ├── catalog_search.py         # FTS5 full-text search
+│   │   └── glossary.py               # Business glossary
+│   ├── security/                     # RBAC access policies
+│   │   └── access_policy.py
+│   ├── monitoring/                   # SLA, metrics, observability
+│   │   ├── observability.py          # Freshness, volume, drift
+│   │   ├── sla_monitor.py
+│   │   └── metrics_collector.py
+│   ├── lineage/                      # OpenLineage event emitter
+│   │   └── openlineage_emitter.py
+│   ├── versioning/                   # Content-addressable data snapshots
+│   │   └── snapshot_store.py
+│   ├── ml_governance/                # AI/ML model registry
+│   │   └── model_registry.py
+│   ├── advanced/                     # Reversible loads, DLQ replay, NL builder
+│   ├── reporting/                    # HTML reports, lineage graphs, cost estimator
+│   └── streaming/                    # Kafka/Kinesis/Pub/Sub extractors
+├── tests/                            # 711 tests across 16 test files
+│   ├── test_new_features.py          # 38 tests for catalog, RBAC, lineage, etc.
+│   ├── test_security.py              # Security hardening tests
+│   ├── test_loaders/                 # Loader dispatch tests
+│   └── test_extensions/              # Governance, HIPAA, compliance, Grafana
+├── governance_extensions.py          # 8 GDPR/CCPA governance classes
+├── epic_extensions.py                # 6 Epic EHR / HIPAA classes
+├── compliance_extensions.py          # 3 continuous compliance monitoring classes
+├── grafana_extensions.py             # 3 Grafana observability classes
+├── pyproject.toml                    # Package metadata and optional install extras
+├── CLAUDE.md                         # Coding standards
+└── .env.example                      # Credential template — copy to .env
 ```
-
-| File | Lines |
-|------|------:|
-| `pipeline_v3.py` | 21,390 |
-| `metadata_extensions.py` | 2,606 |
-| `pipeline_v2.py` | 2,583 |
-| `governance_extensions.py` | 2,326 |
-| `catalog_connectors.py` | 2,291 |
-| `epic_extensions.py` | 2,275 |
-| `pipeline_additions.py` | 1,788 |
-| `compliance_extensions.py` | 1,241 |
-| `grafana_extensions.py` | 1,089 |
-| `test_epic_extensions.py` | 992 |
-| `pipeline.py` | 709 |
-| `test_governance_extensions.py` | 708 |
-| `test_loader_dispatch.py` | 2,621 |
-| `test_grafana_extensions.py` | 652 |
-| `test_compliance_extensions.py` | 644 |
-| `pipeline_streaming.py` | 802 |
-| `pipeline_scheduler.py` | 352 |
-| `pipeline_api.py` | 339 |
 
 ---
 
@@ -185,7 +171,7 @@ python pipeline_v3.py
 The wizard asks:
 - Where is your source? (file path, database table, API, or stream)
 - GDPR / CCPA compliance questions (purpose, legal basis, data subjects)
-- Which destination? (choose from 18 platforms)
+- Which destination? (choose from 37 platforms)
 - Review the run plan, then confirm
 
 **4. Optional: cloud and enterprise drivers**
@@ -204,27 +190,102 @@ pip install ".[sap]"          # SAP HANA and Datasphere
 
 ## Usage examples
 
-### File → PostgreSQL
+### Data catalog and profiling
 
 ```python
-# Non-interactive run with all options specified upfront
-import subprocess
-subprocess.run([
-    "python", "pipeline_v3.py",
-    "--src",     "employees.csv",
-    "--dest",    "postgresql",
-    "--purpose", "analytics",
-    "--no-wizard",
-])
+from pipeline.catalog import CatalogStore, CatalogSearch, BusinessGlossary
+from pipeline.quality.column_profiler import ColumnProfiler
+from pipeline.governance_logger import GovernanceLogger
+
+gov = GovernanceLogger(run_id="run_001", src="crm_export")
+
+# Register a dataset in the catalog
+cat = CatalogStore(gov)
+cat.register_dataset(df, "customers", owner="data-team", domain="CRM",
+                     tags=["production", "pii"])
+
+# Profile columns automatically
+profiler = ColumnProfiler(gov)
+profile = profiler.profile(df, dataset_name="customers")
+# → null rates, cardinality, distributions, top values per column
+
+# Full-text search across all registered datasets
+search = CatalogSearch(gov)
+results = search.search("customer email PII")
+
+# Business glossary
+glossary = BusinessGlossary(gov)
+glossary.add_term("Customer LTV", "Lifetime value in USD",
+                  domain="Finance", columns=["customers.ltv_usd"])
+```
+
+### RBAC access control
+
+```python
+from pipeline.security import AccessPolicy
+
+policy = AccessPolicy(gov)
+policy.add_role("analyst",
+                allowed_columns=["name", "revenue", "region"],
+                denied_columns=["ssn", "salary"],
+                row_filter="region == 'US'")
+policy.assign_role("alice", "analyst")
+
+safe_df = policy.enforce(df, user="alice", dataset="customers")
+# → ssn and salary dropped, only US rows returned
+```
+
+### Data versioning and lineage
+
+```python
+from pipeline.versioning import SnapshotStore
+from pipeline.lineage import OpenLineageEmitter
+
+# Content-addressable snapshots
+store = SnapshotStore(gov)
+v1 = store.snapshot(df, "customers", message="Initial load")
+v2 = store.snapshot(df_updated, "customers", message="Added email column")
+diff = store.diff("customers", version_a=1, version_b=2)
+old_df = store.checkout("customers", version=1)  # time travel
+
+# OpenLineage events (compatible with Marquez, DataHub, OpenMetadata)
+emitter = OpenLineageEmitter(gov, namespace="production")
+emitter.emit_start("extract", inputs=["s3://bucket/raw.csv"])
+emitter.emit_complete("extract", outputs=["postgres://db/staging"])
+```
+
+### ML model governance
+
+```python
+from pipeline.ml_governance import ModelRegistry
+
+reg = ModelRegistry(gov)
+reg.register_model("churn_predictor", framework="sklearn",
+                   datasets=["customers", "transactions"])
+reg.log_training_run("churn_predictor",
+                     metrics={"accuracy": 0.92, "f1": 0.88})
+
+# Which models break if the customers table changes?
+affected = reg.impact_analysis("customers")
+```
+
+### NLP PII detection
+
+```python
+from pipeline.privacy.nlp_pii_detector import NLPPIIDetector
+
+detector = NLPPIIDetector(gov)
+findings = detector.scan(df, text_columns=["notes", "comments"])
+# → finds emails, phone numbers, SSNs, credit cards via regex
+# → finds person names, locations, organizations via spaCy NER
+classification = detector.scan_and_classify(df)
 ```
 
 ### GDPR governance
 
 ```python
 from pipeline_v3 import GovernanceLogger
-from governance_extensions import (
-    RoPAGenerator, ConsentManager, PseudonymVault
-)
+from governance_extensions import RoPAGenerator, ConsentManager, PseudonymVault
 
 gov = GovernanceLogger(run_id="run_001", src="hr_system")
 
@@ -240,130 +301,30 @@ ropa.add_activity(
     security_measures=["AES-256 encryption", "access logging"],
 )
 ropa.save_html("ropa_report.html")
-
-# Pseudonymization vault (preserves cross-table joins)
-vault = PseudonymVault(gov, context="hr")
-df["employee_id"] = df["employee_id"].apply(
-    lambda v: vault.pseudonymise(str(v))
-)
-
-# Consent gate — filter out rows without marketing consent
-cm = ConsentManager(gov)
-cm.record("E001", purpose="marketing", granted=True, expiry_days=365)
-df = cm.filter_dataframe(df, subject_col="employee_id", purpose="marketing")
 ```
 
 ### HIPAA Safe Harbor de-identification
 
 ```python
 from pipeline_v3 import GovernanceLogger
-from epic_extensions import HIPAASafeHarborFilter, BAATracker, IRBApprovalGate
+from epic_extensions import HIPAASafeHarborFilter, BAATracker
 
-gov     = GovernanceLogger(run_id="run_001", src="clarity_extract")
-safe    = HIPAASafeHarborFilter(gov, hash_identifiers=True)
-tracker = BAATracker(gov)
-gate    = IRBApprovalGate(gov)
+gov  = GovernanceLogger(run_id="run_001", src="clarity_extract")
+safe = HIPAASafeHarborFilter(gov, hash_identifiers=True)
 
-# Register BAA for the research destination
-tracker.register_baa(
-    destination_id = "snowflake_research",
-    vendor         = "Snowflake Inc.",
-    signed_date    = "2024-01-15",
-    expiry_date    = "2026-01-14",
-    phi_types      = ["encounter_data", "diagnosis_codes"],
-)
-
-# Register IRB protocol
-gate.register_protocol(
-    protocol_id      = "IRB-2024-1234",
-    study_title      = "30-day readmission prediction",
-    pi_name          = "Dr. Jane Smith",
-    approved_date    = "2024-03-01",
-    expiry_date      = "2025-03-01",
-    approved_columns = ["PAT_ENC_CSN_ID", "CONTACT_DATE",
-                        "CURRENT_ICD10_LIST"],
-    phi_allowed      = False,
-)
-
-# De-identify and gate
+# De-identify — all 18 HIPAA identifiers, ZIP rules, age capping
 clean_df = safe.apply(clarity_df, source_label="PAT_ENC")
-clean_df = gate.gate_dataframe(clean_df, protocol_id="IRB-2024-1234")
-tracker.check_phi_load("snowflake_research")   # raises if BAA missing/expired
-# → load to Snowflake
-```
 
-### OMOP CDM transformation
-
-```python
-from epic_extensions import ClarityExtractor, OMOPTransformer
-
-cx = ClarityExtractor(gov, cfg={
-    "host":     "clarity-db.hospital.org",
-    "db_name":  "Clarity",
-    "user":     "svc_analytics",
-    "password": "...",
-})
-omop = OMOPTransformer(gov, vocabulary_path="omop_vocab.csv")
-
-encounters = cx.get_encounters(start_date="2024-01-01", decode_codes=True)
-diagnoses  = cx.get_diagnoses(start_date="2024-01-01")
-
-visit_df = omop.to_visit_occurrence(encounters)
-cond_df  = omop.to_condition_occurrence(diagnoses)
-```
-
-### Grafana dashboard
-
-```python
-from grafana_extensions import MetricsSink, PrometheusExporter, GrafanaDashboardGenerator
-from pipeline_v3 import GovernanceLogger
-from compliance_extensions import ComplianceMonitor
-
-gov     = GovernanceLogger(run_id="run_001", src="employees.csv")
-sink    = MetricsSink(gov)
-monitor = ComplianceMonitor(gov)
-
-# After each pipeline run — record to SQLite for Grafana
-sink.record_run(
-    run_id="run_001", source="employees.csv", destination="snowflake",
-    rows_extracted=50_000, rows_loaded=49_987, rows_failed=13,
-    duration_sec=42.7, status="success", pii_columns=4,
+# Gate PHI loads behind valid BAA
+tracker = BAATracker(gov)
+tracker.register_baa(
+    destination_id="snowflake_research",
+    vendor="Snowflake Inc.",
+    signed_date="2024-01-15",
+    expiry_date="2026-01-14",
+    phi_types=["encounter_data", "diagnosis_codes"],
 )
-
-# After each compliance check — record control status
-results = monitor.run_all()
-sink.record_controls(results)
-
-# Generate ready-to-import Grafana dashboard JSON
-gen = GrafanaDashboardGenerator(
-    title="Data Governance Pipeline",
-    datasource_name="Pipeline Metrics",
-    datasource_type="sqlite",
-)
-gen.generate("grafana_dashboard.json")
-# → In Grafana: Dashboards → New → Import → Upload JSON file
-
-# Alternative: Prometheus endpoint (real-time scraping)
-exporter = PrometheusExporter(gov, port=8000)
-exporter.start()    # Grafana scrapes http://localhost:8000/metrics
-exporter.update_run(rows_loaded=49_987, status="success", duration_sec=42.7)
-exporter.update_controls(results)
-```
-
-### k-anonymity enforcement
-
-```python
-from epic_extensions import PHIKAnonymityChecker
-
-checker = PHIKAnonymityChecker(gov, k=5, l_diversity=3)
-
-safe_df = checker.enforce(
-    de_identified_df,
-    quasi_ids     = ["age_group", "zip3", "gender_concept_id"],
-    sensitive_col = "condition_concept_id",
-    action        = "suppress",  # removes groups that violate k=5
-)
-checker.save_report("kanon_report.html")
+tracker.check_phi_load("snowflake_research")  # raises if BAA missing/expired
 ```
 
 ---
@@ -371,24 +332,22 @@ checker.save_report("kanon_report.html")
 ## Running tests
 
 ```bash
-python test_loader_dispatch.py
-python test_governance_extensions.py
-python test_epic_extensions.py
-
-# Or with pytest
 pytest -v
 ```
 
-**493 tests, all passing.**
+**711 tests, all passing.**
 
 | Suite | Tests |
 |-------|------:|
-| `test_loader_dispatch.py` | 214 |
-| `test_governance_extensions.py` | 81 |
-| `test_epic_extensions.py` | 80 |
-| `test_compliance_extensions.py` | 58 |
-| `test_grafana_extensions.py` | 60 |
-| **Total** | **493** |
+| Loader dispatch | 232 |
+| Governance extensions | 59 |
+| Epic/HIPAA extensions | 80 |
+| Compliance monitoring | 58 |
+| Grafana integration | 60 |
+| Security hardening | 34 |
+| New features (catalog, RBAC, lineage, etc.) | 38 |
+| Logging, exceptions, base loader, dry run, etc. | 150 |
+| **Total** | **711** |
 
 ---
 
@@ -418,7 +377,7 @@ Copy `.env.example` to `.env` and fill in your values.
 
 | Standard | Coverage |
 |---|---|
-| GDPR Art. 17 — right to erasure | `ErasureHandler` — all 18 destinations |
+| GDPR Art. 17 — right to erasure | `ErasureHandler` — all destinations |
 | GDPR Art. 15/20 — subject access | `DSARResponder` — portable export |
 | GDPR Art. 25 — privacy by design | Consent gate, purpose limitation, pseudonymisation |
 | GDPR Art. 30 — records of processing | `RoPAGenerator` |
@@ -432,34 +391,29 @@ Copy `.env.example` to `.env` and fill in your values.
 
 ---
 
-## License
+## Security
 
-MIT — see [LICENSE](LICENSE).
+- **RBAC enforcement** — fail-closed column/row access policies with injection-safe row filters
+- **SQL injection protection** — `validate_sql_identifier()` on all table/schema/column names across all loaders
+- **XXE protection** — `defusedxml` for all XML parsing
+- **Archive safety** — path traversal and zip bomb protection in decompression
+- **Atomic config writes** — write-to-temp-then-rename prevents corruption on crash
+- **Credential management** — .env files gitignored, secrets never logged, SensitiveDataFilter scrubs log output
+- **Input validation** — path traversal protection, identifier regex validation on all API inputs
+- **API authentication** — Bearer token required on all endpoints (except /health)
+- **Audit trail** — SHA-256 chained tamper-evident ledger of all operations
 
 ---
 
-## Security
+## License
 
-The pipeline includes built-in security controls:
-
-- **IAM role authentication** — Redshift COPY prefers IAM roles over inline credentials
-- **Input validation** — path traversal protection, identifier regex validation on all API inputs
-- **Rate limiting** — max 5 concurrent API runs to prevent resource exhaustion
-- **API authentication** — Bearer token required on all endpoints (except /health)
-- **Credential management** — .env files gitignored, secrets never logged, environment variables preferred
-- **Audit trail** — SHA-256 chained tamper-evident ledger of all operations
+MIT — see [LICENSE](LICENSE).
 
 ## Legal
 
 - [Privacy Policy](docs/PRIVACY.md) — Pipeline itself collects zero data. Guidance for processing PII/PHI.
 - [Terms of Service](docs/TERMS.md) — MIT license, data controller responsibilities, compliance tools ≠ compliance guarantees.
-- [CCPA Compliance](docs/CCPA.md) — Maps each CCPA right to specific pipeline features. Operator checklist included.
-
-## License
-
-MIT
-
----
+- [CCPA Compliance](docs/CCPA.md) — Maps each CCPA right to specific pipeline features.
 
 ## Contributing
 
