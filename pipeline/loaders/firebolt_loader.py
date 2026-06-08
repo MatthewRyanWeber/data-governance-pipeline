@@ -96,7 +96,7 @@ class FireboltLoader(BaseLoader):
                 f"VALUES {values_rows}"
             )
             cur.execute(insert_sql)
-            logger.info("[FB] INSERT INTO %s -- %s rows", table, f"{len(df):,}")
+            logger.info("[FIREBOLT] INSERT INTO %s -- %s rows", table, f"{len(df):,}")
         finally:
             cur.close()
             conn.close()
@@ -142,7 +142,7 @@ class FireboltLoader(BaseLoader):
                 f"WHEN NOT MATCHED THEN INSERT ({all_cols}) VALUES ({stage_cols})"
             )
             cur.execute(merge_sql)
-            logger.info("[FB] MERGE INTO %s -- %s rows", table, f"{len(df):,}")
+            logger.info("[FIREBOLT] MERGE INTO %s -- %s rows", table, f"{len(df):,}")
             self.gov.transformation_applied(
                 "FIREBOLT_UPSERT_COMPLETE",
                 {"table": table, "natural_keys": natural_keys, "rows": len(df)},

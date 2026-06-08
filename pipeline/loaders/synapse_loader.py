@@ -109,7 +109,7 @@ class SynapseLoader(BaseLoader):
         ).get_blob_client(container, blob_name)
         with open(tmp_path, "rb") as data:
             blob_client.upload_blob(data, overwrite=True)
-        logger.info("[SY] Uploaded blob: %s...", blob_url[:60])
+        logger.info("[SYNAPSE] Uploaded blob: %s...", blob_url[:60])
         conn_str = self._connection_string(cfg)
         conn = _pyodbc.connect(conn_str, autocommit=False)
         cur = conn.cursor()
@@ -125,9 +125,9 @@ class SynapseLoader(BaseLoader):
             )
             cur.execute(copy_sql)
             conn.commit()
-            logger.info("[SY] COPY INTO %s -- %s rows", fqt, f"{len(df):,}")
+            logger.info("[SYNAPSE] COPY INTO %s -- %s rows", fqt, f"{len(df):,}")
         except Exception as exc:
-            logger.warning("[SY] COPY INTO failed -- falling back to to_sql(): %s", exc)
+            logger.warning("[SYNAPSE] COPY INTO failed -- falling back to to_sql(): %s", exc)
             self._sql_fallback(df, cfg, table, if_exists)
         finally:
             cur.close()
@@ -193,7 +193,7 @@ class SynapseLoader(BaseLoader):
             cur.execute(merge_sql)
             cur.execute(f"DROP TABLE IF EXISTS {fqt_tmp}")
             conn.commit()
-            logger.info("[SY] MERGE INTO %s -- %s rows", fqt, f"{len(df):,}")
+            logger.info("[SYNAPSE] MERGE INTO %s -- %s rows", fqt, f"{len(df):,}")
             self.gov.transformation_applied(
                 "SYNAPSE_UPSERT_COMPLETE",
                 {"table": table, "natural_keys": natural_keys,

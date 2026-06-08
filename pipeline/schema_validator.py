@@ -43,14 +43,14 @@ class SchemaValidator:
 
     def build_suite(self, df: "pd.DataFrame", interactive: bool = True) -> list:
         if not HAS_GX:
-            logger.warning("[GX] great-expectations not installed — skipping validation.")
+            logger.warning("[GREAT_EXPECTATIONS] great-expectations not installed — skipping validation.")
             return []
 
         from great_expectations import expectations as gxe
         import pandas as pd
 
         expectations = []
-        logger.info("[GX] Auto-generating baseline expectations…")
+        logger.info("[GREAT_EXPECTATIONS] Auto-generating baseline expectations…")
 
         for col in df.columns:
             expectations.append(gxe.ExpectColumnToExist(column=col))
@@ -67,7 +67,7 @@ class SchemaValidator:
                         max_value=float(non_null.max()) + hd,
                     ))
 
-        logger.info("[GX] %d baseline expectation(s) generated.", len(expectations))
+        logger.info("[GREAT_EXPECTATIONS] %d baseline expectation(s) generated.", len(expectations))
         if interactive:
             expectations = self._interactive_builder(df, expectations)
         return expectations
@@ -76,7 +76,7 @@ class SchemaValidator:
         from great_expectations import expectations as gxe
 
         cols = list(df.columns)
-        logger.info("[GX] Add custom expectations (0 to finish):")
+        logger.info("[GREAT_EXPECTATIONS] Add custom expectations (0 to finish):")
         while True:
             print("  1.Not-null  2.Unique  3.Range  4.Allowed-values  5.Regex  6.Min-rows  0.Done")
             c = prompt("Add", "0")
@@ -123,7 +123,7 @@ class SchemaValidator:
         import great_expectations as gx
 
         rc = DEFAULT_RUN_CONTEXT
-        logger.info("[GX] Running schema validation…")
+        logger.info("[GREAT_EXPECTATIONS] Running schema validation…")
         ctx = gx.get_context(mode="ephemeral")
         ds = ctx.data_sources.add_pandas("pipeline_ds")
         asset = ds.add_dataframe_asset("pipeline_asset")
@@ -161,7 +161,7 @@ class SchemaValidator:
         self.gov.validation_result(self.suite_name, result.success, passed, failed, total)
 
         logger.info(
-            "[GX] %s %d/%d passed | %d row(s) flagged.",
+            "[GREAT_EXPECTATIONS] %s %d/%d passed | %d row(s) flagged.",
             "✓" if result.success else "⚠", passed, total, len(bad_idx),
         )
 

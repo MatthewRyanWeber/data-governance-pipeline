@@ -65,7 +65,7 @@ class IncrementalFilter:
             logger.debug("Datetime comparison failed for %s: %s, falling back to raw comparison", col, exc)
             df = df[df[col] > last_wm].copy()
         self.gov.watermark_event("READ", col, last_wm, filtered=before - len(df))
-        logger.info("[INCR] Filtered %d rows | %d new", before - len(df), len(df))
+        logger.info("[INCREMENTAL] Filtered %d rows | %d new", before - len(df), len(df))
         return df
 
     def update_watermark(self, df, col: str, source: str) -> None:

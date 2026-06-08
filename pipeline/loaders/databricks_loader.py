@@ -117,7 +117,7 @@ class DatabricksLoader(BaseLoader):
             for i in range(0, len(rows), batch_size):
                 cur.executemany(insert_sql, rows[i:i + batch_size])
             version = self._table_version(cur, fqt)
-            logger.info("[DB] INSERT INTO %s -- %s rows (Delta version %s)",
+            logger.info("[DATABRICKS] INSERT INTO %s -- %s rows (Delta version %s)",
                         fqt, f"{len(df):,}", version)
             self._log_delta_version(table, version, "INSERT")
             conn.commit()
@@ -190,7 +190,7 @@ class DatabricksLoader(BaseLoader):
             """
             cur.execute(merge_sql)
             version = self._table_version(cur, fqt)
-            logger.info("[DB] MERGE INTO %s -- %s rows (Delta version %s)",
+            logger.info("[DATABRICKS] MERGE INTO %s -- %s rows (Delta version %s)",
                         fqt, f"{len(df):,}", version)
             self._log_delta_version(table, version, "MERGE")
             conn.commit()

@@ -137,7 +137,7 @@ class QuickBooksLoader(BaseLoader):
 
         if if_exists == "replace":
             logger.warning(
-                "[QBO] QuickBooks does not support bulk delete. "
+                "[QUICKBOOKS] QuickBooks does not support bulk delete. "
                 "'replace' mode will append/update rows only."
             )
 
@@ -149,7 +149,7 @@ class QuickBooksLoader(BaseLoader):
 
         created = updated = skipped = errors = 0
 
-        logger.info("[QBO] Writing %s rows -> %s", f"{len(df):,}", entity)
+        logger.info("[QUICKBOOKS] Writing %s rows -> %s", f"{len(df):,}", entity)
         records = df.to_dict(orient="records")
         with requests.Session() as session:
             session.headers.update(headers)
@@ -163,7 +163,7 @@ class QuickBooksLoader(BaseLoader):
                     missing = self._validate_row(body, entity)
                     if missing:
                         logger.warning(
-                            "[QBO] Row %s: skipping -- missing required "
+                            "[QUICKBOOKS] Row %s: skipping -- missing required "
                             "field(s): %s", idx, missing
                         )
                         skipped += 1
@@ -181,11 +181,11 @@ class QuickBooksLoader(BaseLoader):
                         time.sleep(delay)
 
                 except Exception as exc:
-                    logger.error("[QBO] Row %s: %s", idx, exc)
+                    logger.error("[QUICKBOOKS] Row %s: %s", idx, exc)
                     errors += 1
 
         logger.info(
-            "[QBO] %s: %d created  %d updated  %d skipped  %d errors",
+            "[QUICKBOOKS] %s: %d created  %d updated  %d skipped  %d errors",
             entity, created, updated, skipped, errors,
         )
 

@@ -46,7 +46,7 @@ class ReferentialIntegrityChecker:
         import pandas as pd
 
         if fk_col not in df.columns:
-            logger.warning("[RI] Foreign key column '%s' not found — skipping.", fk_col)
+            logger.warning("[REFERENTIAL_INTEGRITY] Foreign key column '%s' not found — skipping.", fk_col)
             return df
 
         ext = Path(reference_path).suffix.lower()
@@ -57,7 +57,7 @@ class ReferentialIntegrityChecker:
         elif ext == ".json":
             ref_df = pd.read_json(reference_path)
         else:
-            logger.warning("[RI] Unsupported reference format: %s", ext)
+            logger.warning("[REFERENTIAL_INTEGRITY] Unsupported reference format: %s", ext)
             return df
 
         valid_keys = set(ref_df[reference_col].dropna().astype(str))

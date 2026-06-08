@@ -77,7 +77,7 @@ class ClickHouseLoader(BaseLoader):
         for attempt in range(1, 4):
             try:
                 client.insert_df(table, df_ch, database=database)
-                logger.info("[CH] INSERT INTO %s.%s -- %s rows",
+                logger.info("[CLICKHOUSE] INSERT INTO %s.%s -- %s rows",
                             database, table, f"{len(df):,}")
                 return
             except Exception as exc:
@@ -120,7 +120,7 @@ class ClickHouseLoader(BaseLoader):
         df_ch = self._prepare_df(df_with_ts)
         client.insert_df(table, df_ch, database=database)
         client.command(f"OPTIMIZE TABLE `{database}`.`{table}` FINAL")
-        logger.info("[CH] UPSERT -> %s.%s -- %s rows "
+        logger.info("[CLICKHOUSE] UPSERT -> %s.%s -- %s rows "
                     "(ReplacingMergeTree + OPTIMIZE FINAL)",
                     database, table, f"{len(df):,}")
         self.gov.transformation_applied(

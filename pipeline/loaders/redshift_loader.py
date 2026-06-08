@@ -128,7 +128,7 @@ class RedshiftLoader(BaseLoader):
             aws_secret_access_key=cfg.get("aws_secret_access_key"),
         )
         s3.upload_file(tmp_path, bucket, key)
-        logger.info("[RS] Uploaded s3://%s/%s", bucket, key)
+        logger.info("[REDSHIFT] Uploaded s3://%s/%s", bucket, key)
 
         conn = self._connect(cfg)
         cur = conn.cursor()
@@ -160,7 +160,7 @@ class RedshiftLoader(BaseLoader):
                     f"SECRET_ACCESS_KEY '{secret_key}'"
                 )
                 logger.warning(
-                    "[RS] Using inline credentials for COPY "
+                    "[REDSHIFT] Using inline credentials for COPY "
                     "-- prefer IAM_ROLE for production"
                 )
             copy_sql = (
@@ -172,10 +172,10 @@ class RedshiftLoader(BaseLoader):
             )
             cur.execute(copy_sql)
             conn.commit()
-            logger.info("[RS] COPY INTO %s -- %s rows", fqt, f"{len(df):,}")
+            logger.info("[REDSHIFT] COPY INTO %s -- %s rows", fqt, f"{len(df):,}")
 
         except Exception as exc:
-            logger.warning("[RS] S3 COPY failed -- falling back to to_sql(): %s", exc)
+            logger.warning("[REDSHIFT] S3 COPY failed -- falling back to to_sql(): %s", exc)
             self._sql_fallback(df, cfg, table, if_exists)
         finally:
             cur.close()
@@ -232,7 +232,7 @@ class RedshiftLoader(BaseLoader):
             cur.execute(merge_sql)
             cur.execute(f"DROP TABLE IF EXISTS {fqt_tmp}")
             conn.commit()
-            logger.info("[RS] MERGE INTO %s -- %s rows", fqt, f"{len(df):,}")
+            logger.info("[REDSHIFT] MERGE INTO %s -- %s rows", fqt, f"{len(df):,}")
             self.gov.transformation_applied(
                 "REDSHIFT_UPSERT_COMPLETE",
                 {"table": table, "natural_keys": natural_keys,

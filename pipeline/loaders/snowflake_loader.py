@@ -139,7 +139,7 @@ class SnowflakeLoader(BaseLoader):
                 f"PUT file://{tmp_path} {stage} "
                 "AUTO_COMPRESS=FALSE OVERWRITE=TRUE"
             )
-            logger.info("[SF] PUT %s -> %s", stage_file, stage)
+            logger.info("[SNOWFLAKE] PUT %s -> %s", stage_file, stage)
 
             col_list = ", ".join(f'"{c}"' for c in df.columns)
             file_fmt = (
@@ -154,13 +154,13 @@ class SnowflakeLoader(BaseLoader):
             cur.execute(copy_sql)
             result = cur.fetchone()
             rows = result[3] if result else len(df)
-            logger.info("[SF] COPY INTO %s -- %s rows loaded",
+            logger.info("[SNOWFLAKE] COPY INTO %s -- %s rows loaded",
                         table.upper(), f"{rows:,}")
 
             cur.execute(f"REMOVE {stage}/{stage_file}")
             conn.commit()
         except Exception as exc:
-            logger.warning("[SF] COPY INTO failed -- falling back to to_sql(): %s", exc)
+            logger.warning("[SNOWFLAKE] COPY INTO failed -- falling back to to_sql(): %s", exc)
             self._sql_fallback(df, cfg, table, if_exists)
         finally:
             cur.close()
@@ -241,7 +241,7 @@ class SnowflakeLoader(BaseLoader):
             conn.commit()
             cur.execute(f"DROP TABLE IF EXISTS {fqt_tmp}")
             conn.commit()
-            logger.info("[SF] MERGE INTO %s complete.", table.upper())
+            logger.info("[SNOWFLAKE] MERGE INTO %s complete.", table.upper())
 
             self.gov.transformation_applied(
                 "SNOWFLAKE_UPSERT_COMPLETE",

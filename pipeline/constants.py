@@ -2,8 +2,15 @@
 Pipeline-level constants, PII patterns, dependency flags, and run context.
 
 Layer 0 — no internal package imports.
+
+Revision history
+────────────────
+1.0   2026-06-07   Initial release.
+1.1   2026-06-08   Added MAX_DECOMPRESSED_SIZE.
+1.2   2026-06-08   Added EventCategory enum for audit event categories.
 """
 
+import enum
 import os
 import re
 import threading
@@ -11,6 +18,41 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+
+
+# ── Audit event categories ──────────────────────────────────────────────────
+# Typed enum prevents typo-induced governance gaps (one misspelled string =
+# silent data loss in the audit trail).
+
+class EventCategory(str, enum.Enum):
+    LIFECYCLE = "LIFECYCLE"
+    TRANSFORMATION = "TRANSFORMATION"
+    EXTRACT = "EXTRACT"
+    LOAD = "LOAD"
+    QUALITY = "QUALITY"
+    SCHEMA = "SCHEMA"
+    METRICS = "METRICS"
+    LINEAGE = "LINEAGE"
+    PRIVACY = "PRIVACY"
+    CONSENT = "CONSENT"
+    RETENTION = "RETENTION"
+    VALIDATION = "VALIDATION"
+    PROFILING = "PROFILING"
+    DLQ = "DLQ"
+    INCREMENTAL = "INCREMENTAL"
+    RETRY = "RETRY"
+    NOTIFICATION = "NOTIFICATION"
+    ERROR = "ERROR"
+    SLA = "SLA"
+    ENCRYPTION = "ENCRYPTION"
+    ENRICHMENT = "ENRICHMENT"
+    REFERENTIAL = "REFERENTIAL"
+    ERASURE = "ERASURE"
+    CLASSIFICATION = "CLASSIFICATION"
+    TRANSFER = "TRANSFER"
+    CHECKPOINT = "CHECKPOINT"
+    STANDARDISE = "STANDARDISE"
+    RULES = "RULES"
 
 
 VERSION = "4.0.0"

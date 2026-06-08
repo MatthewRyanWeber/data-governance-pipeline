@@ -98,13 +98,13 @@ class OracleLoader(BaseLoader):
                     cur.executemany(insert_sql, rows, batcherrors=True)
                     batch_errors = cur.getbatcherrors()
                     if batch_errors:
-                        logger.warning("[ORA] %d batch error(s) during INSERT",
+                        logger.warning("[ORACLE] %d batch error(s) during INSERT",
                                        len(batch_errors))
                         for err in batch_errors[:5]:
-                            logger.warning("[ORA] Row %d: %s",
+                            logger.warning("[ORACLE] Row %d: %s",
                                            err.offset, err.message)
                     conn.commit()
-                    logger.info("[ORA] INSERT INTO %s -- %s rows OK, %d quarantined",
+                    logger.info("[ORACLE] INSERT INTO %s -- %s rows OK, %d quarantined",
                                 fqt, f"{len(df) - len(batch_errors):,}",
                                 len(batch_errors))
                     break
@@ -172,7 +172,7 @@ class OracleLoader(BaseLoader):
             )
             cur.execute(merge_sql)
             conn.commit()
-            logger.info("[ORA] MERGE INTO %s -- %s rows", fqt, f"{len(df):,}")
+            logger.info("[ORACLE] MERGE INTO %s -- %s rows", fqt, f"{len(df):,}")
             self.gov.transformation_applied(
                 "ORACLE_UPSERT_COMPLETE",
                 {"table": table, "natural_keys": natural_keys, "rows": len(df)},

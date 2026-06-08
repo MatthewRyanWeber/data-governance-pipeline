@@ -108,7 +108,7 @@ class YellowbrickLoader(BaseLoader):
             )
             cur.copy_expert(copy_sql, csv_buf)
             conn.commit()
-            logger.info("[YB] COPY FROM STDIN -> %s -- %s rows",
+            logger.info("[YELLOWBRICK] COPY FROM STDIN -> %s -- %s rows",
                         fqt, f"{len(df):,}")
         finally:
             cur.close()
@@ -155,7 +155,7 @@ class YellowbrickLoader(BaseLoader):
             cur.execute(merge_sql)
             cur.execute(f"DROP TABLE IF EXISTS {fqt_tmp}")
             conn.commit()
-            logger.info("[YB] MERGE INTO %s -- %s rows", fqt, f"{len(df):,}")
+            logger.info("[YELLOWBRICK] MERGE INTO %s -- %s rows", fqt, f"{len(df):,}")
             self.gov.transformation_applied(
                 "YELLOWBRICK_UPSERT_COMPLETE",
                 {"table": table, "natural_keys": natural_keys, "rows": len(df)},

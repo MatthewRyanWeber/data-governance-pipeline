@@ -149,7 +149,7 @@ class QuickBooksExtractor:
         all_records: list[dict] = []
         start = 1
 
-        logger.info("[QBO] Extracting %s from realm %s",
+        logger.info("[QUICKBOOKS] Extracting %s from realm %s",
                     entity, cfg['realm_id'])
         with requests.Session() as session:
             session.headers.update(headers)
@@ -178,7 +178,7 @@ class QuickBooksExtractor:
                     )
 
                 total_count = qr.get("totalCount", len(entities))
-                logger.info("[QBO]   page start=%d  fetched=%d  total=%s",
+                logger.info("[QUICKBOOKS]   page start=%d  fetched=%d  total=%s",
                             start, len(entities), total_count)
 
                 if len(entities) < page_size:
@@ -186,7 +186,7 @@ class QuickBooksExtractor:
                 start += page_size
 
         df = pd.DataFrame(all_records) if all_records else pd.DataFrame()
-        logger.info("[QBO] %s %s records extracted", f"{len(df):,}", entity)
+        logger.info("[QUICKBOOKS] %s %s records extracted", f"{len(df):,}", entity)
 
         self.gov.transformation_applied("QBO_EXTRACT_COMPLETE", {
             "entity": entity,

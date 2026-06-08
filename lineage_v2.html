@@ -5,39 +5,62 @@
 <title>Data Lineage — 20260228_114143</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
 <style>
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap');
+
+:root {
+  --bg:        #0d0f12;
+  --panel:     #131619;
+  --panel2:    #191d22;
+  --border:    #252a32;
+  --border2:   #2e3540;
+  --amber:     #f0a500;
+  --amber-dim: #7a5200;
+  --green:     #3dd68c;
+  --green-dim: #1a4a38;
+  --red:       #f05252;
+  --blue:      #4fa3e0;
+  --blue-dim:  #1a3a56;
+  --text:      #c8d0da;
+  --text-dim:  #5a6472;
+  --text-mid:  #8a96a4;
+  --mono:      'IBM Plex Mono', monospace;
+  --sans:      'IBM Plex Sans', sans-serif;
+}
+
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:system-ui,sans-serif;background:#0d1117;color:#e6edf3;overflow:hidden;user-select:none}
+body{font-family:var(--sans);background:var(--bg);color:var(--text);overflow:hidden;user-select:none}
 
 /* ── Toolbar ── */
-#toolbar{position:fixed;top:0;left:0;right:0;height:50px;background:#161b22;
-          border-bottom:1px solid #30363d;display:flex;align-items:center;
+#toolbar{position:fixed;top:0;left:0;right:0;height:48px;background:var(--panel);
+          border-bottom:1px solid var(--border);display:flex;align-items:center;
           padding:0 16px;gap:12px;z-index:200}
-#toolbar h1{font-size:.95em;font-weight:600;color:#58a6ff;white-space:nowrap}
-#toolbar .sep{width:1px;height:24px;background:#30363d}
-.filter-btn{display:flex;align-items:center;gap:5px;padding:4px 10px;border-radius:20px;
-             border:1px solid #30363d;background:transparent;color:#8b949e;
-             font-size:.78em;cursor:pointer;transition:all .15s}
-.filter-btn.active{background:#1f6feb22;border-color:#1f6feb;color:#58a6ff}
-.filter-btn:hover{border-color:#8b949e;color:#e6edf3}
+#toolbar h1{font-family:var(--mono);font-size:13px;font-weight:600;color:var(--amber);white-space:nowrap;letter-spacing:-0.02em}
+#toolbar .sep{width:1px;height:24px;background:var(--border)}
+.filter-btn{display:flex;align-items:center;gap:8px;padding:4px 12px;border-radius:4px;
+             border:1px solid var(--border);background:transparent;color:var(--text-dim);
+             font-family:var(--mono);font-size:12px;cursor:pointer;transition:all .15s}
+.filter-btn.active{background:rgba(240,165,0,.1);border-color:var(--amber);color:var(--amber)}
+.filter-btn:hover{border-color:var(--border2);color:var(--text)}
 .dot{width:8px;height:8px;border-radius:50%;display:inline-block}
-#search{margin-left:auto;background:#0d1117;border:1px solid #30363d;color:#e6edf3;
-         padding:5px 12px;border-radius:20px;font-size:.8em;outline:none;width:180px}
-#search:focus{border-color:#58a6ff}
-#search::placeholder{color:#484f58}
-#export-btn{padding:5px 12px;background:#238636;border:none;color:#fff;border-radius:6px;
-             font-size:.8em;cursor:pointer;display:flex;align-items:center;gap:5px}
-#export-btn:hover{background:#2ea043}
-#run-ts{font-size:.72em;color:#484f58;white-space:nowrap}
+#search{margin-left:auto;background:var(--bg);border:1px solid var(--border);color:var(--text);
+         font-family:var(--mono);padding:8px 12px;border-radius:4px;font-size:12px;outline:none;width:200px}
+#search:focus{border-color:var(--amber)}
+#search::placeholder{color:var(--text-dim)}
+#export-btn{padding:8px 16px;background:var(--amber-dim);border:1px solid var(--amber);color:var(--amber);
+             border-radius:4px;font-family:var(--mono);font-size:12px;cursor:pointer;
+             display:flex;align-items:center;gap:8px;transition:all .15s}
+#export-btn:hover{background:var(--amber);color:var(--bg)}
+#run-ts{font-family:var(--mono);font-size:12px;color:var(--text-dim);white-space:nowrap}
 
 /* ── Canvas ── */
-#canvas{position:fixed;top:50px;left:0;right:0;bottom:0}
+#canvas{position:fixed;top:48px;left:0;right:0;bottom:0}
 svg#main{width:100%;height:100%}
 
 /* ── Edges ── */
-.link{stroke:#30363d;stroke-opacity:.8;fill:none;stroke-width:1.5}
-.link-dashed{stroke:#1f6feb;stroke-opacity:.4;stroke-dasharray:5 4;fill:none;stroke-width:1}
+.link{stroke:var(--border2);stroke-opacity:.8;fill:none;stroke-width:1.5}
+.link-dashed{stroke:var(--blue);stroke-opacity:.35;stroke-dasharray:5 4;fill:none;stroke-width:1}
 .link.dimmed,.link-dashed.dimmed{opacity:.04}
-.edge-label{font-size:9px;fill:#6e7681;text-anchor:middle;pointer-events:none}
+.edge-label{font-family:var(--mono);font-size:12px;fill:var(--text-dim);text-anchor:middle;pointer-events:none}
 
 /* ── Nodes ── */
 .node{cursor:pointer;transition:opacity .2s}
@@ -45,78 +68,103 @@ svg#main{width:100%;height:100%}
 .node.focused rect,.node.focused circle,.node.focused .col-pill{filter:brightness(1.35);stroke-width:2.5px!important}
 
 /* Source pill */
-.node-source .n-pill{fill:#0c2d6b;stroke:#58a6ff;stroke-width:1.5;rx:22}
-.node-source text{fill:#cae8ff;font-size:11px;font-weight:600}
+.node-source .n-pill{fill:var(--blue-dim);stroke:var(--blue);stroke-width:1.5;rx:4}
+.node-source text{fill:#c8dff0;font-family:var(--mono);font-size:12px;font-weight:500}
 
 /* Destination pill */
-.node-destination .n-pill{fill:#0a2d0a;stroke:#3fb950;stroke-width:1.5;rx:22}
-.node-destination text{fill:#7ee787;font-size:11px;font-weight:600}
+.node-destination .n-pill{fill:var(--green-dim);stroke:var(--green);stroke-width:1.5;rx:4}
+.node-destination text{fill:#a8f0c8;font-family:var(--mono);font-size:12px;font-weight:500}
 
 /* Transform box */
-.node-transform .n-box{fill:#161b22;stroke:#30363d;stroke-width:1.2;rx:10}
-.node-transform text{fill:#c9d1d9;font-size:11px}
+.node-transform .n-box{fill:var(--panel2);stroke:var(--border);stroke-width:1.2;rx:8}
+.node-transform text{fill:var(--text);font-family:var(--sans);font-size:12px}
 .node-transform .n-icon{font-size:14px}
-.n-dur{font-size:8px;fill:#6e7681}
+.n-dur{font-family:var(--mono);font-size:12px;fill:var(--text-dim)}
 
 /* Column pill */
-.col-pill{rx:10;stroke-width:1.2}
-.node-column .col-pill{fill:#0d1117;stroke:#1f6feb}
-.node-pii_column .col-pill{fill:#1f0a0a;stroke:#f85149}
-.node-column text,.node-pii_column text{font-size:10px}
-.dtype-badge{font-size:8px;fill:#484f58}
+.col-pill{rx:4;stroke-width:1.2}
+.node-column .col-pill{fill:var(--bg);stroke:var(--blue-dim)}
+.node-pii_column .col-pill{fill:#1f0a0a;stroke:var(--red)}
+.node-column text,.node-pii_column text{font-family:var(--mono);font-size:12px}
+.dtype-badge{font-family:var(--mono);font-size:12px;fill:var(--text-dim)}
 
 /* Drop badge */
-.drop-badge rect{fill:#6e292c;rx:4}
-.drop-badge text{font-size:8px;fill:#f85149;font-weight:600}
+.drop-badge rect{fill:#3d1a1a;rx:4}
+.drop-badge text{font-family:var(--mono);font-size:12px;fill:var(--red);font-weight:600}
 
 /* ── Tooltip ── */
-#tip{position:fixed;background:#1c2128;border:1px solid #30363d;border-radius:8px;
-      padding:10px 14px;font-size:.78em;pointer-events:none;display:none;
-      max-width:260px;box-shadow:0 8px 24px rgba(0,0,0,.6);z-index:300}
-#tip h4{color:#58a6ff;margin-bottom:7px;font-size:.85em}
+#tip{position:fixed;background:var(--panel);border:1px solid var(--border);border-radius:8px;
+      padding:12px 16px;font-size:13px;pointer-events:none;display:none;
+      max-width:280px;box-shadow:0 8px 24px rgba(0,0,0,.6);z-index:300}
+#tip h4{font-family:var(--mono);color:var(--amber);margin-bottom:8px;font-size:13px;font-weight:500}
 #tip table{border-collapse:collapse;width:100%}
-#tip td{padding:2px 4px;vertical-align:top}
-#tip td:first-child{color:#8b949e;white-space:nowrap;padding-right:10px}
-#tip td:last-child{color:#e6edf3;word-break:break-all}
+#tip td{padding:4px;vertical-align:top;font-size:12px}
+#tip td:first-child{font-family:var(--mono);color:var(--text-mid);white-space:nowrap;padding-right:12px}
+#tip td:last-child{color:var(--text);word-break:break-all}
 
 /* ── Minimap ── */
-#minimap-wrap{position:fixed;bottom:16px;right:16px;border:1px solid #30363d;
-               background:#0d1117;border-radius:8px;overflow:hidden;z-index:150}
+#minimap-wrap{position:fixed;bottom:16px;right:16px;border:1px solid var(--border);
+               background:var(--panel);border-radius:8px;overflow:hidden;z-index:150}
 #minimap{width:160px;height:110px;display:block}
-#mm-viewport{fill:#58a6ff22;stroke:#58a6ff;stroke-width:.5}
+#mm-viewport{fill:rgba(240,165,0,.08);stroke:var(--amber);stroke-width:.5}
 
 /* ── Stats bar ── */
-#stats{position:fixed;bottom:16px;left:16px;background:#161b22;border:1px solid #30363d;
-        border-radius:20px;padding:5px 14px;font-size:.73em;color:#8b949e;z-index:150}
+#stats{position:fixed;bottom:16px;left:16px;background:var(--panel);border:1px solid var(--border);
+        border-radius:4px;padding:8px 16px;font-family:var(--mono);font-size:12px;color:var(--text-mid);z-index:150}
+
+/* ── Legend ── */
+#legend{position:fixed;bottom:56px;left:16px;background:var(--panel);border:1px solid var(--border);
+        border-radius:4px;padding:8px 12px;font-family:var(--mono);font-size:12px;color:var(--text-dim);z-index:150;
+        display:flex;flex-direction:column;gap:4px}
+#legend .leg-row{display:flex;align-items:center;gap:8px}
+#legend .leg-dot{width:8px;height:8px;border-radius:2px;flex-shrink:0}
+
+/* ── Reduced motion ── */
+@media (prefers-reduced-motion: reduce) {
+  .node, .link, .link-dashed, #mm-viewport {
+    transition: none !important;
+  }
+  /* D3 entrance animations are disabled via JS check below */
+}
 </style>
 </head>
 <body>
 
 <div id="toolbar">
-  <h1>🔗 Data Lineage</h1>
+  <h1>Data Lineage</h1>
   <span class="sep"></span>
   <button class="filter-btn active" id="f-transforms" onclick="toggleFilter('transforms')">
-    <span class="dot" style="background:#8b949e"></span>Transforms
+    <span class="dot" style="background:var(--text-mid)"></span>Transforms
   </button>
   <button class="filter-btn active" id="f-columns" onclick="toggleFilter('columns')">
-    <span class="dot" style="background:#1f6feb"></span>Columns
+    <span class="dot" style="background:var(--blue)"></span>Columns
   </button>
   <button class="filter-btn active" id="f-pii" onclick="toggleFilter('pii')">
-    <span class="dot" style="background:#f85149"></span>PII
+    <span class="dot" style="background:var(--red)"></span>PII
   </button>
   <span class="sep"></span>
   <span id="run-ts">2026-02-28 11:41:43 UTC</span>
-  <input id="search" placeholder="🔍  Search nodes…" type="text">
-  <button id="export-btn" onclick="exportPNG()">⬇ PNG</button>
+  <input id="search" placeholder="Search nodes..." type="text">
+  <button id="export-btn" onclick="exportPNG()">PNG</button>
 </div>
 
 <div id="canvas"><svg id="main"></svg></div>
 <div id="tip"><h4 id="tip-title"></h4><table id="tip-body"></table></div>
 <div id="minimap-wrap"><svg id="minimap"><rect id="mm-viewport"/></svg></div>
+<div id="legend">
+  <div class="leg-row"><span class="leg-dot" style="background:var(--blue)"></span> Source</div>
+  <div class="leg-row"><span class="leg-dot" style="background:var(--green)"></span> Destination</div>
+  <div class="leg-row"><span class="leg-dot" style="background:var(--text-mid)"></span> Transform</div>
+  <div class="leg-row"><span class="leg-dot" style="background:var(--blue-dim)"></span> Column</div>
+  <div class="leg-row"><span class="leg-dot" style="background:var(--red)"></span> PII Column</div>
+</div>
 <div id="stats"></div>
 
 <script>
-const NODES = [{"id": "SOURCE", "label": "sample_data_v3.json", "type": "source", "icon": "\ud83d\udcc4", "meta": {"File": "sample_data_v3.json", "Format": ".json", "Rows": 4, "Columns": 14, "SHA-256": "3fba2466ea37\u2026", "Timestamp": "2026-02-28 11:41:43"}, "rows_out": 4, "drops": 0, "ts": "2026-02-28 11:41:43", "duration_s": null}, {"id": "EXTRACT", "label": "Extract", "type": "transform", "icon": "\ud83d\udce5", "meta": {"Stage": "Extract", "Rows": 4, "Columns": 14, "Timestamp": "2026-02-28 11:41:43"}, "rows_out": 4, "drops": 0, "ts": "2026-02-28 11:41:43", "duration_s": 0.0}, {"id": "CLASSIFY", "label": "Classify", "type": "transform", "icon": "\ud83c\udff7\ufe0f", "meta": {"Stage": "Data Classification", "Level": "CONFIDENTIAL", "PII fields": 6, "Timestamp": "2026-02-28 11:41:43"}, "rows_out": 4, "drops": 0, "ts": "2026-02-28 11:41:43", "duration_s": 0.0}, {"id": "VALIDATE", "label": "Validate", "type": "transform", "icon": "\u2705", "meta": {"Stage": "Great Expectations", "Passed": "22 / 22", "Failed": 0, "Success": "True", "Timestamp": "2026-02-28 11:41:43"}, "rows_out": 4, "drops": 0, "ts": "2026-02-28 11:41:43", "duration_s": 0.19}, {"id": "NULLS", "label": "Null Handling", "type": "transform", "icon": "\ud83e\uddf9", "meta": {"Stage": "Null Handling", "Nulls before": 0, "Nulls after": 0, "Timestamp": "2026-02-28 11:41:43"}, "rows_out": 4, "drops": 0, "ts": "2026-02-28 11:41:43", "duration_s": 0.01}, {"id": "DEDUP", "label": "Deduplicate", "type": "transform", "icon": "\u267b\ufe0f", "meta": {"Stage": "Deduplication", "Before": 4, "After": 4, "Removed": 0, "Timestamp": "2026-02-28 11:41:43"}, "rows_out": 4, "drops": 0, "ts": "2026-02-28 11:41:43", "duration_s": 0.0}, {"id": "TRANSFORM_DONE", "label": "Transform\nComplete", "type": "transform", "icon": "\u2699\ufe0f", "meta": {"Stage": "Transform Complete", "Rows": 4, "Columns": 17, "Timestamp": "2026-02-28 11:41:43"}, "rows_out": 4, "drops": 0, "ts": "2026-02-28 11:41:43", "duration_s": 0.0}, {"id": "DESTINATION", "label": "sqlite \u203a employees", "type": "destination", "icon": "\ud83d\uddc4\ufe0f", "meta": {"Platform": "sqlite", "Database": "lineage_v2_out", "Table": "employees", "Timestamp": "2026-02-28 11:41:43"}, "rows_out": 4, "drops": 0, "ts": "2026-02-28 11:41:43", "duration_s": null}, {"id": "MASK_PII", "label": "Mask PII", "type": "transform", "icon": "\ud83d\udd12", "meta": {"Stage": "PII Masking", "Fields": "dob, email, first_name, last_name, phone, salary", "Count": 6, "Action": "mask / pseudonymise", "Timestamp": "2026-02-28 11:41:43"}, "rows_out": 4, "drops": 0, "ts": "2026-02-28 11:41:43", "duration_s": null}, {"id": "COL_id", "label": "id", "type": "column", "icon": "\ud83d\udcca", "meta": {"Column": "id", "Type": "int64", "PII": "No"}, "rows_out": 4, "drops": 0, "ts": "", "duration_s": null, "dtype": "int"}, {"id": "COL_first_name", "label": "first_name", "type": "pii_column", "icon": "\ud83d\udd12", "meta": {"Column": "first_name", "Type": "object", "PII": "Yes \u2014 masked"}, "rows_out": 4, "drops": 0, "ts": "", "duration_s": null, "dtype": "str"}, {"id": "COL_last_name", "label": "last_name", "type": "pii_column", "icon": "\ud83d\udd12", "meta": {"Column": "last_name", "Type": "object", "PII": "Yes \u2014 masked"}, "rows_out": 4, "drops": 0, "ts": "", "duration_s": null, "dtype": "str"}, {"id": "COL_email", "label": "email", "type": "pii_column", "icon": "\ud83d\udd12", "meta": {"Column": "email", "Type": "object", "PII": "Yes \u2014 masked"}, "rows_out": 4, "drops": 0, "ts": "", "duration_s": null, "dtype": "str"}, {"id": "COL_phone", "label": "phone", "type": "pii_column", "icon": "\ud83d\udd12", "meta": {"Column": "phone", "Type": "object", "PII": "Yes \u2014 masked"}, "rows_out": 4, "drops": 0, "ts": "", "duration_s": null, "dtype": "str"}, {"id": "COL_dob", "label": "dob", "type": "pii_column", "icon": "\ud83d\udd12", "meta": {"Column": "dob", "Type": "object", "PII": "Yes \u2014 masked"}, "rows_out": 4, "drops": 0, "ts": "", "duration_s": null, "dtype": "str"}, {"id": "COL_salary", "label": "salary", "type": "pii_column", "icon": "\ud83d\udd12", "meta": {"Column": "salary", "Type": "float64", "PII": "Yes \u2014 masked"}, "rows_out": 4, "drops": 0, "ts": "", "duration_s": null, "dtype": "float"}, {"id": "COL_department_id", "label": "department_id", "type": "column", "icon": "\ud83d\udcca", "meta": {"Column": "department_id", "Type": "int64", "PII": "No"}, "rows_out": 4, "drops": 0, "ts": "", "duration_s": null, "dtype": "int"}, {"id": "COL_country_code", "label": "country_code", "type": "column", "icon": "\ud83d\udcca", "meta": {"Column": "country_code", "Type": "object", "PII": "No"}, "rows_out": 4, "drops": 0, "ts": "", "duration_s": null, "dtype": "str"}, {"id": "COL_hired_date", "label": "hired_date", "type": "column", "icon": "\ud83d\udcca", "meta": {"Column": "hired_date", "Type": "object", "PII": "No"}, "rows_out": 4, "drops": 0, "ts": "", "duration_s": null, "dtype": "str"}, {"id": "COL_active", "label": "active", "type": "column", "icon": "\ud83d\udcca", "meta": {"Column": "active", "Type": "bool", "PII": "No"}, "rows_out": 4, "drops": 0, "ts": "", "duration_s": null, "dtype": "bool"}, {"id": "COL_address__street", "label": "address__street", "type": "column", "icon": "\ud83d\udcca", "meta": {"Column": "address__street", "Type": "object", "PII": "No"}, "rows_out": 4, "drops": 0, "ts": "", "duration_s": null, "dtype": "str"}, {"id": "COL_address__city", "label": "address__city", "type": "column", "icon": "\ud83d\udcca", "meta": {"Column": "address__city", "Type": "object", "PII": "No"}, "rows_out": 4, "drops": 0, "ts": "", "duration_s": null, "dtype": "str"}, {"id": "COL_address__zip", "label": "address__zip", "type": "column", "icon": "\ud83d\udcca", "meta": {"Column": "address__zip", "Type": "object", "PII": "No"}, "rows_out": 4, "drops": 0, "ts": "", "duration_s": null, "dtype": "str"}];
+/* Detect reduced motion preference for disabling D3 animations */
+const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+const NODES = [{"id": "SOURCE", "label": "sample_data_v3.json", "type": "source", "icon": "📄", "meta": {"File": "sample_data_v3.json", "Format": ".json", "Rows": 4, "Columns": 14, "SHA-256": "3fba2466ea37…", "Timestamp": "2026-02-28 11:41:43"}, "rows_out": 4, "drops": 0, "ts": "2026-02-28 11:41:43", "duration_s": null}, {"id": "EXTRACT", "label": "Extract", "type": "transform", "icon": "📥", "meta": {"Stage": "Extract", "Rows": 4, "Columns": 14, "Timestamp": "2026-02-28 11:41:43"}, "rows_out": 4, "drops": 0, "ts": "2026-02-28 11:41:43", "duration_s": 0.0}, {"id": "CLASSIFY", "label": "Classify", "type": "transform", "icon": "🏷️", "meta": {"Stage": "Data Classification", "Level": "CONFIDENTIAL", "PII fields": 6, "Timestamp": "2026-02-28 11:41:43"}, "rows_out": 4, "drops": 0, "ts": "2026-02-28 11:41:43", "duration_s": 0.0}, {"id": "VALIDATE", "label": "Validate", "type": "transform", "icon": "✅", "meta": {"Stage": "Great Expectations", "Passed": "22 / 22", "Failed": 0, "Success": "True", "Timestamp": "2026-02-28 11:41:43"}, "rows_out": 4, "drops": 0, "ts": "2026-02-28 11:41:43", "duration_s": 0.19}, {"id": "NULLS", "label": "Null Handling", "type": "transform", "icon": "🧹", "meta": {"Stage": "Null Handling", "Nulls before": 0, "Nulls after": 0, "Timestamp": "2026-02-28 11:41:43"}, "rows_out": 4, "drops": 0, "ts": "2026-02-28 11:41:43", "duration_s": 0.01}, {"id": "DEDUP", "label": "Deduplicate", "type": "transform", "icon": "♻️", "meta": {"Stage": "Deduplication", "Before": 4, "After": 4, "Removed": 0, "Timestamp": "2026-02-28 11:41:43"}, "rows_out": 4, "drops": 0, "ts": "2026-02-28 11:41:43", "duration_s": 0.0}, {"id": "TRANSFORM_DONE", "label": "Transform\nComplete", "type": "transform", "icon": "⚙️", "meta": {"Stage": "Transform Complete", "Rows": 4, "Columns": 17, "Timestamp": "2026-02-28 11:41:43"}, "rows_out": 4, "drops": 0, "ts": "2026-02-28 11:41:43", "duration_s": 0.0}, {"id": "DESTINATION", "label": "sqlite › employees", "type": "destination", "icon": "🗄️", "meta": {"Platform": "sqlite", "Database": "lineage_v2_out", "Table": "employees", "Timestamp": "2026-02-28 11:41:43"}, "rows_out": 4, "drops": 0, "ts": "2026-02-28 11:41:43", "duration_s": null}, {"id": "MASK_PII", "label": "Mask PII", "type": "transform", "icon": "🔒", "meta": {"Stage": "PII Masking", "Fields": "dob, email, first_name, last_name, phone, salary", "Count": 6, "Action": "mask / pseudonymise", "Timestamp": "2026-02-28 11:41:43"}, "rows_out": 4, "drops": 0, "ts": "2026-02-28 11:41:43", "duration_s": null}, {"id": "COL_id", "label": "id", "type": "column", "icon": "📊", "meta": {"Column": "id", "Type": "int64", "PII": "No"}, "rows_out": 4, "drops": 0, "ts": "", "duration_s": null, "dtype": "int"}, {"id": "COL_first_name", "label": "first_name", "type": "pii_column", "icon": "🔒", "meta": {"Column": "first_name", "Type": "object", "PII": "Yes — masked"}, "rows_out": 4, "drops": 0, "ts": "", "duration_s": null, "dtype": "str"}, {"id": "COL_last_name", "label": "last_name", "type": "pii_column", "icon": "🔒", "meta": {"Column": "last_name", "Type": "object", "PII": "Yes — masked"}, "rows_out": 4, "drops": 0, "ts": "", "duration_s": null, "dtype": "str"}, {"id": "COL_email", "label": "email", "type": "pii_column", "icon": "🔒", "meta": {"Column": "email", "Type": "object", "PII": "Yes — masked"}, "rows_out": 4, "drops": 0, "ts": "", "duration_s": null, "dtype": "str"}, {"id": "COL_phone", "label": "phone", "type": "pii_column", "icon": "🔒", "meta": {"Column": "phone", "Type": "object", "PII": "Yes — masked"}, "rows_out": 4, "drops": 0, "ts": "", "duration_s": null, "dtype": "str"}, {"id": "COL_dob", "label": "dob", "type": "pii_column", "icon": "🔒", "meta": {"Column": "dob", "Type": "object", "PII": "Yes — masked"}, "rows_out": 4, "drops": 0, "ts": "", "duration_s": null, "dtype": "str"}, {"id": "COL_salary", "label": "salary", "type": "pii_column", "icon": "🔒", "meta": {"Column": "salary", "Type": "float64", "PII": "Yes — masked"}, "rows_out": 4, "drops": 0, "ts": "", "duration_s": null, "dtype": "float"}, {"id": "COL_department_id", "label": "department_id", "type": "column", "icon": "📊", "meta": {"Column": "department_id", "Type": "int64", "PII": "No"}, "rows_out": 4, "drops": 0, "ts": "", "duration_s": null, "dtype": "int"}, {"id": "COL_country_code", "label": "country_code", "type": "column", "icon": "📊", "meta": {"Column": "country_code", "Type": "object", "PII": "No"}, "rows_out": 4, "drops": 0, "ts": "", "duration_s": null, "dtype": "str"}, {"id": "COL_hired_date", "label": "hired_date", "type": "column", "icon": "📊", "meta": {"Column": "hired_date", "Type": "object", "PII": "No"}, "rows_out": 4, "drops": 0, "ts": "", "duration_s": null, "dtype": "str"}, {"id": "COL_active", "label": "active", "type": "column", "icon": "📊", "meta": {"Column": "active", "Type": "bool", "PII": "No"}, "rows_out": 4, "drops": 0, "ts": "", "duration_s": null, "dtype": "bool"}, {"id": "COL_address__street", "label": "address__street", "type": "column", "icon": "📊", "meta": {"Column": "address__street", "Type": "object", "PII": "No"}, "rows_out": 4, "drops": 0, "ts": "", "duration_s": null, "dtype": "str"}, {"id": "COL_address__city", "label": "address__city", "type": "column", "icon": "📊", "meta": {"Column": "address__city", "Type": "object", "PII": "No"}, "rows_out": 4, "drops": 0, "ts": "", "duration_s": null, "dtype": "str"}, {"id": "COL_address__zip", "label": "address__zip", "type": "column", "icon": "📊", "meta": {"Column": "address__zip", "Type": "object", "PII": "No"}, "rows_out": 4, "drops": 0, "ts": "", "duration_s": null, "dtype": "str"}];
 const EDGES = [{"source": "SOURCE", "target": "EXTRACT", "style": "solid", "row_count": 4}, {"source": "EXTRACT", "target": "CLASSIFY", "style": "solid", "row_count": 4}, {"source": "VALIDATE", "target": "NULLS", "style": "solid", "row_count": 4}, {"source": "NULLS", "target": "DEDUP", "style": "solid", "row_count": 4}, {"source": "DEDUP", "target": "TRANSFORM_DONE", "style": "solid", "row_count": 4}, {"source": "CLASSIFY", "target": "MASK_PII", "style": "solid", "row_count": 4}, {"source": "MASK_PII", "target": "VALIDATE", "style": "solid", "row_count": 4}, {"source": "TRANSFORM_DONE", "target": "COL_id", "style": "dashed", "row_count": 4}, {"source": "TRANSFORM_DONE", "target": "COL_first_name", "style": "dashed", "row_count": 4}, {"source": "TRANSFORM_DONE", "target": "COL_last_name", "style": "dashed", "row_count": 4}, {"source": "TRANSFORM_DONE", "target": "COL_email", "style": "dashed", "row_count": 4}, {"source": "TRANSFORM_DONE", "target": "COL_phone", "style": "dashed", "row_count": 4}, {"source": "TRANSFORM_DONE", "target": "COL_dob", "style": "dashed", "row_count": 4}, {"source": "TRANSFORM_DONE", "target": "COL_salary", "style": "dashed", "row_count": 4}, {"source": "TRANSFORM_DONE", "target": "COL_department_id", "style": "dashed", "row_count": 4}, {"source": "TRANSFORM_DONE", "target": "COL_country_code", "style": "dashed", "row_count": 4}, {"source": "TRANSFORM_DONE", "target": "COL_hired_date", "style": "dashed", "row_count": 4}, {"source": "TRANSFORM_DONE", "target": "COL_active", "style": "dashed", "row_count": 4}, {"source": "TRANSFORM_DONE", "target": "COL_address__street", "style": "dashed", "row_count": 4}, {"source": "TRANSFORM_DONE", "target": "COL_address__city", "style": "dashed", "row_count": 4}, {"source": "TRANSFORM_DONE", "target": "COL_address__zip", "style": "dashed", "row_count": 4}, {"source": "COL_id", "target": "DESTINATION", "style": "dashed", "row_count": 4}, {"source": "COL_first_name", "target": "DESTINATION", "style": "dashed", "row_count": 4}, {"source": "COL_last_name", "target": "DESTINATION", "style": "dashed", "row_count": 4}, {"source": "COL_email", "target": "DESTINATION", "style": "dashed", "row_count": 4}, {"source": "COL_phone", "target": "DESTINATION", "style": "dashed", "row_count": 4}, {"source": "COL_dob", "target": "DESTINATION", "style": "dashed", "row_count": 4}, {"source": "COL_salary", "target": "DESTINATION", "style": "dashed", "row_count": 4}, {"source": "COL_department_id", "target": "DESTINATION", "style": "dashed", "row_count": 4}, {"source": "COL_country_code", "target": "DESTINATION", "style": "dashed", "row_count": 4}, {"source": "COL_hired_date", "target": "DESTINATION", "style": "dashed", "row_count": 4}, {"source": "COL_active", "target": "DESTINATION", "style": "dashed", "row_count": 4}, {"source": "COL_address__street", "target": "DESTINATION", "style": "dashed", "row_count": 4}, {"source": "COL_address__city", "target": "DESTINATION", "style": "dashed", "row_count": 4}, {"source": "COL_address__zip", "target": "DESTINATION", "style": "dashed", "row_count": 4}];
 
 // ── State ────────────────────────────────────────────────────────────────
@@ -129,8 +177,8 @@ const W = () => +svg.node().clientWidth;
 const H = () => +svg.node().clientHeight;
 
 const defs = svg.append("defs");
-// Arrowheads
-[["arr-grey","#30363d",14],["arr-blue","#1f6feb",12]].forEach(([id,col,ref]) => {
+// Arrowheads — using dashboard palette
+[["arr-border","#2e3540",14],["arr-blue","#4fa3e0",12]].forEach(([id,col,ref]) => {
   defs.append("marker").attr("id",id)
     .attr("viewBox","0 -4 8 8").attr("refX",ref).attr("refY",0)
     .attr("markerWidth",5).attr("markerHeight",5).attr("orient","auto")
@@ -165,7 +213,7 @@ const link  = linkG.selectAll("g").data(EDGES).join("g");
 
 const linkPath = link.append("path")
   .attr("class", d => d.style==="dashed"?"link-dashed":"link")
-  .attr("marker-end", d => d.style==="dashed"?"url(#arr-blue)":"url(#arr-grey)");
+  .attr("marker-end", d => d.style==="dashed"?"url(#arr-blue)":"url(#arr-border)");
 
 const linkLabel = link.append("text").attr("class","edge-label")
   .text(d => d.row_count != null ? d.row_count.toLocaleString()+"r" : "")
@@ -192,40 +240,40 @@ node.each(function(d){
 
   if(d.type==="source"||d.type==="destination"){
     const w = Math.max(140, d.label.length*8+48);
-    el.append("rect").attr("class","n-pill").attr("width",w).attr("height",34)
-      .attr("x",-w/2).attr("y",-17).attr("rx",17);
+    el.append("rect").attr("class","n-pill").attr("width",w).attr("height",36)
+      .attr("x",-w/2).attr("y",-18).attr("rx",4);
     el.append("text").attr("class","n-icon").attr("x",-w/2+14).attr("y",1)
       .attr("dominant-baseline","central").text(d.icon||"");
     el.append("text").attr("x",8).attr("y",0).attr("dominant-baseline","central")
-      .text(d.label.length>22?d.label.slice(0,21)+"…":d.label);
+      .text(d.label.length>22?d.label.slice(0,21)+"...":d.label);
     if(d.rows_out!=null){
-      el.append("text").attr("class","n-dur").attr("x",0).attr("y",22).attr("text-anchor","middle")
+      el.append("text").attr("class","n-dur").attr("x",0).attr("y",24).attr("text-anchor","middle")
         .text(d.rows_out.toLocaleString()+" rows");
     }
   } else if(isCol){
-    const lbl   = d.label.length>14?d.label.slice(0,13)+"…":d.label;
+    const lbl   = d.label.length>14?d.label.slice(0,13)+"...":d.label;
     const dtype = d.dtype||"";
-    const w = Math.max(70, lbl.length*7.5+24+(dtype?dtype.length*5.5+8:0));
-    el.append("rect").attr("class","col-pill").attr("width",w).attr("height",22)
-      .attr("x",-w/2).attr("y",-11).attr("rx",11);
+    const w = Math.max(80, lbl.length*7.5+24+(dtype?dtype.length*6+12:0));
+    el.append("rect").attr("class","col-pill").attr("width",w).attr("height",24)
+      .attr("x",-w/2).attr("y",-12).attr("rx",4);
     el.append("text").attr("x", dtype ? -w/2+8 : 0).attr("y",0)
       .attr("dominant-baseline","central")
       .attr("text-anchor", dtype?"start":"middle").text(lbl)
-      .style("fill", d.type==="pii_column"?"#ffa198":"#79c0ff");
+      .style("fill", d.type==="pii_column"?"#f0a0a0":"#8ac4f0");
     if(dtype){
-      const bx = w/2-dtype.length*5.5-8;
-      el.append("rect").attr("x",bx-4).attr("y",-7).attr("width",dtype.length*5.5+8)
-        .attr("height",14).attr("rx",3).style("fill","#161b22").style("stroke","#30363d").style("stroke-width","0.8");
-      el.append("text").attr("class","dtype-badge").attr("x",bx+dtype.length*2.75)
+      const bx = w/2-dtype.length*6-8;
+      el.append("rect").attr("x",bx-4).attr("y",-8).attr("width",dtype.length*6+8)
+        .attr("height",16).attr("rx",3).style("fill","#191d22").style("stroke","#252a32").style("stroke-width","0.8");
+      el.append("text").attr("class","dtype-badge").attr("x",bx+dtype.length*3)
         .attr("y",0).attr("dominant-baseline","central").attr("text-anchor","middle").text(dtype);
     }
   } else {
     // Transform box
     const lines  = d.label.split("\n");
-    const w      = Math.max(110, d.label.replace("\n"," ").length*8+40);
-    const h      = lines.length>1?52:42;
+    const w      = Math.max(120, d.label.replace("\n"," ").length*8+40);
+    const h      = lines.length>1?52:44;
     el.append("rect").attr("class","n-box").attr("width",w).attr("height",h)
-      .attr("x",-w/2).attr("y",-h/2).attr("rx",10);
+      .attr("x",-w/2).attr("y",-h/2).attr("rx",8);
     // Icon
     if(d.icon){
       el.append("text").attr("class","n-icon").attr("x",-w/2+12).attr("y",0)
@@ -234,20 +282,20 @@ node.each(function(d){
     // Label lines
     const xOff = d.icon?4:0;
     lines.forEach((ln,i)=>{
-      el.append("text").attr("x",xOff).attr("y",(i-(lines.length-1)/2)*14)
+      el.append("text").attr("x",xOff).attr("y",(i-(lines.length-1)/2)*16)
         .attr("dominant-baseline","central").attr("text-anchor","middle").text(ln);
     });
     // Duration badge
     if(d.duration_s!=null){
-      el.append("text").attr("class","n-dur").attr("x",0).attr("y",h/2-6)
+      el.append("text").attr("class","n-dur").attr("x",0).attr("y",h/2-4)
         .attr("text-anchor","middle").text(d.duration_s+"s");
     }
-    // Drop badge (if any rows dropped)
+    // Drop badge
     if(d.drops&&d.drops>0){
       const g2 = el.append("g").attr("class","drop-badge").attr("transform",`translate(${w/2-4},${-h/2-2})`);
       const lbl = `-${d.drops}`;
-      g2.append("rect").attr("x",-lbl.length*4.5-4).attr("y",-8).attr("width",lbl.length*4.5+8).attr("height",14).attr("rx",4);
-      g2.append("text").attr("x",-lbl.length*2.25+0.5).attr("y",0).attr("dominant-baseline","central").text(lbl);
+      g2.append("rect").attr("x",-lbl.length*5-4).attr("y",-8).attr("width",lbl.length*5+8).attr("height",16).attr("rx",4);
+      g2.append("text").attr("x",-lbl.length*2.5+0.5).attr("y",0).attr("dominant-baseline","central").text(lbl);
     }
   }
 });
@@ -264,24 +312,27 @@ sim.on("tick", () => {
   updateMinimapNodes();
 });
 
-// ── Entrance animation ────────────────────────────────────────────────────
-// Start all nodes off-screen-left, fade in by band
+// ── Entrance animation (respects reduced motion) ─────────────────────────
 const bandOrder = ["source","transform","column","pii_column","destination"];
-NODES.forEach(n => { n.x = -300; n.y = H()/2; });
-sim.alpha(1).restart();
 
-setTimeout(() => {
-  bandOrder.forEach((band, bi) => {
-    setTimeout(() => {
-      node.filter(d=>d.type===band)
-        .transition().duration(600).ease(d3.easeCubicOut)
-        .style("opacity",1);
-    }, bi*150);
-  });
-}, 200);
+if (prefersReducedMotion) {
+  // Skip animation entirely — show everything immediately
+  node.style("opacity",1);
+} else {
+  NODES.forEach(n => { n.x = -300; n.y = H()/2; });
+  sim.alpha(1).restart();
+  node.style("opacity",0);
 
-// Start nodes invisible and reveal
-node.style("opacity",0);
+  setTimeout(() => {
+    bandOrder.forEach((band, bi) => {
+      setTimeout(() => {
+        node.filter(d=>d.type===band)
+          .transition().duration(600).ease(d3.easeCubicOut)
+          .style("opacity",1);
+      }, bi*150);
+    });
+  }, 200);
+}
 
 // ── Tooltip ──────────────────────────────────────────────────────────────
 const tip = document.getElementById("tip");
@@ -294,8 +345,8 @@ function showTip(e,d){
   moveTip(e);
 }
 function moveTip(e){
-  const t=tip, x=e.clientX+14, y=e.clientY-10;
-  t.style.left = (x+t.offsetWidth>window.innerWidth ? x-t.offsetWidth-28 : x)+"px";
+  const t=tip, x=e.clientX+16, y=e.clientY-12;
+  t.style.left = (x+t.offsetWidth>window.innerWidth ? x-t.offsetWidth-32 : x)+"px";
   t.style.top  = (y+t.offsetHeight>window.innerHeight ? y-t.offsetHeight : y)+"px";
 }
 function hideTip(){ tip.style.display="none"; }
@@ -304,7 +355,6 @@ svg.node().addEventListener("mousemove", e=>{ if(tip.style.display!=="none") mov
 // ── Focus mode ────────────────────────────────────────────────────────────
 function getLineage(d){
   const ids = new Set([d.id]);
-  // Traverse upstream and downstream
   let frontier = [d.id];
   for(let pass=0;pass<30&&frontier.length;pass++){
     const next=[];
@@ -378,9 +428,8 @@ function exportPNG(){
   const clone  = svgEl.cloneNode(true);
   clone.setAttribute("xmlns","http://www.w3.org/2000/svg");
   clone.setAttribute("width",W());clone.setAttribute("height",H());
-  // Embed dark background
   const bg=document.createElementNS("http://www.w3.org/2000/svg","rect");
-  bg.setAttribute("width","100%");bg.setAttribute("height","100%");bg.setAttribute("fill","#0d1117");
+  bg.setAttribute("width","100%");bg.setAttribute("height","100%");bg.setAttribute("fill","#0d0f12");
   clone.insertBefore(bg,clone.firstChild);
   const xml = new XMLSerializer().serializeToString(clone);
   const img = new Image();
@@ -422,11 +471,11 @@ function updateMinimapNodes(){
   const dots=mmNodes.selectAll("circle").data(NODES);
   dots.join("circle").attr("cx",d=>d.x||0).attr("cy",d=>d.y||0).attr("r",4)
     .attr("fill",d=>{
-      if(d.type==="source")      return "#58a6ff";
-      if(d.type==="destination") return "#3fb950";
-      if(d.type==="pii_column") return "#f85149";
-      if(d.type==="column")      return "#1f6feb";
-      return "#8b949e";
+      if(d.type==="source")      return "#4fa3e0";
+      if(d.type==="destination") return "#3dd68c";
+      if(d.type==="pii_column") return "#f05252";
+      if(d.type==="column")      return "#1a3a56";
+      return "#8a96a4";
     }).attr("opacity",.8);
 }
 
@@ -435,7 +484,7 @@ const piiCnt = NODES.filter(n=>n.type==="pii_column").length;
 const colCnt  = NODES.filter(n=>n.type==="column"||n.type==="pii_column").length;
 const trnCnt  = NODES.filter(n=>n.type==="transform").length;
 document.getElementById("stats").textContent =
-  `${NODES.length} nodes · ${EDGES.length} edges · ${trnCnt} stages · ${colCnt} columns (${piiCnt} PII)`;
+  `${NODES.length} nodes  /  ${EDGES.length} edges  /  ${trnCnt} stages  /  ${colCnt} columns (${piiCnt} PII)`;
 
 // ── Auto-fit after simulation settles ────────────────────────────────────
 let fitted=false;
@@ -446,7 +495,11 @@ sim.on("end",()=>{
   const pad=80;
   const scl=Math.min(.92,Math.min(W()/(bb.w+pad),(H())/(bb.h+pad)));
   const tx=W()/2-scl*(bb.minX+bb.w/2), ty=H()/2-scl*(bb.minY+bb.h/2);
-  svg.transition().duration(800).call(zoom.transform,d3.zoomIdentity.translate(tx,ty).scale(scl));
+  if (prefersReducedMotion) {
+    svg.call(zoom.transform,d3.zoomIdentity.translate(tx,ty).scale(scl));
+  } else {
+    svg.transition().duration(800).call(zoom.transform,d3.zoomIdentity.translate(tx,ty).scale(scl));
+  }
 });
 window.addEventListener("resize",()=>sim.alpha(.15).restart());
 </script>

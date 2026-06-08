@@ -6,6 +6,12 @@ includes a SHA-256 hash of the previous event, creating a cryptographic
 chain that makes any historical modification detectable.
 
 Layer 1 — imports from Layer 0 only (constants, helpers).
+
+Revision history
+────────────────
+4.0   2026-06-07   Stable release with 30+ event types and 7 report writers.
+4.1   2026-06-08   Extracted report writers into pipeline.reporting.ReportWriter;
+                   GovernanceLogger delegates to ReportWriter for backward compat.
 """
 
 import getpass
@@ -17,10 +23,13 @@ import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from pipeline.constants import DEFAULT_RUN_CONTEXT, RunContext
+from pipeline.constants import DEFAULT_RUN_CONTEXT, EventCategory, RunContext
 from pipeline.helpers import file_hash
+
+if TYPE_CHECKING:
+    from pipeline.reporting.report_writer import ReportWriter
 
 logger = logging.getLogger(__name__)
 
@@ -226,31 +235,31 @@ class GovernanceLogger:
     # ── Lifecycle events ─────────────────────────────────────────────────
 
     def pipeline_start(self, metadata: dict) -> None:
-        self._event("LIFECYCLE", "PIPELINE_STARTED", metadata)
+        self._event(EventCategory.LIFECYCLE, "PIPELINE_STARTED", metadata)
 
     def pipeline_end(self, summary: dict) -> None:
-        self._event("LIFECYCLE", "PIPELINE_COMPLETED", summary)
+        self._event(EventCategory.LIFECYCLE, "PIPELINE_COMPLETED", summary)
 
     def pipeline_complete(self, summary: dict) -> None:
         self.pipeline_end(summary)
 
     def transformation_applied(self, name: str, detail: dict | None = None) -> None:
-        self._event("TRANSFORMATION", name, detail)
+        self._event(EventCategory.TRANSFORMATION, name, detail)
 
     def extract_event(self, action: str, detail: dict | None = None) -> None:
-        self._event("EXTRACT", action, detail)
+        self._event(EventCategory.EXTRACT, action, detail)
 
     def load_event(self, action: str, detail: dict | None = None) -> None:
-        self._event("LOAD", action, detail)
+        self._event(EventCategory.LOAD, action, detail)
 
     def quality_event(self, action: str, detail: dict | None = None) -> None:
-        self._event("QUALITY", action, detail)
+        self._event(EventCategory.QUALITY, action, detail)
 
     def schema_event(self, action: str, detail: dict | None = None) -> None:
-        self._event("SCHEMA", action, detail)
+        self._event(EventCategory.SCHEMA, action, detail)
 
     def stage_metrics(self, stage: str, rows: int, elapsed: float) -> None:
-        self._event("METRICS", f"{stage.upper()}_METRICS", {
+        self._event(EventCategory.METRICS, f"{stage.upper()}_METRICS", {
             "rows": rows, "elapsed_s": elapsed,
         })
 
@@ -261,13 +270,13 @@ class GovernanceLogger:
             sha = file_hash(path)
         except (FileNotFoundError, OSError):
             sha = "N/A"
-        self._event("LINEAGE", "SOURCE_REGISTERED", {
+        self._event(EventCategory.LINEAGE, "SOURCE_REGISTERED", {
             "source_path": path, "file_type": file_type,
             "row_count": rows, "col_count": cols, "sha256": sha,
         })
 
     def destination_registered(self, db: str, name: str, table: str) -> None:
-        self._event("LINEAGE", "DESTINATION_REGISTERED", {
+        self._event(EventCategory.LINEAGE, "DESTINATION_REGISTERED", {
             "db_type": db, "db_name": name, "table_or_collection": table,
         })
         transfer = _infer_cross_border_transfer(db, name)
@@ -275,7 +284,7 @@ class GovernanceLogger:
             self.transfer_logged(**transfer)
 
     def load_complete(self, rows: int, table: str) -> None:
-        self._event("LINEAGE", "LOAD_COMPLETE", {
+        self._event(EventCategory.LINEAGE, "LOAD_COMPLETE", {
             "rows_written": rows, "destination_table": table,
         })
 
@@ -283,39 +292,39 @@ class GovernanceLogger:
 
     def pii_detected(self, findings: list[dict]) -> None:
         self.pii_findings.extend(findings)
-        self._event("PRIVACY", "PII_DETECTED", {
+        self._event(EventCategory.PRIVACY, "PII_DETECTED", {
             "findings_count": len(findings),
             "fields": [f["field"] for f in findings],
         }, level="WARNING")
 
     def pii_action(self, field: str, action: str) -> None:
-        self._event("PRIVACY", f"PII_{action}", {"field": field})
+        self._event(EventCategory.PRIVACY, f"PII_{action}", {"field": field})
 
     def data_minimization(self, orig: list, retained: list, dropped: list) -> None:
-        self._event("PRIVACY", "DATA_MINIMIZATION_APPLIED", {
+        self._event(EventCategory.PRIVACY, "DATA_MINIMIZATION_APPLIED", {
             "original_column_count": len(orig),
             "retained_column_count": len(retained),
             "dropped_columns": dropped,
         })
 
     def consent_recorded(self, purpose: str, basis: str, confirmed: bool) -> None:
-        self._event("CONSENT", "LAWFUL_BASIS_RECORDED", {
+        self._event(EventCategory.CONSENT, "LAWFUL_BASIS_RECORDED", {
             "processing_purpose": purpose, "lawful_basis": basis,
             "user_confirmed": confirmed,
         })
 
     def consent_event(self, action: str, detail: dict | None = None) -> None:
-        self._event("CONSENT", action, detail)
+        self._event(EventCategory.CONSENT, action, detail)
 
     def retention_policy(self, policy: str, days: int | None) -> None:
-        self._event("RETENTION", "POLICY_RECORDED", {
+        self._event(EventCategory.RETENTION, "POLICY_RECORDED", {
             "policy": policy, "retention_days": days,
         })
 
     # ── Validation events ────────────────────────────────────────────────
 
     def validation_result(self, suite: str, ok: bool, passed: int, failed: int, total: int) -> None:
-        self._event("VALIDATION", "SUITE_RESULT", {
+        self._event(EventCategory.VALIDATION, "SUITE_RESULT", {
             "suite_name": suite, "overall_success": ok,
             "expectations_passed": passed, "expectations_failed": failed,
             "expectations_total": total,
@@ -327,61 +336,61 @@ class GovernanceLogger:
             "expectation": exp, "column": col,
             "success": ok, "unexpected_count": unexpected,
         })
-        self._event("VALIDATION", "EXPECTATION_RESULT", {
+        self._event(EventCategory.VALIDATION, "EXPECTATION_RESULT", {
             "expectation": exp, "column": col,
             "success": ok, "unexpected_count": unexpected,
         }, level="INFO" if ok else "WARNING")
 
     def profile_recorded(self, summary: dict) -> None:
-        self._event("PROFILING", "PROFILE_GENERATED", summary)
+        self._event(EventCategory.PROFILING, "PROFILE_GENERATED", summary)
 
     def dlq_written(self, count: int, reason: str) -> None:
         self.dlq_rows_total += count
-        self._event("DLQ", "ROWS_REJECTED", {
+        self._event(EventCategory.DLQ, "ROWS_REJECTED", {
             "rejected_row_count": count, "reason": reason,
             "dlq_file": str(self.dlq_file),
         }, level="WARNING")
 
     def watermark_event(self, action: str, col: str, val: Any, filtered: int = 0) -> None:
-        self._event("INCREMENTAL", f"WATERMARK_{action}", {
+        self._event(EventCategory.INCREMENTAL, f"WATERMARK_{action}", {
             "watermark_column": col, "watermark_value": str(val),
             "rows_filtered": filtered,
         })
 
     def retry_attempt(self, attempt: int, max_attempts: int, wait: float, exc: Exception) -> None:
-        self._event("RETRY", "RETRY_ATTEMPT", {
+        self._event(EventCategory.RETRY, "RETRY_ATTEMPT", {
             "attempt": attempt, "max_attempts": max_attempts,
             "wait_seconds": wait, "exception": str(exc),
         }, level="WARNING")
 
     def notification_sent(self, channel: str, status: str, detail: str = "") -> None:
-        self._event("NOTIFICATION", f"{channel.upper()}_{status}", {"detail": detail})
+        self._event(EventCategory.NOTIFICATION, f"{channel.upper()}_{status}", {"detail": detail})
 
     def error(self, msg: str, exc: Exception | None = None) -> None:
-        self._event("ERROR", msg,
+        self._event(EventCategory.ERROR, msg,
                     {"exception": str(exc)} if exc else None, level="ERROR")
 
     # ── v3.0 event wrappers ──────────────────────────────────────────────
 
     def sla_event(self, status: str, elapsed_sec: float, threshold_sec: float) -> None:
         level = "WARNING" if status in ("BREACH", "WARNING") else "INFO"
-        self._event("SLA", f"SLA_{status}", {
+        self._event(EventCategory.SLA, f"SLA_{status}", {
             "elapsed_seconds": round(elapsed_sec, 1),
             "threshold_seconds": threshold_sec,
             "over_by_seconds": max(0, round(elapsed_sec - threshold_sec, 1)),
         }, level=level)
 
     def metrics_recorded(self, metrics: dict) -> None:
-        self._event("METRICS", "METRICS_RECORDED", metrics)
+        self._event(EventCategory.METRICS, "METRICS_RECORDED", metrics)
 
     def encryption_applied(self, field: str, algorithm: str) -> None:
-        self._event("ENCRYPTION", "COLUMN_ENCRYPTED", {
+        self._event(EventCategory.ENCRYPTION, "COLUMN_ENCRYPTED", {
             "field": field, "algorithm": algorithm,
         })
 
     def enrichment_applied(self, join_col: str, lookup_table: str,
                            rows_matched: int, rows_total: int) -> None:
-        self._event("ENRICHMENT", "LOOKUP_JOIN_APPLIED", {
+        self._event(EventCategory.ENRICHMENT, "LOOKUP_JOIN_APPLIED", {
             "join_column": join_col,
             "lookup_table": lookup_table,
             "rows_matched": rows_matched,
@@ -392,7 +401,7 @@ class GovernanceLogger:
     def referential_integrity_checked(self, fk_col: str, ref_table: str,
                                       valid: int, invalid: int) -> None:
         level = "INFO" if invalid == 0 else "WARNING"
-        self._event("REFERENTIAL", "FK_CHECK_RESULT", {
+        self._event(EventCategory.REFERENTIAL, "FK_CHECK_RESULT", {
             "foreign_key_column": fk_col,
             "reference_table": ref_table,
             "valid_rows": valid,
@@ -403,7 +412,7 @@ class GovernanceLogger:
                          rows_deleted: int, method: str = "DELETE") -> None:
         # GDPR Art. 17 — hash subject ID before logging (never store raw PII in audit trail)
         subject_hash = hashlib.sha256(str(subject_id).encode()).hexdigest()[:16]
-        self._event("ERASURE", "GDPR_ERASURE_EXECUTED", {
+        self._event(EventCategory.ERASURE, "GDPR_ERASURE_EXECUTED", {
             "subject_id_hash": subject_hash,
             "target_table": table,
             "rows_deleted": rows_deleted,
@@ -419,7 +428,7 @@ class GovernanceLogger:
             "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         }
         self.classification_tags.append(entry)
-        self._event("CLASSIFICATION", "DATA_CLASSIFIED", entry)
+        self._event(EventCategory.CLASSIFICATION, "DATA_CLASSIFIED", entry)
 
     def transfer_logged(self, source_country: str, dest_country: str,
                         safeguard: str, transfer_type: str) -> None:
@@ -434,119 +443,58 @@ class GovernanceLogger:
         self.transfer_events.append(entry)
         level = "INFO" if transfer_type in ("INTRA_EU", "DOMESTIC", "ADEQUACY_DECISION") \
                        else "WARNING"
-        self._event("TRANSFER", "CROSS_BORDER_TRANSFER_LOGGED", entry, level=level)
+        self._event(EventCategory.TRANSFER, "CROSS_BORDER_TRANSFER_LOGGED", entry, level=level)
 
     def checkpoint_event(self, action: str, chunk_idx: int, rows: int) -> None:
-        self._event("CHECKPOINT", f"CHECKPOINT_{action}", {
+        self._event(EventCategory.CHECKPOINT, f"CHECKPOINT_{action}", {
             "chunk_index": chunk_idx, "rows_processed": rows,
         })
 
     def standardisation_applied(self, column: str, rule: str, changed: int) -> None:
-        self._event("STANDARDISE", "COLUMN_STANDARDISED", {
+        self._event(EventCategory.STANDARDISE, "COLUMN_STANDARDISED", {
             "column": column, "rule": rule, "values_changed": changed,
         })
 
     def rule_applied(self, rule_name: str, rule_type: str, rows_affected: int) -> None:
-        self._event("RULES", "BUSINESS_RULE_APPLIED", {
+        self._event(EventCategory.RULES, "BUSINESS_RULE_APPLIED", {
             "rule_name": rule_name, "rule_type": rule_type,
             "rows_affected": rows_affected,
         })
 
-    # ── Report writers ───────────────────────────────────────────────────
+    # ── Report writer (lazy, avoids circular import at module level) ────
+
+    @property
+    def report_writer(self) -> "ReportWriter":
+        """Return a ReportWriter bound to this logger, created on first access."""
+        try:
+            return self._report_writer
+        except AttributeError:
+            from pipeline.reporting.report_writer import ReportWriter
+            self._report_writer = ReportWriter(self)
+            return self._report_writer
+
+    # ── Backward-compatible delegation to ReportWriter ──────────────────
 
     def write_pii_report(self) -> None:
-        report = {
-            "pipeline_id": self.run_context.pipeline_id,
-            "generated_utc": datetime.now(timezone.utc).isoformat(),
-            "regulation_references": {
-                "GDPR": "Articles 4,9,17,25,32",
-                "CCPA": "§1798.100,§1798.140,§1798.150",
-            },
-            "pii_findings": self.pii_findings,
-            "summary": {
-                "total_pii_fields": len(self.pii_findings),
-                "special_category_fields": sum(
-                    1 for f in self.pii_findings if f.get("special_category")
-                ),
-            },
-        }
-        if not self.dry_run:
-            with open(self.pii_report_file, "w", encoding="utf-8") as f:
-                json.dump(report, f, indent=2)
-        self.logger.info("PII report          → %s", self.pii_report_file)
+        self.report_writer.write_pii_report()
 
     def write_validation_report(self) -> None:
-        report = {
-            "pipeline_id": self.run_context.pipeline_id,
-            "generated_utc": datetime.now(timezone.utc).isoformat(),
-            "expectation_results": self.validation_results,
-            "summary": {
-                "total": len(self.validation_results),
-                "passed": sum(1 for r in self.validation_results if r["success"]),
-                "failed": sum(1 for r in self.validation_results if not r["success"]),
-                "dlq_rows": self.dlq_rows_total,
-            },
-        }
-        if not self.dry_run:
-            with open(self.validation_rpt_file, "w", encoding="utf-8") as f:
-                json.dump(report, f, indent=2)
-        self.logger.info("Validation report   → %s", self.validation_rpt_file)
+        self.report_writer.write_validation_report()
 
     def write_profile_report(self, profile: dict) -> None:
-        profile["pipeline_id"] = self.run_context.pipeline_id
-        profile["generated_utc"] = datetime.now(timezone.utc).isoformat()
-        if not self.dry_run:
-            with open(self.profile_rpt_file, "w", encoding="utf-8") as f:
-                json.dump(profile, f, indent=2, default=str)
-        self.logger.info("Profile report      → %s", self.profile_rpt_file)
+        self.report_writer.write_profile_report(profile)
 
     def write_metrics_report(self, metrics: dict) -> None:
-        metrics["pipeline_id"] = self.run_context.pipeline_id
-        metrics["generated_utc"] = datetime.now(timezone.utc).isoformat()
-        if not self.dry_run:
-            with open(self.metrics_rpt_file, "w", encoding="utf-8") as f:
-                json.dump(metrics, f, indent=2)
-        self.logger.info("Metrics report      → %s", self.metrics_rpt_file)
+        self.report_writer.write_metrics_report(metrics)
 
     def write_classification_report(self) -> None:
-        report = {
-            "pipeline_id": self.run_context.pipeline_id,
-            "generated_utc": datetime.now(timezone.utc).isoformat(),
-            "classification_events": self.classification_tags,
-        }
-        if not self.dry_run:
-            with open(self.classification_file, "w", encoding="utf-8") as f:
-                json.dump(report, f, indent=2)
-        self.logger.info("Classification rpt  → %s", self.classification_file)
+        self.report_writer.write_classification_report()
 
     def write_transfer_log(self) -> None:
-        report = {
-            "pipeline_id": self.run_context.pipeline_id,
-            "generated_utc": datetime.now(timezone.utc).isoformat(),
-            "gdpr_chapter_v_transfers": self.transfer_events,
-        }
-        if not self.dry_run:
-            with open(self.transfer_log_file, "w", encoding="utf-8") as f:
-                json.dump(report, f, indent=2)
-        self.logger.info("Transfer log        → %s", self.transfer_log_file)
+        self.report_writer.write_transfer_log()
 
     def pipeline_summary(self) -> None:
-        self.summary()
+        self.report_writer.pipeline_summary()
 
     def summary(self) -> None:
-        self.logger.info("=" * 64)
-        self.logger.info("  GOVERNANCE SUMMARY  v4.0")
-        self.logger.info("=" * 64)
-        self.logger.info("  Pipeline ID        : %s", self.run_context.pipeline_id)
-        self.logger.info("  Run started        : %s", self.run_context.run_start)
-        self.logger.info("  Audit ledger       : %s", self.ledger_file)
-        self.logger.info("  PII report         : %s", self.pii_report_file)
-        self.logger.info("  Validation report  : %s", self.validation_rpt_file)
-        self.logger.info("  Profile report     : %s", self.profile_rpt_file)
-        self.logger.info("  Metrics report     : %s", self.metrics_rpt_file)
-        self.logger.info("  Classification rpt : %s", self.classification_file)
-        self.logger.info("  Transfer log       : %s", self.transfer_log_file)
-        self.logger.info("  Dead letter queue  : %s  (%s rows)", self.dlq_file, self.dlq_rows_total)
-        self.logger.info("  Log file           : %s", self.log_file)
-        self.logger.info("  Total events       : %s", len(self.ledger_entries))
-        self.logger.info("=" * 64)
+        self.report_writer.summary()

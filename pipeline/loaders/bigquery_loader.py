@@ -132,7 +132,7 @@ class BigQueryLoader(BaseLoader):
                 )
                 job.result()
                 logger.info(
-                    "[BQ] Loaded %s rows -> %s (errors: %s)",
+                    "[BIGQUERY] Loaded %s rows -> %s (errors: %s)",
                     f"{len(df):,}", table_id, job.errors or "none",
                 )
                 return
@@ -181,7 +181,7 @@ class BigQueryLoader(BaseLoader):
         try:
             job = client.query(merge_sql)
             job.result()
-            logger.info("[BQ] MERGE INTO %s -- %s rows", fqt, f"{len(df):,}")
+            logger.info("[BIGQUERY] MERGE INTO %s -- %s rows", fqt, f"{len(df):,}")
             self.gov.transformation_applied(
                 "BIGQUERY_UPSERT_COMPLETE",
                 {"table": table, "natural_keys": natural_keys,

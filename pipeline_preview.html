@@ -18,6 +18,7 @@
     --green:     #3dd68c;
     --green-dim: #1a4a38;
     --red:       #f05252;
+    --red-dim:   #3a1414;
     --blue:      #4fa3e0;
     --blue-dim:  #1a3a56;
     --text:      #c8d0da;
@@ -25,6 +26,17 @@
     --text-mid:  #8a96a4;
     --mono:      'IBM Plex Mono', monospace;
     --sans:      'IBM Plex Sans', sans-serif;
+
+    /* 4px base grid spacing tokens */
+    --sp-1: 4px;
+    --sp-2: 8px;
+    --sp-3: 12px;
+    --sp-4: 16px;
+    --sp-5: 20px;
+    --sp-6: 24px;
+    --sp-8: 32px;
+    --sp-10: 40px;
+    --sp-12: 48px;
   }
 
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -33,10 +45,19 @@
     background: var(--bg);
     color: var(--text);
     font-family: var(--sans);
-    font-size: 13px;
+    font-size: 14px;
     min-height: 100vh;
     display: flex;
     flex-direction: column;
+  }
+
+  /* ── Reduced motion ────────────────────────────── */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
   }
 
   /* ── Title bar ─────────────────────────────────── */
@@ -45,12 +66,12 @@
     border-bottom: 1px solid var(--border);
     display: flex;
     align-items: center;
-    padding: 0 16px;
-    height: 38px;
+    padding: 0 var(--sp-4);
+    height: 40px;
     flex-shrink: 0;
     user-select: none;
   }
-  .win-controls { display: flex; gap: 8px; margin-right: 16px; }
+  .win-controls { display: flex; gap: var(--sp-2); margin-right: var(--sp-4); }
   .win-btn {
     width: 12px; height: 12px; border-radius: 50%; cursor: pointer;
     transition: opacity 0.15s;
@@ -61,7 +82,7 @@
   .win-btn.max    { background: #3dd68c; }
   .titlebar-title {
     font-family: var(--mono);
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-dim);
     letter-spacing: 0.08em;
     flex: 1;
@@ -87,7 +108,7 @@
     overflow: hidden;
   }
   .sidebar-logo {
-    padding: 20px 16px 16px;
+    padding: var(--sp-5) var(--sp-4) var(--sp-4);
     border-bottom: 1px solid var(--border);
   }
   .logo-mark {
@@ -99,19 +120,19 @@
     line-height: 1;
   }
   .logo-sub {
-    font-size: 10px;
+    font-size: 12px;
     color: var(--text-dim);
     letter-spacing: 0.12em;
     text-transform: uppercase;
-    margin-top: 4px;
+    margin-top: var(--sp-1);
   }
 
-  .sidebar-steps { padding: 16px 0; flex: 1; }
+  .sidebar-steps { padding: var(--sp-4) 0; flex: 1; }
   .step-item {
     display: flex;
     align-items: flex-start;
-    gap: 12px;
-    padding: 10px 16px;
+    gap: var(--sp-3);
+    padding: var(--sp-3) var(--sp-4);
     cursor: pointer;
     transition: background 0.15s;
     position: relative;
@@ -129,13 +150,13 @@
   .step-item.done .step-num { background: var(--green-dim); color: var(--green); border-color: var(--green-dim); }
   .step-item.done .step-label { color: var(--text-mid); }
   .step-num {
-    width: 22px; height: 22px;
+    width: 24px; height: 24px;
     border-radius: 50%;
     background: var(--panel2);
     border: 1px solid var(--border2);
     display: flex; align-items: center; justify-content: center;
     font-family: var(--mono);
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 600;
     color: var(--text-dim);
     flex-shrink: 0;
@@ -148,53 +169,53 @@
   }
   .step-info { flex: 1; min-width: 0; }
   .step-label {
-    font-size: 12px;
+    font-size: 13px;
     font-weight: 500;
     color: var(--text);
     line-height: 1.3;
   }
   .step-item.active .step-label { color: var(--amber); }
   .step-desc {
-    font-size: 10px;
+    font-size: 12px;
     color: var(--text-dim);
-    margin-top: 2px;
+    margin-top: var(--sp-1);
     line-height: 1.4;
   }
 
   .sidebar-stats {
-    padding: 12px 16px;
+    padding: var(--sp-3) var(--sp-4);
     border-top: 1px solid var(--border);
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: var(--sp-2);
   }
   .stat-row {
     display: flex;
     justify-content: space-between;
     align-items: center;
   }
-  .stat-label { font-size: 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.08em; }
-  .stat-val { font-family: var(--mono); font-size: 11px; color: var(--green); }
+  .stat-label { font-size: 12px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.08em; }
+  .stat-val { font-family: var(--mono); font-size: 12px; color: var(--green); }
 
   /* ── Main panel ─────────────────────────────────── */
   .main {
     background: var(--panel2);
     overflow-y: auto;
-    padding: 28px 32px;
+    padding: var(--sp-8) var(--sp-8);
   }
 
   .step-header {
-    margin-bottom: 24px;
-    padding-bottom: 16px;
+    margin-bottom: var(--sp-6);
+    padding-bottom: var(--sp-4);
     border-bottom: 1px solid var(--border);
   }
   .step-header-tag {
     font-family: var(--mono);
-    font-size: 10px;
+    font-size: 12px;
     color: var(--amber);
     letter-spacing: 0.12em;
     text-transform: uppercase;
-    margin-bottom: 6px;
+    margin-bottom: var(--sp-2);
   }
   .step-header h1 {
     font-size: 20px;
@@ -203,23 +224,23 @@
     letter-spacing: -0.02em;
   }
   .step-header p {
-    font-size: 12px;
+    font-size: 14px;
     color: var(--text-mid);
-    margin-top: 4px;
+    margin-top: var(--sp-1);
   }
 
   /* Tiles */
   .tile-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-    gap: 10px;
-    margin-bottom: 24px;
+    gap: var(--sp-3);
+    margin-bottom: var(--sp-6);
   }
   .tile {
     background: var(--panel);
     border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 14px;
+    border-radius: 8px;
+    padding: var(--sp-4);
     cursor: pointer;
     transition: all 0.15s;
     position: relative;
@@ -231,23 +252,23 @@
     background: #1c1700;
   }
   .tile.selected::after {
-    content: '✓';
+    content: '\2713';
     position: absolute;
-    top: 8px; right: 10px;
+    top: var(--sp-2); right: var(--sp-3);
     color: var(--amber);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
   }
-  .tile-icon { font-size: 20px; margin-bottom: 8px; }
-  .tile-name { font-size: 12px; font-weight: 600; color: var(--text); }
-  .tile-desc { font-size: 10px; color: var(--text-dim); margin-top: 3px; line-height: 1.4; }
+  .tile-icon { font-size: 20px; margin-bottom: var(--sp-2); }
+  .tile-name { font-size: 13px; font-weight: 600; color: var(--text); }
+  .tile-desc { font-size: 12px; color: var(--text-dim); margin-top: var(--sp-1); line-height: 1.4; }
   .tile.disabled { opacity: 0.35; cursor: not-allowed; }
   .tile-badge {
     display: inline-block;
-    font-size: 9px;
-    padding: 1px 5px;
-    border-radius: 3px;
-    margin-top: 4px;
+    font-size: 12px;
+    padding: 2px var(--sp-2);
+    border-radius: 4px;
+    margin-top: var(--sp-1);
     font-family: var(--mono);
     letter-spacing: 0.04em;
   }
@@ -260,15 +281,15 @@
   .form-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 14px;
-    margin-bottom: 20px;
+    gap: var(--sp-4);
+    margin-bottom: var(--sp-5);
   }
   .form-grid.cols1 { grid-template-columns: 1fr; }
   .form-grid.cols3 { grid-template-columns: 1fr 1fr 1fr; }
-  .field { display: flex; flex-direction: column; gap: 5px; }
+  .field { display: flex; flex-direction: column; gap: var(--sp-1); }
   .field.span2 { grid-column: span 2; }
   .field label {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 500;
     color: var(--text-mid);
     letter-spacing: 0.04em;
@@ -279,22 +300,35 @@
     border-radius: 4px;
     color: var(--text);
     font-family: var(--mono);
-    font-size: 12px;
-    padding: 8px 10px;
+    font-size: 13px;
+    padding: var(--sp-2) var(--sp-3);
     outline: none;
     transition: border-color 0.15s;
   }
   .field input:focus, .field select:focus { border-color: var(--amber); }
   .field input::placeholder { color: var(--text-dim); }
+  .field input.field-error, .field select.field-error {
+    border-color: var(--red);
+  }
+  .field input.field-error:focus, .field select.field-error:focus {
+    border-color: var(--red);
+  }
   select option { background: var(--panel); }
-  .field-hint { font-size: 10px; color: var(--text-dim); }
+  .field-hint { font-size: 12px; color: var(--text-dim); }
+  .field-error-msg {
+    font-size: 12px;
+    color: var(--red);
+    display: none;
+    margin-top: 2px;
+  }
+  .field-error-msg.visible { display: block; }
 
   /* Toggle switches */
   .toggle-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 10px;
-    margin-bottom: 20px;
+    gap: var(--sp-3);
+    margin-bottom: var(--sp-5);
   }
   .toggle-row {
     display: flex;
@@ -302,12 +336,12 @@
     justify-content: space-between;
     background: var(--panel);
     border: 1px solid var(--border);
-    border-radius: 5px;
-    padding: 10px 14px;
+    border-radius: 8px;
+    padding: var(--sp-3) var(--sp-4);
     cursor: pointer;
   }
-  .toggle-info .toggle-name { font-size: 12px; font-weight: 500; }
-  .toggle-info .toggle-desc { font-size: 10px; color: var(--text-dim); margin-top: 2px; }
+  .toggle-info .toggle-name { font-size: 13px; font-weight: 500; }
+  .toggle-info .toggle-desc { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
   .toggle-switch {
     width: 32px; height: 18px;
     background: var(--border2);
@@ -327,36 +361,40 @@
     transition: left 0.2s;
   }
   .toggle-switch.on::after { left: 17px; }
+  .toggle-switch:focus-visible {
+    outline: 2px solid var(--amber);
+    outline-offset: 2px;
+  }
 
   /* Section label */
   .section-label {
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 600;
     color: var(--text-dim);
     text-transform: uppercase;
     letter-spacing: 0.1em;
-    margin-bottom: 10px;
-    margin-top: 20px;
+    margin-bottom: var(--sp-3);
+    margin-top: var(--sp-5);
   }
   .section-label:first-child { margin-top: 0; }
 
   /* Transform rows */
-  .transform-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
+  .transform-list { display: flex; flex-direction: column; gap: var(--sp-2); margin-bottom: var(--sp-4); }
   .transform-row {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: var(--sp-3);
     background: var(--panel);
     border: 1px solid var(--border);
-    border-radius: 5px;
-    padding: 8px 12px;
+    border-radius: 8px;
+    padding: var(--sp-2) var(--sp-3);
   }
   .transform-op {
     font-family: var(--mono);
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 600;
-    padding: 2px 7px;
-    border-radius: 3px;
+    padding: 2px var(--sp-2);
+    border-radius: 4px;
     text-transform: uppercase;
     letter-spacing: 0.06em;
     flex-shrink: 0;
@@ -367,7 +405,7 @@
   .transform-op.encrypt { background: #1a2a1a; color: var(--green); }
   .transform-cols {
     font-family: var(--mono);
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text);
     flex: 1;
   }
@@ -375,7 +413,7 @@
     color: var(--text-dim);
     cursor: pointer;
     font-size: 14px;
-    padding: 0 4px;
+    padding: 0 var(--sp-1);
     transition: color 0.15s;
   }
   .transform-del:hover { color: var(--red); }
@@ -383,12 +421,12 @@
   .add-transform {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--sp-2);
     color: var(--amber);
     cursor: pointer;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 500;
-    padding: 6px 0;
+    padding: var(--sp-2) 0;
     width: fit-content;
     transition: opacity 0.15s;
   }
@@ -398,36 +436,36 @@
   .summary-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 12px;
-    margin-bottom: 20px;
+    gap: var(--sp-3);
+    margin-bottom: var(--sp-5);
   }
   .summary-card {
     background: var(--panel);
     border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 14px;
+    border-radius: 8px;
+    padding: var(--sp-4);
   }
   .summary-card-label {
-    font-size: 10px;
+    font-size: 12px;
     color: var(--text-dim);
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    margin-bottom: 6px;
+    margin-bottom: var(--sp-2);
   }
   .summary-card-val {
     font-family: var(--mono);
-    font-size: 13px;
+    font-size: 14px;
     color: var(--text);
     font-weight: 500;
   }
   .summary-card-val.green { color: var(--green); }
   .summary-card-val.amber { color: var(--amber); }
-  .summary-badge-list { display: flex; flex-wrap: wrap; gap: 5px; }
+  .summary-badge-list { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
   .summary-badge {
     font-family: var(--mono);
-    font-size: 10px;
-    padding: 2px 7px;
-    border-radius: 3px;
+    font-size: 12px;
+    padding: 2px var(--sp-2);
+    border-radius: 4px;
     background: var(--green-dim);
     color: var(--green);
   }
@@ -437,39 +475,59 @@
     display: flex;
     align-items: center;
     justify-content: flex-end;
-    gap: 10px;
-    margin-top: 24px;
-    padding-top: 16px;
+    gap: var(--sp-3);
+    margin-top: var(--sp-6);
+    padding-top: var(--sp-4);
     border-top: 1px solid var(--border);
   }
   .btn {
-    padding: 8px 20px;
-    border-radius: 5px;
+    padding: var(--sp-2) var(--sp-5);
+    border-radius: 8px;
     font-family: var(--sans);
-    font-size: 12px;
+    font-size: 13px;
     font-weight: 600;
     cursor: pointer;
     transition: all 0.15s;
     border: none;
     letter-spacing: 0.03em;
   }
+  .btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
   .btn-ghost {
     background: transparent;
     color: var(--text-dim);
     border: 1px solid var(--border2);
   }
-  .btn-ghost:hover { color: var(--text); border-color: var(--text-dim); }
+  .btn-ghost:hover:not(:disabled) { color: var(--text); border-color: var(--text-dim); }
   .btn-primary {
     background: var(--amber);
     color: #0a0c0f;
   }
-  .btn-primary:hover { background: #ffc030; }
+  .btn-primary:hover:not(:disabled) { background: #ffc030; }
   .btn-run {
     background: var(--green);
     color: #0a0c0f;
-    padding: 8px 28px;
+    padding: var(--sp-2) var(--sp-8);
+    display: inline-flex;
+    align-items: center;
+    gap: var(--sp-2);
   }
-  .btn-run:hover { background: #5af0a8; }
+  .btn-run:hover:not(:disabled) { background: #5af0a8; }
+  .btn-run:disabled { background: var(--green-dim); color: var(--text-dim); }
+
+  /* Spinner */
+  .spinner {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border: 2px solid transparent;
+    border-top-color: currentColor;
+    border-radius: 50%;
+    animation: spin 0.6s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
 
   /* ── Terminal ───────────────────────────────────── */
   .terminal {
@@ -482,8 +540,8 @@
   .term-bar {
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 6px 16px;
+    gap: var(--sp-3);
+    padding: var(--sp-2) var(--sp-4);
     background: var(--panel);
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
@@ -494,12 +552,12 @@
     animation: pulse 2s infinite;
   }
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
-  .term-title { font-family: var(--mono); font-size: 10px; color: var(--text-dim); }
+  .term-title { font-family: var(--mono); font-size: 12px; color: var(--text-dim); }
   .term-body {
     font-family: var(--mono);
-    font-size: 11px;
+    font-size: 12px;
     line-height: 1.7;
-    padding: 10px 16px;
+    padding: var(--sp-3) var(--sp-4);
     overflow-y: auto;
     flex: 1;
   }
@@ -509,6 +567,7 @@
   .term-info { color: var(--blue); }
   .term-dim { color: var(--text-dim); }
   .term-white { color: var(--text); }
+  .term-error { color: var(--red); }
 
   /* step pages */
   .step-page { display: none; animation: fadeIn 0.2s ease; }
@@ -519,13 +578,13 @@
   .pii-warning {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--sp-2);
     background: #1c1400;
     border: 1px solid var(--amber-dim);
-    border-radius: 5px;
-    padding: 8px 12px;
-    margin-bottom: 16px;
-    font-size: 11px;
+    border-radius: 8px;
+    padding: var(--sp-2) var(--sp-3);
+    margin-bottom: var(--sp-4);
+    font-size: 12px;
     color: var(--amber);
   }
 
@@ -625,17 +684,17 @@
       <div class="section-label">Source type</div>
       <div class="tile-grid" style="grid-template-columns: repeat(3, 1fr)">
         <div class="tile selected" onclick="selectTile(this, 'src', 'file')" data-val="file">
-          <div class="tile-icon">📁</div>
+          <div class="tile-icon">&#x1F4C1;</div>
           <div class="tile-name">File</div>
           <div class="tile-desc">CSV, Parquet, Excel, JSON, XML, SAS, Stata and 7 more</div>
         </div>
         <div class="tile" onclick="selectTile(this, 'src', 'database')" data-val="database">
-          <div class="tile-icon">🗄️</div>
+          <div class="tile-icon">&#x1F5C4;&#xFE0F;</div>
           <div class="tile-name">Database</div>
           <div class="tile-desc">Read from any of 15 platforms — SQLite to Snowflake</div>
         </div>
         <div class="tile" onclick="selectTile(this, 'src', 'stream')" data-val="stream">
-          <div class="tile-icon">⚡</div>
+          <div class="tile-icon">&#x26A1;</div>
           <div class="tile-name">Real-Time Stream</div>
           <div class="tile-desc">Kafka, AWS Kinesis, or Google Pub/Sub</div>
         </div>
@@ -644,27 +703,28 @@
       <div id="src-file-opts">
         <div class="section-label">File format</div>
         <div class="tile-grid">
-          <div class="tile selected" onclick="selectTile(this,'fmt','csv')"><div class="tile-icon">📄</div><div class="tile-name">CSV</div><div class="tile-desc">.csv, auto-detect delimiter</div></div>
-          <div class="tile" onclick="selectTile(this,'fmt','parquet')"><div class="tile-icon">🗜️</div><div class="tile-name">Parquet</div><div class="tile-desc">Columnar binary</div></div>
+          <div class="tile selected" onclick="selectTile(this,'fmt','csv')"><div class="tile-icon">&#x1F4C4;</div><div class="tile-name">CSV</div><div class="tile-desc">.csv, auto-detect delimiter</div></div>
+          <div class="tile" onclick="selectTile(this,'fmt','parquet')"><div class="tile-icon">&#x1F5DC;&#xFE0F;</div><div class="tile-name">Parquet</div><div class="tile-desc">Columnar binary</div></div>
           <div class="tile" onclick="selectTile(this,'fmt','json')"><div class="tile-icon">{ }</div><div class="tile-name">JSON / JSONL</div><div class="tile-desc">Array or newline-delimited</div></div>
-          <div class="tile" onclick="selectTile(this,'fmt','excel')"><div class="tile-icon">📊</div><div class="tile-name">Excel</div><div class="tile-desc">.xlsx / .xls</div></div>
-          <div class="tile" onclick="selectTile(this,'fmt','xml')"><div class="tile-icon">〈/〉</div><div class="tile-name">XML</div><div class="tile-desc">Auto-flatten nested</div></div>
-          <div class="tile" onclick="selectTile(this,'fmt','sas')"><div class="tile-icon">📦</div><div class="tile-name">SAS</div><div class="tile-desc">.sas7bdat dataset</div></div>
-          <div class="tile" onclick="selectTile(this,'fmt','avro')"><div class="tile-icon">🔷</div><div class="tile-name">Avro / ORC</div><div class="tile-desc">Schema-embedded binary</div></div>
-          <div class="tile" onclick="selectTile(this,'fmt','other')"><div class="tile-icon">⋯</div><div class="tile-name">More…</div><div class="tile-desc">TSV, YAML, Feather, Stata, FWF</div></div>
+          <div class="tile" onclick="selectTile(this,'fmt','excel')"><div class="tile-icon">&#x1F4CA;</div><div class="tile-name">Excel</div><div class="tile-desc">.xlsx / .xls</div></div>
+          <div class="tile" onclick="selectTile(this,'fmt','xml')"><div class="tile-icon">&lt;/&gt;</div><div class="tile-name">XML</div><div class="tile-desc">Auto-flatten nested</div></div>
+          <div class="tile" onclick="selectTile(this,'fmt','sas')"><div class="tile-icon">&#x1F4E6;</div><div class="tile-name">SAS</div><div class="tile-desc">.sas7bdat dataset</div></div>
+          <div class="tile" onclick="selectTile(this,'fmt','avro')"><div class="tile-icon">&#x1F537;</div><div class="tile-name">Avro / ORC</div><div class="tile-desc">Schema-embedded binary</div></div>
+          <div class="tile" onclick="selectTile(this,'fmt','other')"><div class="tile-icon">&#x22EF;</div><div class="tile-name">More...</div><div class="tile-desc">TSV, YAML, Feather, Stata, FWF</div></div>
         </div>
 
         <div class="form-grid cols1">
-          <div class="field">
-            <label>File path</label>
-            <input type="text" placeholder="C:\Users\matt\data\customers.csv" id="file-path" oninput="updateStat()">
+          <div class="field" id="field-file-path">
+            <label for="file-path">File path</label>
+            <input type="text" placeholder="C:\Users\matt\data\customers.csv" id="file-path" oninput="updateStat(); clearFieldError('file-path')">
+            <div class="field-error-msg" id="file-path-error">File path is required when source is File.</div>
             <div class="field-hint">Compression auto-detected — .gz .bz2 .zip .zst .lz4 .tgz supported</div>
           </div>
         </div>
       </div>
 
       <div class="btn-row">
-        <button class="btn btn-primary" onclick="goStep(2)">Next: Destination →</button>
+        <button class="btn btn-primary" id="btn-step1-next" onclick="validateAndGo(2)">Next: Destination &#x2192;</button>
       </div>
     </div>
 
@@ -678,36 +738,36 @@
 
       <div class="section-label">Tier 1 — Mainstream Cloud Warehouses</div>
       <div class="tile-grid">
-        <div class="tile" onclick="selectTile(this,'dst','sqlite')"><div class="tile-icon">🪶</div><div class="tile-name">SQLite</div><span class="tile-badge tier1">LOCAL</span></div>
-        <div class="tile" onclick="selectTile(this,'dst','postgresql')"><div class="tile-icon">🐘</div><div class="tile-name">PostgreSQL</div><span class="tile-badge tier1">SQL</span></div>
-        <div class="tile" onclick="selectTile(this,'dst','mysql')"><div class="tile-icon">🐬</div><div class="tile-name">MySQL</div><span class="tile-badge tier1">SQL</span></div>
-        <div class="tile" onclick="selectTile(this,'dst','mssql')"><div class="tile-icon">🪟</div><div class="tile-name">SQL Server</div><span class="tile-badge tier1">SQL</span></div>
-        <div class="tile selected" onclick="selectTile(this,'dst','snowflake')"><div class="tile-icon">❄️</div><div class="tile-name">Snowflake</div><span class="tile-badge tier1">CLOUD</span></div>
-        <div class="tile" onclick="selectTile(this,'dst','bigquery')"><div class="tile-icon">🔵</div><div class="tile-name">BigQuery</div><span class="tile-badge tier1">CLOUD</span></div>
-        <div class="tile" onclick="selectTile(this,'dst','redshift')"><div class="tile-icon">🔴</div><div class="tile-name">Redshift</div><span class="tile-badge tier1">CLOUD</span></div>
-        <div class="tile" onclick="selectTile(this,'dst','synapse')"><div class="tile-icon">💜</div><div class="tile-name">Azure Synapse</div><span class="tile-badge tier1">CLOUD</span></div>
-        <div class="tile" onclick="selectTile(this,'dst','mongodb')"><div class="tile-icon">🍃</div><div class="tile-name">MongoDB</div><span class="tile-badge tier1">NOSQL</span></div>
+        <div class="tile" onclick="selectTile(this,'dst','sqlite')"><div class="tile-icon">&#x1FABF;</div><div class="tile-name">SQLite</div><span class="tile-badge tier1">LOCAL</span></div>
+        <div class="tile" onclick="selectTile(this,'dst','postgresql')"><div class="tile-icon">&#x1F418;</div><div class="tile-name">PostgreSQL</div><span class="tile-badge tier1">SQL</span></div>
+        <div class="tile" onclick="selectTile(this,'dst','mysql')"><div class="tile-icon">&#x1F42C;</div><div class="tile-name">MySQL</div><span class="tile-badge tier1">SQL</span></div>
+        <div class="tile" onclick="selectTile(this,'dst','mssql')"><div class="tile-icon">&#x1FA9F;</div><div class="tile-name">SQL Server</div><span class="tile-badge tier1">SQL</span></div>
+        <div class="tile selected" onclick="selectTile(this,'dst','snowflake')"><div class="tile-icon">&#x2744;&#xFE0F;</div><div class="tile-name">Snowflake</div><span class="tile-badge tier1">CLOUD</span></div>
+        <div class="tile" onclick="selectTile(this,'dst','bigquery')"><div class="tile-icon">&#x1F535;</div><div class="tile-name">BigQuery</div><span class="tile-badge tier1">CLOUD</span></div>
+        <div class="tile" onclick="selectTile(this,'dst','redshift')"><div class="tile-icon">&#x1F534;</div><div class="tile-name">Redshift</div><span class="tile-badge tier1">CLOUD</span></div>
+        <div class="tile" onclick="selectTile(this,'dst','synapse')"><div class="tile-icon">&#x1F49C;</div><div class="tile-name">Azure Synapse</div><span class="tile-badge tier1">CLOUD</span></div>
+        <div class="tile" onclick="selectTile(this,'dst','mongodb')"><div class="tile-icon">&#x1F343;</div><div class="tile-name">MongoDB</div><span class="tile-badge tier1">NOSQL</span></div>
       </div>
 
       <div class="section-label">Tier 2 — Analytical Engines</div>
       <div class="tile-grid">
-        <div class="tile" onclick="selectTile(this,'dst','databricks')"><div class="tile-icon">🧱</div><div class="tile-name">Databricks</div><span class="tile-badge tier2">DELTA</span></div>
-        <div class="tile" onclick="selectTile(this,'dst','clickhouse')"><div class="tile-icon">⬡</div><div class="tile-name">ClickHouse</div><span class="tile-badge tier2">OLAP</span></div>
+        <div class="tile" onclick="selectTile(this,'dst','databricks')"><div class="tile-icon">&#x1F9F1;</div><div class="tile-name">Databricks</div><span class="tile-badge tier2">DELTA</span></div>
+        <div class="tile" onclick="selectTile(this,'dst','clickhouse')"><div class="tile-icon">&#x2B21;</div><div class="tile-name">ClickHouse</div><span class="tile-badge tier2">OLAP</span></div>
       </div>
 
       <div class="section-label">Tier 3 — Enterprise & SAP</div>
       <div class="tile-grid">
-        <div class="tile" onclick="selectTile(this,'dst','oracle')"><div class="tile-icon">🔶</div><div class="tile-name">Oracle ADW</div><span class="tile-badge tier3">ENTERPRISE</span></div>
-        <div class="tile" onclick="selectTile(this,'dst','db2')"><div class="tile-icon">🔷</div><div class="tile-name">IBM Db2</div><span class="tile-badge tier3">ENTERPRISE</span></div>
-        <div class="tile" onclick="selectTile(this,'dst','firebolt')"><div class="tile-icon">🔥</div><div class="tile-name">Firebolt</div><span class="tile-badge tier3">ANALYTICS</span></div>
-        <div class="tile" onclick="selectTile(this,'dst','yellowbrick')"><div class="tile-icon">🟡</div><div class="tile-name">Yellowbrick</div><span class="tile-badge tier3">MPP</span></div>
-        <div class="tile" onclick="selectTile(this,'dst','hana')"><div class="tile-icon">🌐</div><div class="tile-name">SAP HANA</div><span class="tile-badge sap">SAP</span><br><div class="tile-desc" style="margin-top:4px">Live source for SAP Analytics Cloud</div></div>
-        <div class="tile" onclick="selectTile(this,'dst','datasphere')"><div class="tile-icon">☁️</div><div class="tile-name">SAP Datasphere</div><span class="tile-badge sap">SAP</span><br><div class="tile-desc" style="margin-top:4px">Semantic layer → SAC dashboards</div></div>
+        <div class="tile" onclick="selectTile(this,'dst','oracle')"><div class="tile-icon">&#x1F536;</div><div class="tile-name">Oracle ADW</div><span class="tile-badge tier3">ENTERPRISE</span></div>
+        <div class="tile" onclick="selectTile(this,'dst','db2')"><div class="tile-icon">&#x1F537;</div><div class="tile-name">IBM Db2</div><span class="tile-badge tier3">ENTERPRISE</span></div>
+        <div class="tile" onclick="selectTile(this,'dst','firebolt')"><div class="tile-icon">&#x1F525;</div><div class="tile-name">Firebolt</div><span class="tile-badge tier3">ANALYTICS</span></div>
+        <div class="tile" onclick="selectTile(this,'dst','yellowbrick')"><div class="tile-icon">&#x1F7E1;</div><div class="tile-name">Yellowbrick</div><span class="tile-badge tier3">MPP</span></div>
+        <div class="tile" onclick="selectTile(this,'dst','hana')"><div class="tile-icon">&#x1F310;</div><div class="tile-name">SAP HANA</div><span class="tile-badge sap">SAP</span><br><div class="tile-desc" style="margin-top:4px">Live source for SAP Analytics Cloud</div></div>
+        <div class="tile" onclick="selectTile(this,'dst','datasphere')"><div class="tile-icon">&#x2601;&#xFE0F;</div><div class="tile-name">SAP Datasphere</div><span class="tile-badge sap">SAP</span><br><div class="tile-desc" style="margin-top:4px">Semantic layer / SAC dashboards</div></div>
       </div>
 
       <div class="btn-row">
-        <button class="btn btn-ghost" onclick="goStep(1)">← Back</button>
-        <button class="btn btn-primary" onclick="goStep(3)">Next: Connection →</button>
+        <button class="btn btn-ghost" onclick="goStep(1)">&#x2190; Back</button>
+        <button class="btn btn-primary" onclick="goStep(3)">Next: Connection &#x2192;</button>
       </div>
     </div>
 
@@ -722,40 +782,48 @@
       <div class="section-label">Source — File</div>
       <div class="form-grid cols1">
         <div class="field">
-          <label>File path</label>
-          <input type="text" value="C:\Users\matt\data\customers.csv">
+          <label for="conn-file-path">File path</label>
+          <input type="text" id="conn-file-path" value="C:\Users\matt\data\customers.csv" data-conn-required>
+          <div class="field-error-msg" id="conn-file-path-error">File path is required.</div>
         </div>
       </div>
 
-      <div class="section-label">Destination — Snowflake</div>
-      <div class="form-grid">
+      <div class="section-label" id="conn-dst-label">Destination — Snowflake</div>
+      <div class="form-grid" id="conn-fields">
         <div class="field span2">
-          <label>Account identifier</label>
-          <input type="text" placeholder="org-account  (e.g. myorg-myaccount)">
+          <label for="conn-account">Account identifier</label>
+          <input type="text" id="conn-account" placeholder="org-account  (e.g. myorg-myaccount)" data-conn-required>
+          <div class="field-error-msg" id="conn-account-error">Account identifier is required.</div>
         </div>
         <div class="field">
-          <label>Username</label>
-          <input type="text" placeholder="PIPELINE_USER">
+          <label for="conn-username">Username</label>
+          <input type="text" id="conn-username" placeholder="PIPELINE_USER" data-conn-required>
+          <div class="field-error-msg" id="conn-username-error">Username is required.</div>
         </div>
         <div class="field">
-          <label>Password</label>
-          <input type="password" placeholder="••••••••••">
+          <label for="conn-password">Password</label>
+          <input type="password" id="conn-password" placeholder="••••••••••" data-conn-required>
+          <div class="field-error-msg" id="conn-password-error">Password is required.</div>
         </div>
         <div class="field">
-          <label>Database</label>
-          <input type="text" placeholder="PROD_DB">
+          <label for="conn-database">Database</label>
+          <input type="text" id="conn-database" placeholder="PROD_DB" data-conn-required>
+          <div class="field-error-msg" id="conn-database-error">Database is required.</div>
         </div>
         <div class="field">
-          <label>Schema</label>
-          <input type="text" placeholder="PUBLIC">
+          <label for="conn-schema">Schema</label>
+          <input type="text" id="conn-schema" placeholder="PUBLIC" data-conn-required>
+          <div class="field-error-msg" id="conn-schema-error">Schema is required.</div>
         </div>
         <div class="field">
-          <label>Warehouse</label>
-          <input type="text" placeholder="COMPUTE_WH">
+          <label for="conn-warehouse">Warehouse</label>
+          <input type="text" id="conn-warehouse" placeholder="COMPUTE_WH" data-conn-required>
+          <div class="field-error-msg" id="conn-warehouse-error">Warehouse is required.</div>
         </div>
         <div class="field">
-          <label>Destination table</label>
-          <input type="text" placeholder="customers_clean">
+          <label for="conn-table">Destination table</label>
+          <input type="text" id="conn-table" placeholder="customers_clean" data-conn-required>
+          <div class="field-error-msg" id="conn-table-error">Destination table is required.</div>
         </div>
       </div>
 
@@ -767,8 +835,8 @@
       </div>
 
       <div class="btn-row">
-        <button class="btn btn-ghost" onclick="goStep(2)">← Back</button>
-        <button class="btn btn-primary" onclick="goStep(4)">Next: Options →</button>
+        <button class="btn btn-ghost" onclick="goStep(2)">&#x2190; Back</button>
+        <button class="btn btn-primary" id="btn-step3-next" onclick="validateAndGo(4)">Next: Options &#x2192;</button>
       </div>
     </div>
 
@@ -781,7 +849,7 @@
       </div>
 
       <div class="pii-warning">
-        ⚠️ PII detected in source columns: <strong>email, phone, salary, dob</strong> — masking recommended before load.
+        &#x26A0;&#xFE0F; PII detected in source columns: <strong>email, phone, salary, dob</strong> — masking recommended before load.
       </div>
 
       <div class="section-label">Transforms</div>
@@ -789,78 +857,79 @@
         <div class="transform-row">
           <span class="transform-op mask">mask</span>
           <span class="transform-cols">email, phone</span>
-          <span class="transform-del" onclick="this.parentElement.remove()">✕</span>
+          <span class="transform-del" onclick="this.parentElement.remove()">&#x2715;</span>
         </div>
         <div class="transform-row">
           <span class="transform-op hash">hash</span>
           <span class="transform-cols">user_id</span>
-          <span class="transform-del" onclick="this.parentElement.remove()">✕</span>
+          <span class="transform-del" onclick="this.parentElement.remove()">&#x2715;</span>
         </div>
         <div class="transform-row">
           <span class="transform-op drop">drop</span>
           <span class="transform-cols">password_hash, internal_notes</span>
-          <span class="transform-del" onclick="this.parentElement.remove()">✕</span>
+          <span class="transform-del" onclick="this.parentElement.remove()">&#x2715;</span>
         </div>
       </div>
-      <div class="add-transform" onclick="addTransform()">＋ Add transform</div>
+      <div class="add-transform" onclick="addTransform()">+ Add transform</div>
 
       <div class="section-label">Governance & Quality</div>
-      <div class="toggle-grid">
+      <div class="toggle-grid" id="toggle-grid">
         <div class="toggle-row" onclick="toggleSwitch(this)">
           <div class="toggle-info">
             <div class="toggle-name">PII Discovery Report</div>
             <div class="toggle-desc">JSON + HTML GDPR/CCPA compliance report</div>
           </div>
-          <div class="toggle-switch on"></div>
+          <div class="toggle-switch on" role="switch" aria-checked="true" tabindex="0" aria-label="PII Discovery Report"></div>
         </div>
         <div class="toggle-row" onclick="toggleSwitch(this)">
           <div class="toggle-info">
             <div class="toggle-name">Data Quality Score</div>
-            <div class="toggle-desc">Completeness, uniqueness, validity (0–100)</div>
+            <div class="toggle-desc">Completeness, uniqueness, validity (0-100)</div>
           </div>
-          <div class="toggle-switch on"></div>
+          <div class="toggle-switch on" role="switch" aria-checked="true" tabindex="0" aria-label="Data Quality Score"></div>
         </div>
         <div class="toggle-row" onclick="toggleSwitch(this)">
           <div class="toggle-info">
             <div class="toggle-name">Reversible Load</div>
             <div class="toggle-desc">Snapshot before write — one-call rollback</div>
           </div>
-          <div class="toggle-switch on"></div>
+          <div class="toggle-switch on" role="switch" aria-checked="true" tabindex="0" aria-label="Reversible Load"></div>
         </div>
         <div class="toggle-row" onclick="toggleSwitch(this)">
           <div class="toggle-info">
             <div class="toggle-name">Schema Evolution</div>
             <div class="toggle-desc">Auto ALTER TABLE on new columns</div>
           </div>
-          <div class="toggle-switch on"></div>
+          <div class="toggle-switch on" role="switch" aria-checked="true" tabindex="0" aria-label="Schema Evolution"></div>
         </div>
         <div class="toggle-row" onclick="toggleSwitch(this)">
           <div class="toggle-info">
             <div class="toggle-name">Cost Estimate</div>
             <div class="toggle-desc">Log Snowflake compute + storage cost</div>
           </div>
-          <div class="toggle-switch on"></div>
+          <div class="toggle-switch on" role="switch" aria-checked="true" tabindex="0" aria-label="Cost Estimate"></div>
         </div>
         <div class="toggle-row" onclick="toggleSwitch(this)">
           <div class="toggle-info">
             <div class="toggle-name">Dry Run</div>
             <div class="toggle-desc">Run all checks — skip the actual write</div>
           </div>
-          <div class="toggle-switch"></div>
+          <div class="toggle-switch" role="switch" aria-checked="false" tabindex="0" aria-label="Dry Run"></div>
         </div>
       </div>
 
       <div class="section-label">Run label</div>
       <div class="form-grid cols1">
         <div class="field">
-          <input type="text" value="run_customers_20260301" placeholder="Optional run identifier">
+          <label for="run-label">Run identifier</label>
+          <input type="text" id="run-label" value="run_customers_20260301" placeholder="Optional run identifier">
           <div class="field-hint">Appended to all output filenames in the log folder</div>
         </div>
       </div>
 
       <div class="btn-row">
-        <button class="btn btn-ghost" onclick="goStep(3)">← Back</button>
-        <button class="btn btn-primary" onclick="goStep(5)">Next: Review →</button>
+        <button class="btn btn-ghost" onclick="goStep(3)">&#x2190; Back</button>
+        <button class="btn btn-primary" onclick="goStep(5)">Next: Review &#x2192;</button>
       </div>
     </div>
 
@@ -872,45 +941,45 @@
         <p>Confirm your configuration then execute the pipeline.</p>
       </div>
 
-      <div class="summary-grid">
+      <div class="summary-grid" id="summary-grid">
         <div class="summary-card">
           <div class="summary-card-label">Source</div>
-          <div class="summary-card-val">CSV  ·  customers.csv</div>
+          <div class="summary-card-val" id="summary-source">CSV  &#x00B7;  customers.csv</div>
         </div>
         <div class="summary-card">
           <div class="summary-card-label">Destination</div>
-          <div class="summary-card-val amber">Snowflake  ·  customers_clean</div>
+          <div class="summary-card-val amber" id="summary-dest">Snowflake  &#x00B7;  customers_clean</div>
         </div>
         <div class="summary-card">
           <div class="summary-card-label">Write mode</div>
-          <div class="summary-card-val">REPLACE</div>
+          <div class="summary-card-val" id="summary-mode">REPLACE</div>
         </div>
         <div class="summary-card">
           <div class="summary-card-label">Transforms</div>
-          <div class="summary-card-val green">3 configured</div>
+          <div class="summary-card-val green" id="summary-transforms">3 configured</div>
         </div>
         <div class="summary-card" style="grid-column: span 2">
           <div class="summary-card-label">Governance enabled</div>
-          <div class="summary-badge-list">
+          <div class="summary-badge-list" id="summary-governance">
             <span class="summary-badge">PII Report</span>
             <span class="summary-badge">Quality Score</span>
             <span class="summary-badge">Reversible Load</span>
             <span class="summary-badge">Schema Evolution</span>
             <span class="summary-badge">Cost Estimate</span>
-            <span class="summary-badge">Audit Ledger</span>
           </div>
         </div>
       </div>
 
       <div class="section-label">Log folder</div>
-      <div class="field" style="margin-bottom:20px">
-        <input type="text" value="customers LOGS\" readonly style="color:var(--text-dim)">
+      <div class="field" style="margin-bottom:var(--sp-5)">
+        <label for="log-folder">Output directory</label>
+        <input type="text" id="log-folder" value="customers LOGS\" readonly style="color:var(--text-dim)">
         <div class="field-hint">All reports, audit ledger, quality history, snapshots, and logs will be written here.</div>
       </div>
 
       <div class="btn-row" style="justify-content: space-between">
-        <button class="btn btn-ghost" onclick="goStep(4)">← Back</button>
-        <button class="btn btn-run" onclick="runPipeline()">▶  Run Pipeline</button>
+        <button class="btn btn-ghost" onclick="goStep(4)">&#x2190; Back</button>
+        <button class="btn btn-run" id="btn-run" onclick="runPipeline()"><span id="btn-run-label">&#x25B6;  Run Pipeline</span></button>
       </div>
     </div>
 
@@ -920,7 +989,7 @@
   <div class="terminal">
     <div class="term-bar">
       <div class="term-dot" id="term-dot"></div>
-      <div class="term-title">Governance Output — customers LOGS\pipeline_20260301_172409.log</div>
+      <div class="term-title" id="term-title">Governance Output — waiting for configuration</div>
     </div>
     <div class="term-body" id="term-body">
       <span class="term-line"><span class="term-dim">────────────────────────────────────────────────────────────────</span></span>
@@ -935,12 +1004,19 @@
 </div>
 
 <script>
-  let state = { src: 'file', dst: 'snowflake', fmt: 'csv' };
+  /* ── API base URL — same origin by default ─────── */
+  const API_BASE = window.location.origin;
+
+  /* ── State ──────────────────────────────────────── */
+  let state = { src: 'file', dst: 'snowflake', fmt: 'csv', mode: 'replace' };
   let currentStep = 1;
   let running = false;
+  let currentRunId = null;
+  let pollTimer = null;
 
+  /* ── Tile selection ─────────────────────────────── */
   function selectTile(el, group, val) {
-    el.closest('.tile-grid, .main').querySelectorAll('.tile').forEach(t => {
+    el.closest('.tile-grid, .main').querySelectorAll('.tile').forEach(function(t) {
       if (t.dataset.val && t.closest('.tile-grid') === el.closest('.tile-grid')) {
         t.classList.remove('selected');
       }
@@ -953,114 +1029,362 @@
     }
     if (group === 'src') {
       document.getElementById('stat-src').textContent = el.querySelector('.tile-name').textContent;
+      var fileOpts = document.getElementById('src-file-opts');
+      if (fileOpts) {
+        fileOpts.style.display = (val === 'file') ? 'block' : 'none';
+      }
     }
   }
 
   function updateStat() {
-    const v = document.getElementById('file-path').value;
+    var v = document.getElementById('file-path').value;
     if (v) document.getElementById('stat-src').textContent = v.split('\\').pop() || v.split('/').pop() || v;
   }
 
+  /* ── Step navigation ────────────────────────────── */
   function goStep(n) {
     if (running) return;
-    document.querySelectorAll('.step-page').forEach((p,i) => {
-      p.classList.toggle('active', i+1 === n);
+    document.querySelectorAll('.step-page').forEach(function(p, i) {
+      p.classList.toggle('active', i + 1 === n);
     });
-    document.querySelectorAll('.step-item').forEach((item, i) => {
-      item.classList.remove('active','done');
-      if (i+1 === n) item.classList.add('active');
-      if (i+1 < n)   item.classList.add('done');
+    document.querySelectorAll('.step-item').forEach(function(item, i) {
+      item.classList.remove('active', 'done');
+      if (i + 1 === n) item.classList.add('active');
+      if (i + 1 < n)   item.classList.add('done');
     });
     currentStep = n;
+
+    /* Populate summary when entering step 5 */
+    if (n === 5) populateSummary();
   }
 
+  /* ── Form validation ────────────────────────────── */
+  function showFieldError(inputId, msg) {
+    var input = document.getElementById(inputId);
+    var errorEl = document.getElementById(inputId + '-error');
+    if (input) input.classList.add('field-error');
+    if (errorEl) {
+      if (msg) errorEl.textContent = msg;
+      errorEl.classList.add('visible');
+    }
+  }
+
+  function clearFieldError(inputId) {
+    var input = document.getElementById(inputId);
+    var errorEl = document.getElementById(inputId + '-error');
+    if (input) input.classList.remove('field-error');
+    if (errorEl) errorEl.classList.remove('visible');
+  }
+
+  function clearAllFieldErrors() {
+    document.querySelectorAll('.field-error').forEach(function(el) { el.classList.remove('field-error'); });
+    document.querySelectorAll('.field-error-msg.visible').forEach(function(el) { el.classList.remove('visible'); });
+  }
+
+  function validateStep1() {
+    clearAllFieldErrors();
+    if (state.src === 'file') {
+      var filePath = document.getElementById('file-path').value.trim();
+      if (!filePath) {
+        showFieldError('file-path', 'File path is required when source is File.');
+        return false;
+      }
+    }
+    return true;
+  }
+
+  function validateStep3() {
+    clearAllFieldErrors();
+    var valid = true;
+    var requiredFields = document.querySelectorAll('#step3 input[data-conn-required]');
+    requiredFields.forEach(function(input) {
+      if (!input.value.trim()) {
+        showFieldError(input.id);
+        valid = false;
+      }
+    });
+    return valid;
+  }
+
+  function validateAndGo(targetStep) {
+    var valid = true;
+    if (currentStep === 1) valid = validateStep1();
+    if (currentStep === 3) valid = validateStep3();
+    if (valid) goStep(targetStep);
+  }
+
+  /* ── Toggle switches with accessibility ─────────── */
   function toggleSwitch(row) {
-    const sw = row.querySelector('.toggle-switch');
-    sw.classList.toggle('on');
+    var sw = row.querySelector('.toggle-switch');
+    var isOn = sw.classList.toggle('on');
+    sw.setAttribute('aria-checked', isOn ? 'true' : 'false');
   }
 
+  /* Keyboard support for toggle switches */
+  document.addEventListener('keydown', function(e) {
+    if (e.target.getAttribute('role') === 'switch') {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        var row = e.target.closest('.toggle-row');
+        if (row) toggleSwitch(row);
+      }
+    }
+  });
+
+  /* ── Transforms ─────────────────────────────────── */
   function addTransform() {
-    const ops = ['mask','hash','encrypt','drop'];
-    const op = ops[Math.floor(Math.random()*ops.length)];
-    const cols = ['first_name','last_name','ssn','credit_card','address','dob'];
-    const col = cols[Math.floor(Math.random()*cols.length)];
-    const row = document.createElement('div');
+    var ops = ['mask', 'hash', 'encrypt', 'drop'];
+    var op = ops[Math.floor(Math.random() * ops.length)];
+    var cols = ['first_name', 'last_name', 'ssn', 'credit_card', 'address', 'dob'];
+    var col = cols[Math.floor(Math.random() * cols.length)];
+    var row = document.createElement('div');
     row.className = 'transform-row';
-    row.innerHTML = `<span class="transform-op ${op}">${op}</span><span class="transform-cols">${col}</span><span class="transform-del" onclick="this.parentElement.remove()">✕</span>`;
+    row.innerHTML = '<span class="transform-op ' + op + '">' + op + '</span><span class="transform-cols">' + col + '</span><span class="transform-del" onclick="this.parentElement.remove()">✕</span>';
     document.getElementById('transform-list').appendChild(row);
   }
 
+  /* ── Terminal output ────────────────────────────── */
   function termLine(cls, text) {
-    const span = document.createElement('span');
+    var span = document.createElement('span');
     span.className = 'term-line';
-    span.innerHTML = `<span class="${cls}">${text}</span>`;
-    document.getElementById('term-body').appendChild(span);
-    document.getElementById('term-body').scrollTop = 9999;
+    span.innerHTML = '<span class="' + cls + '">' + text + '</span>';
+    var body = document.getElementById('term-body');
+    body.appendChild(span);
+    body.scrollTop = body.scrollHeight;
   }
 
-  function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+  function termClear() {
+    document.getElementById('term-body').innerHTML = '';
+  }
 
+  /* ── Populate summary on step 5 ─────────────────── */
+  function populateSummary() {
+    var filePath = document.getElementById('file-path').value || 'not set';
+    var fileName = filePath.split('\\').pop() || filePath.split('/').pop() || filePath;
+    var fmt = (state.fmt || 'csv').toUpperCase();
+    document.getElementById('summary-source').textContent = fmt + '  ·  ' + fileName;
+
+    var dstLabel = document.getElementById('dst-label').textContent || state.dst;
+    var table = (document.getElementById('conn-table') && document.getElementById('conn-table').value) || '';
+    document.getElementById('summary-dest').textContent = dstLabel + (table ? '  ·  ' + table : '');
+
+    document.getElementById('summary-mode').textContent = (state.mode || 'replace').toUpperCase();
+
+    var transformCount = document.querySelectorAll('#transform-list .transform-row').length;
+    document.getElementById('summary-transforms').textContent = transformCount + ' configured';
+
+    /* Governance badges */
+    var govContainer = document.getElementById('summary-governance');
+    govContainer.innerHTML = '';
+    var toggleRows = document.querySelectorAll('#toggle-grid .toggle-row');
+    toggleRows.forEach(function(row) {
+      var sw = row.querySelector('.toggle-switch');
+      if (sw && sw.classList.contains('on')) {
+        var name = row.querySelector('.toggle-name').textContent;
+        var badge = document.createElement('span');
+        badge.className = 'summary-badge';
+        badge.textContent = name;
+        govContainer.appendChild(badge);
+      }
+    });
+  }
+
+  /* ── Build config object for API ────────────────── */
+  function buildConfig() {
+    var transforms = [];
+    document.querySelectorAll('#transform-list .transform-row').forEach(function(row) {
+      var op = row.querySelector('.transform-op').textContent.trim();
+      var cols = row.querySelector('.transform-cols').textContent.trim();
+      transforms.push({ operation: op, columns: cols });
+    });
+
+    var governance = {};
+    document.querySelectorAll('#toggle-grid .toggle-row').forEach(function(row) {
+      var sw = row.querySelector('.toggle-switch');
+      var name = row.querySelector('.toggle-name').textContent;
+      var key = name.toLowerCase().replace(/\s+/g, '_');
+      governance[key] = sw.classList.contains('on');
+    });
+
+    return {
+      source: state.src,
+      destination: state.dst,
+      config: {
+        format: state.fmt,
+        file_path: document.getElementById('file-path').value || '',
+        write_mode: state.mode || 'replace',
+        connection: {
+          account: (document.getElementById('conn-account') && document.getElementById('conn-account').value) || '',
+          username: (document.getElementById('conn-username') && document.getElementById('conn-username').value) || '',
+          database: (document.getElementById('conn-database') && document.getElementById('conn-database').value) || '',
+          schema: (document.getElementById('conn-schema') && document.getElementById('conn-schema').value) || '',
+          warehouse: (document.getElementById('conn-warehouse') && document.getElementById('conn-warehouse').value) || '',
+          table: (document.getElementById('conn-table') && document.getElementById('conn-table').value) || ''
+        },
+        transforms: transforms,
+        governance: governance,
+        run_label: (document.getElementById('run-label') && document.getElementById('run-label').value) || ''
+      }
+    };
+  }
+
+  /* ── Set button loading state ───────────────────── */
+  function setRunButtonLoading(isLoading) {
+    var btn = document.getElementById('btn-run');
+    var label = document.getElementById('btn-run-label');
+    if (isLoading) {
+      btn.disabled = true;
+      label.innerHTML = '<span class="spinner"></span> Running...';
+    } else {
+      btn.disabled = false;
+      label.innerHTML = '▶  Run Pipeline';
+    }
+  }
+
+  /* ── API helpers ────────────────────────────────── */
+  function apiPost(endpoint, body) {
+    return fetch(API_BASE + endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    }).then(function(res) {
+      if (!res.ok) {
+        return res.json().then(function(data) {
+          throw new Error(data.error || data.message || ('HTTP ' + res.status));
+        }).catch(function(parseErr) {
+          if (parseErr.message && !parseErr.message.startsWith('HTTP')) throw parseErr;
+          throw new Error('HTTP ' + res.status + ' — ' + res.statusText);
+        });
+      }
+      return res.json();
+    });
+  }
+
+  function apiGet(endpoint) {
+    return fetch(API_BASE + endpoint).then(function(res) {
+      if (!res.ok) {
+        return res.json().then(function(data) {
+          throw new Error(data.error || data.message || ('HTTP ' + res.status));
+        }).catch(function(parseErr) {
+          if (parseErr.message && !parseErr.message.startsWith('HTTP')) throw parseErr;
+          throw new Error('HTTP ' + res.status + ' — ' + res.statusText);
+        });
+      }
+      return res.json();
+    });
+  }
+
+  /* ── Status polling ─────────────────────────────── */
+  function startPolling() {
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = setInterval(function() {
+      apiGet('/status').then(function(data) {
+        termLine('term-info', '  [STATUS] ' + (data.status || 'unknown') + (data.started_at ? '  (started ' + data.started_at + ')' : ''));
+
+        if (data.status === 'completed' || data.status === 'done' || data.status === 'finished') {
+          stopPolling();
+          onPipelineComplete(data);
+        } else if (data.status === 'failed' || data.status === 'error') {
+          stopPolling();
+          onPipelineFailed(data.error || 'Pipeline failed with no error message.');
+        }
+        /* status === 'running' keeps polling */
+      }).catch(function(err) {
+        termLine('term-error', '  [POLL ERROR] ' + err.message);
+        /* keep polling — transient network errors should not stop us */
+      });
+    }, 2000);
+  }
+
+  function stopPolling() {
+    if (pollTimer) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+  }
+
+  /* ── Pipeline lifecycle ─────────────────────────── */
+  function onPipelineComplete(statusData) {
+    termLine('term-dim', '');
+    termLine('term-ok', '  ✓  Pipeline run completed successfully.');
+    termLine('term-dim', '');
+
+    /* Fetch metrics from /metrics */
+    apiGet('/metrics').then(function(metrics) {
+      termLine('term-dim', '════════════════════════════════════════════════════════════════');
+      termLine('term-white', '  PIPELINE METRICS');
+      termLine('term-dim', '════════════════════════════════════════════════════════════════');
+      /* Print each metric key/value */
+      var m = metrics.metrics || metrics;
+      Object.keys(m).forEach(function(key) {
+        if (key === 'run_id') return;
+        termLine('term-ok', '  ' + key + ': ' + JSON.stringify(m[key]));
+      });
+      termLine('term-dim', '');
+    }).catch(function(err) {
+      termLine('term-dim', '  (Could not fetch metrics: ' + err.message + ')');
+    });
+
+    finishRun('Complete', 'var(--green)');
+  }
+
+  function onPipelineFailed(errorMsg) {
+    termLine('term-dim', '');
+    termLine('term-error', '  ✗  PIPELINE FAILED');
+    termLine('term-error', '  Error: ' + errorMsg);
+    termLine('term-dim', '');
+    finishRun('Failed', 'var(--red)');
+  }
+
+  function finishRun(label, color) {
+    running = false;
+    currentRunId = null;
+    setRunButtonLoading(false);
+    document.getElementById('stat-status').textContent = label;
+    document.getElementById('stat-status').style.color = color;
+    document.getElementById('term-dot').style.background = color;
+    document.getElementById('term-dot').style.animation = (label === 'Complete') ? 'none' : '';
+  }
+
+  /* ── Run pipeline — calls the real API ──────────── */
   async function runPipeline() {
     if (running) return;
     running = true;
+    setRunButtonLoading(true);
     document.getElementById('stat-status').textContent = 'Running';
     document.getElementById('stat-status').style.color = 'var(--amber)';
     document.getElementById('term-dot').style.background = 'var(--amber)';
+    document.getElementById('term-dot').style.animation = 'pulse 2s infinite';
+    document.getElementById('term-title').textContent = 'Governance Output — starting pipeline...';
 
-    const tb = document.getElementById('term-body');
-    tb.innerHTML = '';
+    termClear();
+    termLine('term-dim', '════════════════════════════════════════════════════════════════');
+    termLine('term-prompt', '  PIPELINE RUN');
+    termLine('term-dim', '════════════════════════════════════════════════════════════════');
+    termLine('term-dim', '');
+    termLine('term-info', '  [LIFECYCLE] Sending run request to API...');
 
-    const lines = [
-      ['term-dim', '════════════════════════════════════════════════════════════════'],
-      ['term-prompt', '  PIPELINE RUN  ─  customers.csv  →  Snowflake::customers_clean'],
-      ['term-dim', '════════════════════════════════════════════════════════════════'],
-      ['term-dim', ''],
-      ['term-info', '  [LIFECYCLE] PIPELINE_STARTED'],
-      ['term-dim', '  Log folder  →  customers LOGS\\'],
-      ['term-dim', ''],
-      ['term-white', '  [1/5] EXTRACT ─────────────────────────────────────────────'],
-      ['term-ok', '  ✓  SHA-256 fingerprint: 3a9f14c2...'],
-      ['term-ok', '  ✓  45,231 rows × 18 columns read from customers.csv'],
-      ['term-ok', '  ✓  Compression: none detected'],
-      ['term-dim', ''],
-      ['term-white', '  [2/5] CLASSIFY ────────────────────────────────────────────'],
-      ['term-ok', '  ✓  Classification: CONFIDENTIAL  (PII fields: 4, special: 0)'],
-      ['term-info', '  🔍  PII scan  →  4 field(s) found: email, phone, salary, dob'],
-      ['term-dim', ''],
-      ['term-white', '  [3/5] VALIDATE ────────────────────────────────────────────'],
-      ['term-ok', '  ✓  Expectations suite: 12 checks'],
-      ['term-ok', '  ✓  Passed: 12  │  Failed: 0  │  DLQ rows: 0'],
-      ['term-dim', ''],
-      ['term-white', '  [4/5] TRANSFORM ───────────────────────────────────────────'],
-      ['term-ok', '  ✓  mask:    email, phone'],
-      ['term-ok', '  ✓  hash:    user_id'],
-      ['term-ok', '  ✓  drop:    password_hash, internal_notes'],
-      ['term-dim', ''],
-      ['term-white', '  [5/5] LOAD ─────────────────────────────────────────────────'],
-      ['term-info', '  📸  Snapshot saved: customers_clean  [45,231 rows]  (reversible)'],
-      ['term-ok', '  ✅  Load complete: 45,231 rows  →  Snowflake::customers_clean'],
-      ['term-dim', ''],
-      ['term-white', '  GOVERNANCE REPORTS ─────────────────────────────────────────'],
-      ['term-ok', '  ✓  Quality score: 97.4/100  (grade A)'],
-      ['term-ok', '  ✓  PII report  →  customers LOGS\\pii_report_20260301_172409.html'],
-      ['term-ok', '  ✓  Run report  →  customers LOGS\\run_report_20260301_172409.html'],
-      ['term-info', '  💰  Cost estimate: $0.033  (Snowflake X-Small, 0.016 credits)'],
-      ['term-dim', ''],
-      ['term-dim', '════════════════════════════════════════════════════════════════'],
-      ['term-ok', '  ✓  PIPELINE COMPLETE  │  45,231 rows  │  2.4s  │  grade A'],
-      ['term-dim', '════════════════════════════════════════════════════════════════'],
-    ];
+    var config = buildConfig();
 
-    for (const [cls, text] of lines) {
-      termLine(cls, text);
-      await sleep(60);
+    try {
+      var data = await apiPost('/run', config);
+      currentRunId = data.run_id;
+      termLine('term-ok', '  ✓  Run accepted — run_id: ' + data.run_id);
+      termLine('term-info', '  [STATUS] ' + (data.status || 'started'));
+      termLine('term-dim', '  Polling /status every 2s...');
+      termLine('term-dim', '');
+      document.getElementById('term-title').textContent = 'Governance Output — run_id: ' + data.run_id;
+
+      startPolling();
+
+    } catch (err) {
+      termLine('term-dim', '');
+      termLine('term-error', '  ✗  PIPELINE START FAILED');
+      termLine('term-error', '  Error: ' + err.message);
+      termLine('term-dim', '');
+      termLine('term-dim', '  Check that the API is running at ' + API_BASE);
+      finishRun('Error', 'var(--red)');
     }
-
-    running = false;
-    document.getElementById('stat-status').textContent = 'Complete';
-    document.getElementById('stat-status').style.color = 'var(--green)';
-    document.getElementById('term-dot').style.background = 'var(--green)';
-    document.getElementById('term-dot').style.animation = 'none';
   }
 </script>
 </body>
