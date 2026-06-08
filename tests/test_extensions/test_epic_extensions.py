@@ -934,10 +934,7 @@ class TestClarityExtractorNoDB(_TmpMixin):
     def test_refresh_window_blocked(self):
         """Queries are blocked during the configured refresh window."""
         from epic_extensions import ClarityExtractor
-        import epic_extensions as em
         from unittest.mock import patch
-        if not em._SA_AVAILABLE:
-            self.skipTest("SQLAlchemy not installed")
 
         cx = ClarityExtractor(
             self.gov,
@@ -957,9 +954,6 @@ class TestClarityExtractorNoDB(_TmpMixin):
 
     def test_refresh_window_not_blocked_when_disabled(self):
         from epic_extensions import ClarityExtractor
-        import epic_extensions as em
-        if not em._SA_AVAILABLE:
-            self.skipTest("SQLAlchemy not installed")
 
         cx = ClarityExtractor(
             self.gov,

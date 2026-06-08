@@ -80,6 +80,11 @@ class WeaviateLoader:
                 "WeaviateLoader: supply class name via cfg['class_name'] "
                 "or the table parameter."
             )
+        if class_name[0].islower():
+            raise ValueError(
+                f"WeaviateLoader: class name '{class_name}' must start with "
+                "an uppercase letter (Weaviate convention)."
+            )
 
         vector_col = cfg.get("vector_column")
         embed_cols = cfg.get("embed_columns")

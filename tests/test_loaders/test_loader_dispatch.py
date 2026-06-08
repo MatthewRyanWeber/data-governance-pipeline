@@ -533,9 +533,7 @@ class TestLanceDBLoader(unittest.TestCase):
         shutil.rmtree(self._tmp, ignore_errors=True)
 
     def _loader(self):
-        from pipeline_v3 import LanceDBLoader, HAS_LANCEDB
-        if not HAS_LANCEDB:
-            self.skipTest("lancedb not installed")
+        from pipeline_v3 import LanceDBLoader
         return LanceDBLoader(self.gov)
 
     def _cfg(self):
@@ -551,13 +549,9 @@ class TestLanceDBLoader(unittest.TestCase):
     def test_raises_without_lancedb(self):
         """LanceDBLoader raises RuntimeError when lancedb is not installed."""
         import pipeline_v3 as pv3
-        orig = pv3.HAS_LANCEDB
-        pv3.HAS_LANCEDB = False
-        try:
+        with patch("pipeline.loaders.vector.lancedb_loader.HAS_LANCEDB", False):
             with self.assertRaises(RuntimeError):
                 pv3.LanceDBLoader(self.gov)
-        finally:
-            pv3.HAS_LANCEDB = orig
 
     def test_lancedb_in_dispatch(self):
         from pipeline_v3 import _LOADER_DISPATCH, LanceDBLoader
@@ -580,7 +574,7 @@ class TestLanceDBLoader(unittest.TestCase):
 
         self.assertEqual(rows, 3)
         mock_db.create_table.assert_called_once()
-        self.gov._event.assert_called_once()
+        self.gov.load_complete.assert_called_once()
 
     def test_load_append_to_existing_table(self):
         loader = self._loader()
@@ -675,9 +669,7 @@ class TestLanceDBLoader(unittest.TestCase):
         with patch("lancedb.connect", return_value=mock_db):
             loader.load(self._df(), self._cfg(), "test_table")
 
-        self.gov._event.assert_called_once()
-        call_args = str(self.gov._event.call_args)
-        self.assertIn("LANCEDB_WRITE_COMPLETE", call_args)
+        self.gov.load_complete.assert_called_once()
 
     def test_list_tables(self):
         loader = self._loader()
@@ -768,9 +760,7 @@ class TestKafkaLoader(unittest.TestCase):
         shutil.rmtree(self._tmp, ignore_errors=True)
 
     def _loader(self):
-        from pipeline_v3 import KafkaLoader, HAS_KAFKA_LOADER
-        if not HAS_KAFKA_LOADER:
-            self.skipTest("kafka-python not installed")
+        from pipeline_v3 import KafkaLoader
         return KafkaLoader(self.gov)
 
     def _cfg(self, **overrides):
@@ -799,13 +789,9 @@ class TestKafkaLoader(unittest.TestCase):
     def test_raises_without_kafka_python(self):
         """KafkaLoader raises RuntimeError when kafka-python is not installed."""
         import pipeline_v3 as pv3
-        orig = pv3.HAS_KAFKA_LOADER
-        pv3.HAS_KAFKA_LOADER = False
-        try:
+        with patch("pipeline.loaders.kafka_loader.HAS_KAFKA_LOADER", False):
             with self.assertRaises(RuntimeError):
                 pv3.KafkaLoader(self.gov)
-        finally:
-            pv3.HAS_KAFKA_LOADER = orig
 
     def test_missing_topic_raises(self):
         loader = self._loader()
@@ -1017,36 +1003,26 @@ class TestVectorLoaders(unittest.TestCase):
 
     def test_pinecone_raises_without_package(self):
         import pipeline_v3 as pv3
-        orig = pv3.HAS_PINECONE
-        pv3.HAS_PINECONE = False
-        try:
+        with patch("pipeline.loaders.vector.pinecone_loader.HAS_PINECONE", False):
             with self.assertRaises(RuntimeError):
                 pv3.PineconeLoader(self.gov)
-        finally:
-            pv3.HAS_PINECONE = orig
 
     def test_pinecone_missing_api_key_raises(self):
-        from pipeline_v3 import PineconeLoader, HAS_PINECONE
-        if not HAS_PINECONE:
-            self.skipTest("pinecone-client not installed")
+        from pipeline_v3 import PineconeLoader
         loader = PineconeLoader(self.gov)
         with self.assertRaises(ValueError) as ctx:
             loader.load(self._df(), {"index_name": "test"})
         self.assertIn("api_key", str(ctx.exception))
 
     def test_pinecone_missing_index_raises(self):
-        from pipeline_v3 import PineconeLoader, HAS_PINECONE
-        if not HAS_PINECONE:
-            self.skipTest("pinecone-client not installed")
+        from pipeline_v3 import PineconeLoader
         loader = PineconeLoader(self.gov)
         with self.assertRaises(ValueError) as ctx:
             loader.load(self._df(), {"api_key": "key"})
         self.assertIn("index_name", str(ctx.exception).lower())
 
     def test_pinecone_missing_vector_column_raises(self):
-        from pipeline_v3 import PineconeLoader, HAS_PINECONE
-        if not HAS_PINECONE:
-            self.skipTest("pinecone-client not installed")
+        from pipeline_v3 import PineconeLoader
         loader = PineconeLoader(self.gov)
         with self.assertRaises(ValueError) as ctx:
             loader.load(self._df(),
@@ -1055,17 +1031,13 @@ class TestVectorLoaders(unittest.TestCase):
         self.assertIn("vector column", str(ctx.exception))
 
     def test_pinecone_query_empty_vector_raises(self):
-        from pipeline_v3 import PineconeLoader, HAS_PINECONE
-        if not HAS_PINECONE:
-            self.skipTest("pinecone-client not installed")
+        from pipeline_v3 import PineconeLoader
         loader = PineconeLoader(self.gov)
         with self.assertRaises(ValueError):
-            loader.query({"api_key": "k", "index_name": "i"}, query_vector=[])
+            loader.search({"api_key": "k", "index_name": "i"}, query_vector=[])
 
     def test_pinecone_load_calls_upsert(self):
-        from pipeline_v3 import PineconeLoader, HAS_PINECONE
-        if not HAS_PINECONE:
-            self.skipTest("pinecone-client not installed")
+        from pipeline_v3 import PineconeLoader
         loader     = PineconeLoader(self.gov)
         mock_pc    = MagicMock()
         mock_index = MagicMock()
@@ -1080,58 +1052,45 @@ class TestVectorLoaders(unittest.TestCase):
 
         self.assertEqual(rows, 3)
         mock_index.upsert.assert_called()
-        self.gov._event.assert_called_once()
-        self.assertIn("PINECONE_UPSERT_COMPLETE",
-                      str(self.gov._event.call_args))
+        self.gov.load_complete.assert_called_once()
 
     # ── WeaviateLoader ────────────────────────────────────────────────────────
 
     def test_weaviate_raises_without_package(self):
         import pipeline_v3 as pv3
-        orig = pv3.HAS_WEAVIATE
-        pv3.HAS_WEAVIATE = False
-        try:
+        with patch("pipeline.loaders.vector.weaviate_loader.HAS_WEAVIATE", False):
             with self.assertRaises(RuntimeError):
                 pv3.WeaviateLoader(self.gov)
-        finally:
-            pv3.HAS_WEAVIATE = orig
 
     def test_weaviate_missing_url_raises(self):
-        from pipeline_v3 import WeaviateLoader, HAS_WEAVIATE
-        if not HAS_WEAVIATE:
-            self.skipTest("weaviate-client not installed")
+        from pipeline_v3 import WeaviateLoader
         loader = WeaviateLoader(self.gov)
         with self.assertRaises(ValueError) as ctx:
             loader.load(self._df(), {"collection": "Docs"})
         self.assertIn("url", str(ctx.exception))
 
     def test_weaviate_missing_collection_raises(self):
-        from pipeline_v3 import WeaviateLoader, HAS_WEAVIATE
-        if not HAS_WEAVIATE:
-            self.skipTest("weaviate-client not installed")
+        from pipeline_v3 import WeaviateLoader
         loader = WeaviateLoader(self.gov)
         with self.assertRaises(ValueError) as ctx:
             loader.load(self._df(), {"url": "http://localhost:8080"})
-        self.assertIn("collection", str(ctx.exception))
+        self.assertIn("class_name", str(ctx.exception))
 
     def test_weaviate_lowercase_collection_raises(self):
-        from pipeline_v3 import WeaviateLoader, HAS_WEAVIATE
-        if not HAS_WEAVIATE:
-            self.skipTest("weaviate-client not installed")
+        """Weaviate class names must start with uppercase per Weaviate convention."""
+        from pipeline_v3 import WeaviateLoader
         loader = WeaviateLoader(self.gov)
         with self.assertRaises(ValueError) as ctx:
             loader.load(self._df(),
-                        {"url": "http://localhost:8080", "collection": "docs"})
+                        {"url": "http://localhost:8080", "class_name": "docs"})
         self.assertIn("uppercase", str(ctx.exception))
 
     def test_weaviate_invalid_if_exists_raises(self):
-        from pipeline_v3 import WeaviateLoader, HAS_WEAVIATE
-        if not HAS_WEAVIATE:
-            self.skipTest("weaviate-client not installed")
+        from pipeline_v3 import WeaviateLoader
         loader = WeaviateLoader(self.gov)
         with self.assertRaises(ValueError) as ctx:
             loader.load(self._df(),
-                        {"url": "http://localhost:8080", "collection": "Docs"},
+                        {"url": "http://localhost:8080", "class_name": "Docs"},
                         if_exists="replace")
         self.assertIn("if_exists", str(ctx.exception))
 
@@ -1139,94 +1098,73 @@ class TestVectorLoaders(unittest.TestCase):
 
     def test_qdrant_raises_without_package(self):
         import pipeline_v3 as pv3
-        orig = pv3.HAS_QDRANT
-        pv3.HAS_QDRANT = False
-        try:
+        with patch("pipeline.loaders.vector.qdrant_loader.HAS_QDRANT", False):
             with self.assertRaises(RuntimeError):
                 pv3.QdrantLoader(self.gov)
-        finally:
-            pv3.HAS_QDRANT = orig
 
     def test_qdrant_missing_collection_raises(self):
-        from pipeline_v3 import QdrantLoader, HAS_QDRANT
-        if not HAS_QDRANT:
-            self.skipTest("qdrant-client not installed")
+        from pipeline_v3 import QdrantLoader
         loader = QdrantLoader(self.gov)
         with self.assertRaises(ValueError) as ctx:
             loader.load(self._df(), {"memory": True})
         self.assertIn("collection", str(ctx.exception))
 
     def test_qdrant_missing_vector_column_raises(self):
-        from pipeline_v3 import QdrantLoader, HAS_QDRANT
-        if not HAS_QDRANT:
-            self.skipTest("qdrant-client not installed")
+        from pipeline_v3 import QdrantLoader
         loader = QdrantLoader(self.gov)
         with self.assertRaises(ValueError) as ctx:
             loader.load(self._df(),
-                        {"memory": True, "collection": "docs",
+                        {"memory": True, "collection_name": "docs",
                          "vector_column": "bad_col"})
         self.assertIn("vector column", str(ctx.exception))
 
     def test_qdrant_invalid_if_exists_raises(self):
-        from pipeline_v3 import QdrantLoader, HAS_QDRANT
-        if not HAS_QDRANT:
-            self.skipTest("qdrant-client not installed")
+        from pipeline_v3 import QdrantLoader
         loader = QdrantLoader(self.gov)
         with self.assertRaises(ValueError) as ctx:
             loader.load(self._df(),
-                        {"memory": True, "collection": "docs"},
+                        {"memory": True, "collection_name": "docs"},
                         if_exists="upsert")
         self.assertIn("if_exists", str(ctx.exception))
 
     def test_qdrant_search_empty_vector_raises(self):
-        from pipeline_v3 import QdrantLoader, HAS_QDRANT
-        if not HAS_QDRANT:
-            self.skipTest("qdrant-client not installed")
+        from pipeline_v3 import QdrantLoader
         loader = QdrantLoader(self.gov)
         with self.assertRaises(ValueError):
-            loader.search({"memory": True, "collection": "docs"},
+            loader.search({"memory": True, "collection_name": "docs"},
                           query_vector=[])
 
     def test_qdrant_build_client_no_config_raises(self):
-        from pipeline_v3 import QdrantLoader, HAS_QDRANT
-        if not HAS_QDRANT:
-            self.skipTest("qdrant-client not installed")
+        from pipeline_v3 import QdrantLoader
         with self.assertRaises(ValueError) as ctx:
             QdrantLoader._build_client({})
         self.assertIn("url", str(ctx.exception))
 
     def test_qdrant_in_memory_load(self):
         """QdrantLoader can write to in-memory collection without a server."""
-        from pipeline_v3 import QdrantLoader, HAS_QDRANT
-        if not HAS_QDRANT:
-            self.skipTest("qdrant-client not installed")
+        from pipeline_v3 import QdrantLoader
         loader = QdrantLoader(self.gov)
         rows   = loader.load(
             self._df(),
             {
-                "memory":        True,
-                "collection":    "test_docs",
-                "vector_column": "embedding",
-                "id_column":     "id",
-                "vector_size":   3,
+                "memory":          True,
+                "collection_name": "test_docs",
+                "vector_column":   "embedding",
+                "id_column":       "id",
+                "dimensions":      3,
             },
         )
         self.assertEqual(rows, 3)
-        self.gov._event.assert_called_once()
-        self.assertIn("QDRANT_UPSERT_COMPLETE",
-                      str(self.gov._event.call_args))
+        self.gov.load_complete.assert_called_once()
 
     def test_qdrant_in_memory_search(self):
         """QdrantLoader can search a collection after loading data."""
-        from pipeline_v3 import QdrantLoader, HAS_QDRANT
-        if not HAS_QDRANT:
-            self.skipTest("qdrant-client not installed")
+        from pipeline_v3 import QdrantLoader
         import pathlib as _pl
-        # Use a local path so load and search share the same persistent store
         store_path = str(_pl.Path(self._tmp) / "qdrant_store")
         loader = QdrantLoader(self.gov)
-        cfg    = {"path": store_path, "collection": "test_docs",
-                  "vector_column": "embedding", "vector_size": 3}
+        cfg    = {"path": store_path, "collection_name": "test_docs",
+                  "vector_column": "embedding", "dimensions": 3}
         loader.load(self._df(), cfg)
         results = loader.search(cfg, query_vector=[0.1, 0.2, 0.3], limit=2)
         self.assertIsInstance(results, list)
@@ -1237,9 +1175,7 @@ class TestVectorLoaders(unittest.TestCase):
 
     def test_pgvector_invalid_table_name_raises(self):
         """SQL injection: table name with semicolons must be rejected."""
-        from pipeline_v3 import PgvectorLoader, HAS_PGVECTOR
-        if not HAS_PGVECTOR:
-            self.skipTest("pgvector not installed")
+        from pipeline_v3 import PgvectorLoader
         loader = PgvectorLoader(self.gov)
         with self.assertRaises(ValueError) as ctx:
             loader.load(self._df(),
@@ -1250,9 +1186,7 @@ class TestVectorLoaders(unittest.TestCase):
 
     def test_pgvector_nan_in_query_vector_raises(self):
         """Float validation: NaN in query_vector must be rejected."""
-        from pipeline_v3 import PgvectorLoader, HAS_PGVECTOR
-        if not HAS_PGVECTOR:
-            self.skipTest("pgvector not installed")
+        from pipeline_v3 import PgvectorLoader
         loader = PgvectorLoader(self.gov)
         with self.assertRaises(ValueError) as ctx:
             loader.search({"host": "h", "db_name": "db",
@@ -1262,9 +1196,7 @@ class TestVectorLoaders(unittest.TestCase):
 
     def test_pgvector_inf_in_query_vector_raises(self):
         """Float validation: inf in query_vector must be rejected."""
-        from pipeline_v3 import PgvectorLoader, HAS_PGVECTOR
-        if not HAS_PGVECTOR:
-            self.skipTest("pgvector not installed")
+        from pipeline_v3 import PgvectorLoader
         loader = PgvectorLoader(self.gov)
         with self.assertRaises(ValueError) as ctx:
             loader.search({"host": "h", "db_name": "db",
@@ -1274,9 +1206,7 @@ class TestVectorLoaders(unittest.TestCase):
 
     def test_pgvector_empty_df_returns_zero(self):
         """Empty DataFrame must return 0 without touching the database."""
-        from pipeline_v3 import PgvectorLoader, HAS_PGVECTOR
-        if not HAS_PGVECTOR:
-            self.skipTest("pgvector not installed")
+        from pipeline_v3 import PgvectorLoader
         import pandas as _pd
         loader = PgvectorLoader(self.gov)
         rows   = loader.load(
@@ -1290,9 +1220,7 @@ class TestVectorLoaders(unittest.TestCase):
 
     def test_snowflake_vector_nan_in_query_raises(self):
         """Float validation: NaN in SnowflakeVectorLoader query must be rejected."""
-        from pipeline_v3 import SnowflakeVectorLoader, HAS_SNOWFLAKE
-        if not HAS_SNOWFLAKE:
-            self.skipTest("snowflake-sqlalchemy not installed")
+        from pipeline_v3 import SnowflakeVectorLoader
         loader = SnowflakeVectorLoader(self.gov)
         with self.assertRaises(ValueError) as ctx:
             loader.search(
@@ -1304,9 +1232,7 @@ class TestVectorLoaders(unittest.TestCase):
 
     def test_snowflake_vector_empty_df_returns_zero(self):
         """SnowflakeVectorLoader empty DataFrame must return 0."""
-        from pipeline_v3 import SnowflakeVectorLoader, HAS_SNOWFLAKE
-        if not HAS_SNOWFLAKE:
-            self.skipTest("snowflake-sqlalchemy not installed")
+        from pipeline_v3 import SnowflakeVectorLoader
         import pandas as _pd
         loader = SnowflakeVectorLoader(self.gov)
         rows   = loader.load(
@@ -1320,9 +1246,7 @@ class TestVectorLoaders(unittest.TestCase):
 
     def test_bigquery_vector_empty_df_returns_zero(self):
         """BigQueryVectorLoader empty DataFrame must return 0."""
-        from pipeline_v3 import BigQueryVectorLoader, HAS_BIGQUERY
-        if not HAS_BIGQUERY:
-            self.skipTest("google-cloud-bigquery not installed")
+        from pipeline_v3 import BigQueryVectorLoader
         import pandas as _pd
         loader = BigQueryVectorLoader(self.gov)
         rows   = loader.load(
@@ -1335,9 +1259,7 @@ class TestVectorLoaders(unittest.TestCase):
 
     def test_bigquery_vector_invalid_distance_raises(self):
         """Distance type must be validated — prevents SQL injection."""
-        from pipeline_v3 import BigQueryVectorLoader, HAS_BIGQUERY
-        if not HAS_BIGQUERY:
-            self.skipTest("google-cloud-bigquery not installed")
+        from pipeline_v3 import BigQueryVectorLoader
         loader = BigQueryVectorLoader(self.gov)
         with self.assertRaises(ValueError) as ctx:
             loader.search({"project": "p", "dataset": "d"},
@@ -1347,9 +1269,7 @@ class TestVectorLoaders(unittest.TestCase):
 
     def test_bigquery_vector_invalid_options_raises(self):
         """Options string with special chars must be rejected."""
-        from pipeline_v3 import BigQueryVectorLoader, HAS_BIGQUERY
-        if not HAS_BIGQUERY:
-            self.skipTest("google-cloud-bigquery not installed")
+        from pipeline_v3 import BigQueryVectorLoader
         loader = BigQueryVectorLoader(self.gov)
         with self.assertRaises(ValueError) as ctx:
             loader.search({"project": "p", "dataset": "d"},
@@ -1402,27 +1322,19 @@ class TestTier2VectorLoaders(unittest.TestCase):
 
     def test_chroma_raises_without_package(self):
         import pipeline_v3 as pv3
-        orig = pv3.HAS_CHROMA
-        pv3.HAS_CHROMA = False
-        try:
+        with patch("pipeline.loaders.vector.chroma_loader.HAS_CHROMA", False):
             with self.assertRaises(RuntimeError):
                 pv3.ChromaLoader(self.gov)
-        finally:
-            pv3.HAS_CHROMA = orig
 
     def test_chroma_missing_collection_raises(self):
-        from pipeline_v3 import ChromaLoader, HAS_CHROMA
-        if not HAS_CHROMA:
-            self.skipTest("chromadb not installed")
+        from pipeline_v3 import ChromaLoader
         loader = ChromaLoader(self.gov)
         with self.assertRaises(ValueError) as ctx:
             loader.load(self._df(), {})
         self.assertIn("collection", str(ctx.exception))
 
     def test_chroma_missing_id_column_raises(self):
-        from pipeline_v3 import ChromaLoader, HAS_CHROMA
-        if not HAS_CHROMA:
-            self.skipTest("chromadb not installed")
+        from pipeline_v3 import ChromaLoader
         loader = ChromaLoader(self.gov)
         df = self._df().drop(columns=["id"])
         with self.assertRaises(ValueError) as ctx:
@@ -1430,27 +1342,21 @@ class TestTier2VectorLoaders(unittest.TestCase):
         self.assertIn("id_column", str(ctx.exception))
 
     def test_chroma_invalid_if_exists_raises(self):
-        from pipeline_v3 import ChromaLoader, HAS_CHROMA
-        if not HAS_CHROMA:
-            self.skipTest("chromadb not installed")
+        from pipeline_v3 import ChromaLoader
         loader = ChromaLoader(self.gov)
         with self.assertRaises(ValueError) as ctx:
             loader.load(self._df(), {"collection": "docs"}, if_exists="replace")
         self.assertIn("if_exists", str(ctx.exception))
 
     def test_chroma_query_empty_embeddings_raises(self):
-        from pipeline_v3 import ChromaLoader, HAS_CHROMA
-        if not HAS_CHROMA:
-            self.skipTest("chromadb not installed")
+        from pipeline_v3 import ChromaLoader
         loader = ChromaLoader(self.gov)
         with self.assertRaises(ValueError):
             loader.query({"collection": "docs"}, query_embeddings=[])
 
     def test_chroma_in_memory_append(self):
         """ChromaLoader can write to an in-memory collection."""
-        from pipeline_v3 import ChromaLoader, HAS_CHROMA
-        if not HAS_CHROMA:
-            self.skipTest("chromadb not installed")
+        from pipeline_v3 import ChromaLoader
         loader = ChromaLoader(self.gov)
         rows = loader.load(
             self._df(),
@@ -1462,14 +1368,11 @@ class TestTier2VectorLoaders(unittest.TestCase):
             },
         )
         self.assertEqual(rows, 3)
-        self.gov._event.assert_called_once()
-        self.assertIn("CHROMA_WRITE_COMPLETE", str(self.gov._event.call_args))
+        self.gov.load_complete.assert_called_once()
 
     def test_chroma_in_memory_upsert(self):
         """ChromaLoader upsert mode updates existing documents."""
-        from pipeline_v3 import ChromaLoader, HAS_CHROMA
-        if not HAS_CHROMA:
-            self.skipTest("chromadb not installed")
+        from pipeline_v3 import ChromaLoader
         loader = ChromaLoader(self.gov)
         cfg = {"collection": "test_docs", "id_column": "id",
                "vector_column": "embedding"}
@@ -1480,9 +1383,7 @@ class TestTier2VectorLoaders(unittest.TestCase):
 
     def test_chroma_in_memory_overwrite(self):
         """ChromaLoader overwrite mode clears existing collection."""
-        from pipeline_v3 import ChromaLoader, HAS_CHROMA
-        if not HAS_CHROMA:
-            self.skipTest("chromadb not installed")
+        from pipeline_v3 import ChromaLoader
         loader = ChromaLoader(self.gov)
         cfg = {"collection": "test_docs", "id_column": "id",
                "vector_column": "embedding"}
@@ -1492,10 +1393,8 @@ class TestTier2VectorLoaders(unittest.TestCase):
 
     def test_chroma_persistent_load_and_query(self):
         """ChromaLoader can write and query with persistent storage."""
-        from pipeline_v3 import ChromaLoader, HAS_CHROMA
+        from pipeline_v3 import ChromaLoader
         import pathlib as _pl
-        if not HAS_CHROMA:
-            self.skipTest("chromadb not installed")
         loader = ChromaLoader(self.gov)
         store  = str(_pl.Path(self._tmp) / "chroma_store")
         cfg    = {
@@ -1513,53 +1412,39 @@ class TestTier2VectorLoaders(unittest.TestCase):
         )
         self.assertIn("ids", results)
         self.assertLessEqual(len(results["ids"][0]), 2)
-        self.assertIn("CHROMA_QUERY", str(self.gov._event.call_args_list[-1]))
 
     def test_chroma_governance_event_fired(self):
-        from pipeline_v3 import ChromaLoader, HAS_CHROMA
-        if not HAS_CHROMA:
-            self.skipTest("chromadb not installed")
+        from pipeline_v3 import ChromaLoader
         loader = ChromaLoader(self.gov)
         loader.load(self._df(),
                     {"collection": "docs", "id_column": "id",
                      "vector_column": "embedding"})
-        calls = [str(c) for c in self.gov._event.call_args_list]
-        self.assertTrue(any("CHROMA_WRITE_COMPLETE" in c for c in calls))
+        self.gov.load_complete.assert_called_once()
 
     # ── MilvusLoader ──────────────────────────────────────────────────────────
 
     def test_milvus_raises_without_package(self):
         import pipeline_v3 as pv3
-        orig = pv3.HAS_MILVUS
-        pv3.HAS_MILVUS = False
-        try:
+        with patch("pipeline.loaders.vector.milvus_loader.HAS_MILVUS", False):
             with self.assertRaises(RuntimeError):
                 pv3.MilvusLoader(self.gov)
-        finally:
-            pv3.HAS_MILVUS = orig
 
     def test_milvus_missing_uri_raises(self):
-        from pipeline_v3 import MilvusLoader, HAS_MILVUS
-        if not HAS_MILVUS:
-            self.skipTest("pymilvus not installed")
+        from pipeline_v3 import MilvusLoader
         loader = MilvusLoader(self.gov)
         with self.assertRaises(ValueError) as ctx:
             loader.load(self._df(), {"collection": "docs"})
         self.assertIn("uri", str(ctx.exception))
 
     def test_milvus_missing_collection_raises(self):
-        from pipeline_v3 import MilvusLoader, HAS_MILVUS
-        if not HAS_MILVUS:
-            self.skipTest("pymilvus not installed")
+        from pipeline_v3 import MilvusLoader
         loader = MilvusLoader(self.gov)
         with self.assertRaises(ValueError) as ctx:
             loader.load(self._df(), {"uri": "./milvus.db"})
         self.assertIn("collection", str(ctx.exception))
 
     def test_milvus_missing_vector_column_raises(self):
-        from pipeline_v3 import MilvusLoader, HAS_MILVUS
-        if not HAS_MILVUS:
-            self.skipTest("pymilvus not installed")
+        from pipeline_v3 import MilvusLoader
         loader = MilvusLoader(self.gov)
         with self.assertRaises(ValueError) as ctx:
             loader.load(self._df(),
@@ -1568,9 +1453,7 @@ class TestTier2VectorLoaders(unittest.TestCase):
         self.assertIn("vector column", str(ctx.exception))
 
     def test_milvus_invalid_if_exists_raises(self):
-        from pipeline_v3 import MilvusLoader, HAS_MILVUS
-        if not HAS_MILVUS:
-            self.skipTest("pymilvus not installed")
+        from pipeline_v3 import MilvusLoader
         loader = MilvusLoader(self.gov)
         with self.assertRaises(ValueError) as ctx:
             loader.load(self._df(),
@@ -1579,9 +1462,7 @@ class TestTier2VectorLoaders(unittest.TestCase):
         self.assertIn("if_exists", str(ctx.exception))
 
     def test_milvus_search_empty_vector_raises(self):
-        from pipeline_v3 import MilvusLoader, HAS_MILVUS
-        if not HAS_MILVUS:
-            self.skipTest("pymilvus not installed")
+        from pipeline_v3 import MilvusLoader
         loader = MilvusLoader(self.gov)
         with self.assertRaises(ValueError):
             loader.search({"uri": "./x.db", "collection": "docs"},
@@ -1589,9 +1470,7 @@ class TestTier2VectorLoaders(unittest.TestCase):
 
     def test_milvus_load_calls_insert(self):
         """MilvusLoader.load() calls client.insert() in append mode."""
-        from pipeline_v3 import MilvusLoader, HAS_MILVUS
-        if not HAS_MILVUS:
-            self.skipTest("pymilvus not installed")
+        from pipeline_v3 import MilvusLoader
         loader     = MilvusLoader(self.gov)
         mock_client = MagicMock()
         mock_client.has_collection.return_value = True
@@ -1606,13 +1485,10 @@ class TestTier2VectorLoaders(unittest.TestCase):
 
         self.assertEqual(rows, 3)
         mock_client.insert.assert_called()
-        self.gov._event.assert_called_once()
-        self.assertIn("MILVUS_WRITE_COMPLETE", str(self.gov._event.call_args))
+        self.gov.load_complete.assert_called_once()
 
     def test_milvus_upsert_calls_upsert(self):
-        from pipeline_v3 import MilvusLoader, HAS_MILVUS
-        if not HAS_MILVUS:
-            self.skipTest("pymilvus not installed")
+        from pipeline_v3 import MilvusLoader
         loader      = MilvusLoader(self.gov)
         mock_client = MagicMock()
         mock_client.has_collection.return_value = True
@@ -1672,18 +1548,12 @@ class TestTier3VectorLoaders(unittest.TestCase):
 
     def test_pgvector_raises_without_package(self):
         import pipeline_v3 as pv3
-        orig = pv3.HAS_PGVECTOR
-        pv3.HAS_PGVECTOR = False
-        try:
+        with patch("pipeline.loaders.vector.pgvector_loader.HAS_PGVECTOR", False):
             with self.assertRaises(RuntimeError):
                 pv3.PgvectorLoader(self.gov)
-        finally:
-            pv3.HAS_PGVECTOR = orig
 
     def test_pgvector_missing_table_raises(self):
-        from pipeline_v3 import PgvectorLoader, HAS_PGVECTOR
-        if not HAS_PGVECTOR:
-            self.skipTest("pgvector not installed")
+        from pipeline_v3 import PgvectorLoader
         loader = PgvectorLoader(self.gov)
         with self.assertRaises(ValueError) as ctx:
             loader.load(self._df(), {"host": "localhost", "db_name": "db",
@@ -1691,9 +1561,7 @@ class TestTier3VectorLoaders(unittest.TestCase):
         self.assertIn("table", str(ctx.exception))
 
     def test_pgvector_missing_host_raises(self):
-        from pipeline_v3 import PgvectorLoader, HAS_PGVECTOR
-        if not HAS_PGVECTOR:
-            self.skipTest("pgvector not installed")
+        from pipeline_v3 import PgvectorLoader
         loader = PgvectorLoader(self.gov)
         with self.assertRaises(ValueError) as ctx:
             loader.load(self._df(), {"db_name": "db", "user": "u",
@@ -1701,9 +1569,7 @@ class TestTier3VectorLoaders(unittest.TestCase):
         self.assertIn("host", str(ctx.exception))
 
     def test_pgvector_invalid_if_exists_raises(self):
-        from pipeline_v3 import PgvectorLoader, HAS_PGVECTOR
-        if not HAS_PGVECTOR:
-            self.skipTest("pgvector not installed")
+        from pipeline_v3 import PgvectorLoader
         loader = PgvectorLoader(self.gov)
         with self.assertRaises(ValueError) as ctx:
             loader.load(self._df(),
@@ -1712,9 +1578,7 @@ class TestTier3VectorLoaders(unittest.TestCase):
         self.assertIn("if_exists", str(ctx.exception))
 
     def test_pgvector_missing_vector_column_raises(self):
-        from pipeline_v3 import PgvectorLoader, HAS_PGVECTOR
-        if not HAS_PGVECTOR:
-            self.skipTest("pgvector not installed")
+        from pipeline_v3 import PgvectorLoader
         loader = PgvectorLoader(self.gov)
         df = self._df().drop(columns=["embedding"])
         with self.assertRaises(ValueError) as ctx:
@@ -1723,9 +1587,7 @@ class TestTier3VectorLoaders(unittest.TestCase):
         self.assertIn("vector column", str(ctx.exception))
 
     def test_pgvector_search_empty_vector_raises(self):
-        from pipeline_v3 import PgvectorLoader, HAS_PGVECTOR
-        if not HAS_PGVECTOR:
-            self.skipTest("pgvector not installed")
+        from pipeline_v3 import PgvectorLoader
         loader = PgvectorLoader(self.gov)
         with self.assertRaises(ValueError):
             loader.search({"host": "h", "db_name": "db", "user": "u",
@@ -1733,9 +1595,7 @@ class TestTier3VectorLoaders(unittest.TestCase):
 
     def test_pgvector_load_calls_to_sql(self):
         """PgvectorLoader.load() writes via pandas to_sql."""
-        from pipeline_v3 import PgvectorLoader, HAS_PGVECTOR
-        if not HAS_PGVECTOR:
-            self.skipTest("pgvector not installed")
+        from pipeline_v3 import PgvectorLoader
         loader     = PgvectorLoader(self.gov)
         mock_engine = MagicMock()
         mock_conn   = MagicMock()
@@ -1753,26 +1613,18 @@ class TestTier3VectorLoaders(unittest.TestCase):
 
         self.assertEqual(rows, 3)
         mock_to_sql.assert_called_once()
-        self.gov._event.assert_called_once()
-        self.assertIn("PGVECTOR_WRITE_COMPLETE",
-                      str(self.gov._event.call_args))
+        self.gov.load_complete.assert_called_once()
 
     # ── SnowflakeVectorLoader ─────────────────────────────────────────────────
 
     def test_snowflake_vector_raises_without_package(self):
         import pipeline_v3 as pv3
-        orig = pv3.HAS_SNOWFLAKE
-        pv3.HAS_SNOWFLAKE = False
-        try:
+        with patch("pipeline.loaders.vector.snowflake_vector_loader.HAS_SNOWFLAKE", False):
             with self.assertRaises(RuntimeError):
                 pv3.SnowflakeVectorLoader(self.gov)
-        finally:
-            pv3.HAS_SNOWFLAKE = orig
 
     def test_snowflake_vector_missing_table_raises(self):
-        from pipeline_v3 import SnowflakeVectorLoader, HAS_SNOWFLAKE
-        if not HAS_SNOWFLAKE:
-            self.skipTest("snowflake-sqlalchemy not installed")
+        from pipeline_v3 import SnowflakeVectorLoader
         loader = SnowflakeVectorLoader(self.gov)
         with self.assertRaises(ValueError) as ctx:
             loader.load(self._df(),
@@ -1781,9 +1633,7 @@ class TestTier3VectorLoaders(unittest.TestCase):
         self.assertIn("table", str(ctx.exception))
 
     def test_snowflake_vector_invalid_if_exists_raises(self):
-        from pipeline_v3 import SnowflakeVectorLoader, HAS_SNOWFLAKE
-        if not HAS_SNOWFLAKE:
-            self.skipTest("snowflake-sqlalchemy not installed")
+        from pipeline_v3 import SnowflakeVectorLoader
         loader = SnowflakeVectorLoader(self.gov)
         with self.assertRaises(ValueError) as ctx:
             loader.load(self._df(),
@@ -1793,9 +1643,7 @@ class TestTier3VectorLoaders(unittest.TestCase):
         self.assertIn("if_exists", str(ctx.exception))
 
     def test_snowflake_vector_missing_vector_column_raises(self):
-        from pipeline_v3 import SnowflakeVectorLoader, HAS_SNOWFLAKE
-        if not HAS_SNOWFLAKE:
-            self.skipTest("snowflake-sqlalchemy not installed")
+        from pipeline_v3 import SnowflakeVectorLoader
         loader = SnowflakeVectorLoader(self.gov)
         df = self._df().drop(columns=["embedding"])
         with self.assertRaises(ValueError) as ctx:
@@ -1806,9 +1654,7 @@ class TestTier3VectorLoaders(unittest.TestCase):
         self.assertIn("vector column", str(ctx.exception))
 
     def test_snowflake_vector_search_empty_vector_raises(self):
-        from pipeline_v3 import SnowflakeVectorLoader, HAS_SNOWFLAKE
-        if not HAS_SNOWFLAKE:
-            self.skipTest("snowflake-sqlalchemy not installed")
+        from pipeline_v3 import SnowflakeVectorLoader
         loader = SnowflakeVectorLoader(self.gov)
         with self.assertRaises(ValueError):
             loader.search(
@@ -1819,9 +1665,7 @@ class TestTier3VectorLoaders(unittest.TestCase):
 
     def test_snowflake_vector_load_calls_to_sql(self):
         """SnowflakeVectorLoader.load() calls to_sql then ALTER COLUMN."""
-        from pipeline_v3 import SnowflakeVectorLoader, HAS_SNOWFLAKE
-        if not HAS_SNOWFLAKE:
-            self.skipTest("snowflake-sqlalchemy not installed")
+        from pipeline_v3 import SnowflakeVectorLoader
         loader      = SnowflakeVectorLoader(self.gov)
         mock_engine = MagicMock()
         mock_conn   = MagicMock()
@@ -1839,26 +1683,18 @@ class TestTier3VectorLoaders(unittest.TestCase):
 
         self.assertEqual(rows, 3)
         mock_to_sql.assert_called_once()
-        self.gov._event.assert_called_once()
-        self.assertIn("SNOWFLAKE_VECTOR_WRITE_COMPLETE",
-                      str(self.gov._event.call_args))
+        self.gov.load_complete.assert_called_once()
 
     # ── BigQueryVectorLoader ──────────────────────────────────────────────────
 
     def test_bigquery_vector_raises_without_package(self):
         import pipeline_v3 as pv3
-        orig = pv3.HAS_BIGQUERY
-        pv3.HAS_BIGQUERY = False
-        try:
+        with patch("pipeline.loaders.vector.bigquery_vector_loader.HAS_BIGQUERY", False):
             with self.assertRaises(RuntimeError):
                 pv3.BigQueryVectorLoader(self.gov)
-        finally:
-            pv3.HAS_BIGQUERY = orig
 
     def test_bigquery_vector_missing_table_raises(self):
-        from pipeline_v3 import BigQueryVectorLoader, HAS_BIGQUERY
-        if not HAS_BIGQUERY:
-            self.skipTest("google-cloud-bigquery not installed")
+        from pipeline_v3 import BigQueryVectorLoader
         loader = BigQueryVectorLoader(self.gov)
         with self.assertRaises(ValueError) as ctx:
             loader.load(self._df(),
@@ -1866,27 +1702,21 @@ class TestTier3VectorLoaders(unittest.TestCase):
         self.assertIn("table", str(ctx.exception))
 
     def test_bigquery_vector_missing_project_raises(self):
-        from pipeline_v3 import BigQueryVectorLoader, HAS_BIGQUERY
-        if not HAS_BIGQUERY:
-            self.skipTest("google-cloud-bigquery not installed")
+        from pipeline_v3 import BigQueryVectorLoader
         loader = BigQueryVectorLoader(self.gov)
         with self.assertRaises(ValueError) as ctx:
             loader.load(self._df(), {"dataset": "d"}, table="t")
         self.assertIn("project", str(ctx.exception))
 
     def test_bigquery_vector_missing_dataset_raises(self):
-        from pipeline_v3 import BigQueryVectorLoader, HAS_BIGQUERY
-        if not HAS_BIGQUERY:
-            self.skipTest("google-cloud-bigquery not installed")
+        from pipeline_v3 import BigQueryVectorLoader
         loader = BigQueryVectorLoader(self.gov)
         with self.assertRaises(ValueError) as ctx:
             loader.load(self._df(), {"project": "p"}, table="t")
         self.assertIn("dataset", str(ctx.exception))
 
     def test_bigquery_vector_invalid_if_exists_raises(self):
-        from pipeline_v3 import BigQueryVectorLoader, HAS_BIGQUERY
-        if not HAS_BIGQUERY:
-            self.skipTest("google-cloud-bigquery not installed")
+        from pipeline_v3 import BigQueryVectorLoader
         loader = BigQueryVectorLoader(self.gov)
         with self.assertRaises(ValueError) as ctx:
             loader.load(self._df(),
@@ -1895,9 +1725,7 @@ class TestTier3VectorLoaders(unittest.TestCase):
         self.assertIn("if_exists", str(ctx.exception))
 
     def test_bigquery_vector_missing_vector_column_raises(self):
-        from pipeline_v3 import BigQueryVectorLoader, HAS_BIGQUERY
-        if not HAS_BIGQUERY:
-            self.skipTest("google-cloud-bigquery not installed")
+        from pipeline_v3 import BigQueryVectorLoader
         loader = BigQueryVectorLoader(self.gov)
         df = self._df().drop(columns=["embedding"])
         with self.assertRaises(ValueError) as ctx:
@@ -1905,9 +1733,7 @@ class TestTier3VectorLoaders(unittest.TestCase):
         self.assertIn("vector column", str(ctx.exception))
 
     def test_bigquery_vector_search_empty_vector_raises(self):
-        from pipeline_v3 import BigQueryVectorLoader, HAS_BIGQUERY
-        if not HAS_BIGQUERY:
-            self.skipTest("google-cloud-bigquery not installed")
+        from pipeline_v3 import BigQueryVectorLoader
         loader = BigQueryVectorLoader(self.gov)
         with self.assertRaises(ValueError):
             loader.search({"project": "p", "dataset": "d"},
@@ -1915,9 +1741,7 @@ class TestTier3VectorLoaders(unittest.TestCase):
 
     def test_bigquery_vector_load_calls_client(self):
         """BigQueryVectorLoader.load() calls BigQuery load_table_from_dataframe."""
-        from pipeline_v3 import BigQueryVectorLoader, HAS_BIGQUERY
-        if not HAS_BIGQUERY:
-            self.skipTest("google-cloud-bigquery not installed")
+        from pipeline_v3 import BigQueryVectorLoader
         loader     = BigQueryVectorLoader(self.gov)
         mock_job   = MagicMock()
         mock_job.result.return_value = None
@@ -1935,9 +1759,7 @@ class TestTier3VectorLoaders(unittest.TestCase):
         self.assertEqual(rows, 3)
         mock_client.load_table_from_dataframe.assert_called_once()
         mock_job.result.assert_called_once()
-        self.gov._event.assert_called_once()
-        self.assertIn("BIGQUERY_VECTOR_WRITE_COMPLETE",
-                      str(self.gov._event.call_args))
+        self.gov.load_complete.assert_called_once()
 
 
 
@@ -2252,40 +2074,27 @@ class TestNewDestinationLoaders(unittest.TestCase):
 
     def test_deltalake_raises_without_package(self):
         import pipeline_v3 as pv3
-        orig = pv3.HAS_DELTALAKE; pv3.HAS_DELTALAKE = False
-        try:
-            with self.assertRaises(RuntimeError): pv3.DeltaLakeLoader(self.gov)
-        finally: pv3.HAS_DELTALAKE = orig
+        with patch("pipeline.loaders.delta_lake_loader.HAS_DELTALAKE", False):
+            with self.assertRaises(RuntimeError):
+                pv3.DeltaLakeLoader(self.gov)
 
     def test_deltalake_missing_path_raises(self):
-        from pipeline_v3 import HAS_DELTALAKE
-        if not HAS_DELTALAKE:
-            self.skipTest("deltalake not installed")
         loader = DeltaLakeLoader(self.gov)
         with self.assertRaises(ValueError) as ctx:
             loader.load(self._df(), {})
         self.assertIn("path", str(ctx.exception))
 
     def test_deltalake_invalid_if_exists_raises(self):
-        from pipeline_v3 import HAS_DELTALAKE
-        if not HAS_DELTALAKE:
-            self.skipTest("deltalake not installed")
         loader = DeltaLakeLoader(self.gov)
         with self.assertRaises(ValueError) as ctx:
             loader.load(self._df(), {"path": "/tmp/delta"}, if_exists="overwrite")
         self.assertIn("if_exists", str(ctx.exception))
 
     def test_deltalake_empty_df_returns_zero(self):
-        from pipeline_v3 import HAS_DELTALAKE
-        if not HAS_DELTALAKE:
-            self.skipTest("deltalake not installed")
         loader = DeltaLakeLoader(self.gov)
         self.assertEqual(loader.load(pd.DataFrame(), {"path": "/tmp/delta"}), 0)
 
     def test_deltalake_append_local(self):
-        from pipeline_v3 import HAS_DELTALAKE
-        if not HAS_DELTALAKE:
-            self.skipTest("deltalake not installed")
         import pathlib as _pl
         delta_path = str(_pl.Path(self._tmp) / "delta_table")
         loader = DeltaLakeLoader(self.gov)
@@ -2295,9 +2104,6 @@ class TestNewDestinationLoaders(unittest.TestCase):
         self.assertIn("DELTALAKE_WRITE_COMPLETE", str(self.gov._event.call_args))
 
     def test_deltalake_overwrite_local(self):
-        from pipeline_v3 import HAS_DELTALAKE
-        if not HAS_DELTALAKE:
-            self.skipTest("deltalake not installed")
         import pathlib as _pl
         delta_path = str(_pl.Path(self._tmp) / "delta_table2")
         loader = DeltaLakeLoader(self.gov)
@@ -2306,9 +2112,6 @@ class TestNewDestinationLoaders(unittest.TestCase):
         self.assertEqual(rows, 3)
 
     def test_deltalake_upsert_missing_key_raises(self):
-        from pipeline_v3 import HAS_DELTALAKE
-        if not HAS_DELTALAKE:
-            self.skipTest("deltalake not installed")
         import pathlib as _pl
         delta_path = str(_pl.Path(self._tmp) / "delta_table3")
         loader = DeltaLakeLoader(self.gov)
@@ -2319,9 +2122,6 @@ class TestNewDestinationLoaders(unittest.TestCase):
         self.assertIn("nonexistent", str(ctx.exception))
 
     def test_deltalake_upsert_local(self):
-        from pipeline_v3 import HAS_DELTALAKE
-        if not HAS_DELTALAKE:
-            self.skipTest("deltalake not installed")
         import pathlib as _pl
         delta_path = str(_pl.Path(self._tmp) / "delta_upsert")
         loader = DeltaLakeLoader(self.gov)
@@ -2334,33 +2134,23 @@ class TestNewDestinationLoaders(unittest.TestCase):
 
     def test_iceberg_raises_without_package(self):
         import pipeline_v3 as pv3
-        orig = pv3.HAS_ICEBERG; pv3.HAS_ICEBERG = False
-        try:
-            with self.assertRaises(RuntimeError): pv3.IcebergLoader(self.gov)
-        finally: pv3.HAS_ICEBERG = orig
+        with patch("pipeline.loaders.iceberg_loader.HAS_ICEBERG", False):
+            with self.assertRaises(RuntimeError):
+                pv3.IcebergLoader(self.gov)
 
     def test_iceberg_missing_namespace_raises(self):
-        from pipeline_v3 import HAS_ICEBERG
-        if not HAS_ICEBERG:
-            self.skipTest("pyiceberg not installed")
         loader = IcebergLoader(self.gov)
         with self.assertRaises(ValueError) as ctx:
             loader.load(self._df(), {"catalog_type": "memory"}, table="t")
         self.assertIn("namespace", str(ctx.exception))
 
     def test_iceberg_missing_table_raises(self):
-        from pipeline_v3 import HAS_ICEBERG
-        if not HAS_ICEBERG:
-            self.skipTest("pyiceberg not installed")
         loader = IcebergLoader(self.gov)
         with self.assertRaises(ValueError) as ctx:
             loader.load(self._df(), {"catalog_type": "memory", "namespace": "ns"})
         self.assertIn("table", str(ctx.exception))
 
     def test_iceberg_invalid_if_exists_raises(self):
-        from pipeline_v3 import HAS_ICEBERG
-        if not HAS_ICEBERG:
-            self.skipTest("pyiceberg not installed")
         loader = IcebergLoader(self.gov)
         with self.assertRaises(ValueError) as ctx:
             loader.load(self._df(), {"catalog_type": "memory", "namespace": "ns"},
@@ -2368,9 +2158,6 @@ class TestNewDestinationLoaders(unittest.TestCase):
         self.assertIn("if_exists", str(ctx.exception))
 
     def test_iceberg_empty_df_returns_zero(self):
-        from pipeline_v3 import HAS_ICEBERG
-        if not HAS_ICEBERG:
-            self.skipTest("pyiceberg not installed")
         loader = IcebergLoader(self.gov)
         rows = loader.load(pd.DataFrame(),
                            {"catalog_type": "memory", "namespace": "ns"}, table="t")
@@ -2378,12 +2165,14 @@ class TestNewDestinationLoaders(unittest.TestCase):
 
     def test_iceberg_sql_catalog_append(self):
         """IcebergLoader can write to a local SQL-backed catalog (sqlite)."""
-        from pipeline_v3 import HAS_ICEBERG
-        if not HAS_ICEBERG:
-            self.skipTest("pyiceberg not installed")
+        import os
         import pathlib as _pl
-        warehouse = str(_pl.Path(self._tmp) / "iceberg_warehouse")
-        db_uri    = f"sqlite:///{_pl.Path(self._tmp) / 'iceberg.db'}"
+        warehouse_path = _pl.Path(self._tmp) / "iceberg_warehouse"
+        warehouse_path.mkdir(parents=True, exist_ok=True)
+        _, wh_tail = os.path.splitdrive(str(warehouse_path))
+        warehouse = wh_tail.replace("\\", "/")
+        db_path   = (_pl.Path(self._tmp) / "iceberg.db").as_posix()
+        db_uri    = f"sqlite:///{db_path}"
         loader    = IcebergLoader(self.gov)
         rows = loader.load(
             self._df(),
@@ -2433,9 +2222,6 @@ class TestNewDestinationLoaders(unittest.TestCase):
         self.assertEqual(rows, 0)
 
     def test_s3_calls_put_object(self):
-        from pipeline_v3 import HAS_S3
-        if not HAS_S3:
-            self.skipTest("boto3 not installed")
         loader = S3Loader(self.gov)
         mock_client = MagicMock()
         with patch("boto3.client", return_value=mock_client):
@@ -2448,9 +2234,6 @@ class TestNewDestinationLoaders(unittest.TestCase):
         self.assertIn("S3_WRITE_COMPLETE", str(self.gov._event.call_args))
 
     def test_s3_csv_format(self):
-        from pipeline_v3 import HAS_S3
-        if not HAS_S3:
-            self.skipTest("boto3 not installed")
         loader = S3Loader(self.gov)
         mock_client = MagicMock()
         with patch("boto3.client", return_value=mock_client):
@@ -2465,15 +2248,11 @@ class TestNewDestinationLoaders(unittest.TestCase):
 
     def test_athena_raises_without_boto3(self):
         import pipeline_v3 as pv3
-        orig = pv3.HAS_S3; pv3.HAS_S3 = False
-        try:
-            with self.assertRaises(RuntimeError): pv3.AthenaLoader(self.gov)
-        finally: pv3.HAS_S3 = orig
+        with patch("pipeline.loaders.athena_loader.HAS_S3", False):
+            with self.assertRaises(RuntimeError):
+                pv3.AthenaLoader(self.gov)
 
     def test_athena_missing_database_raises(self):
-        from pipeline_v3 import HAS_S3
-        if not HAS_S3:
-            self.skipTest("boto3 not installed")
         loader = AthenaLoader(self.gov)
         with self.assertRaises(ValueError) as ctx:
             loader.load(self._df(), {"s3_data_dir": "s3://b/d/",
@@ -2481,9 +2260,6 @@ class TestNewDestinationLoaders(unittest.TestCase):
         self.assertIn("database", str(ctx.exception))
 
     def test_athena_missing_s3_data_dir_raises(self):
-        from pipeline_v3 import HAS_S3
-        if not HAS_S3:
-            self.skipTest("boto3 not installed")
         loader = AthenaLoader(self.gov)
         with self.assertRaises(ValueError) as ctx:
             loader.load(self._df(), {"database": "db",
@@ -2491,9 +2267,6 @@ class TestNewDestinationLoaders(unittest.TestCase):
         self.assertIn("s3_data_dir", str(ctx.exception))
 
     def test_athena_empty_df_returns_zero(self):
-        from pipeline_v3 import HAS_S3
-        if not HAS_S3:
-            self.skipTest("boto3 not installed")
         loader = AthenaLoader(self.gov)
         rows = loader.load(pd.DataFrame(),
                            {"database": "db", "s3_data_dir": "s3://b/d/",
@@ -2505,33 +2278,23 @@ class TestNewDestinationLoaders(unittest.TestCase):
 
     def test_sftp_raises_without_paramiko(self):
         import pipeline_v3 as pv3
-        orig = pv3.HAS_SFTP; pv3.HAS_SFTP = False
-        try:
-            with self.assertRaises(RuntimeError): pv3.SFTPLoader(self.gov)
-        finally: pv3.HAS_SFTP = orig
+        with patch("pipeline.loaders.sftp_loader.HAS_SFTP", False):
+            with self.assertRaises(RuntimeError):
+                pv3.SFTPLoader(self.gov)
 
     def test_sftp_missing_host_raises(self):
-        from pipeline_v3 import HAS_SFTP
-        if not HAS_SFTP:
-            self.skipTest("paramiko not installed")
         loader = SFTPLoader(self.gov)
         with self.assertRaises(ValueError) as ctx:
             loader.load(self._df(), {"username": "u"}, table="t")
         self.assertIn("host", str(ctx.exception))
 
     def test_sftp_missing_username_raises(self):
-        from pipeline_v3 import HAS_SFTP
-        if not HAS_SFTP:
-            self.skipTest("paramiko not installed")
         loader = SFTPLoader(self.gov)
         with self.assertRaises(ValueError) as ctx:
             loader.load(self._df(), {"host": "h"}, table="t")
         self.assertIn("username", str(ctx.exception))
 
     def test_sftp_invalid_format_raises(self):
-        from pipeline_v3 import HAS_SFTP
-        if not HAS_SFTP:
-            self.skipTest("paramiko not installed")
         loader = SFTPLoader(self.gov)
         with self.assertRaises(ValueError) as ctx:
             loader.load(self._df(), {"host": "h", "username": "u",
@@ -2539,18 +2302,12 @@ class TestNewDestinationLoaders(unittest.TestCase):
         self.assertIn("format", str(ctx.exception))
 
     def test_sftp_empty_df_returns_zero(self):
-        from pipeline_v3 import HAS_SFTP
-        if not HAS_SFTP:
-            self.skipTest("paramiko not installed")
         loader = SFTPLoader(self.gov)
         rows = loader.load(pd.DataFrame(),
                            {"host": "h", "username": "u", "remote_path": "/x"})
         self.assertEqual(rows, 0)
 
     def test_sftp_calls_paramiko_upload(self):
-        from pipeline_v3 import HAS_SFTP
-        if not HAS_SFTP:
-            self.skipTest("paramiko not installed")
         loader = SFTPLoader(self.gov)
         mock_ssh  = MagicMock()
         mock_sftp = MagicMock()
@@ -2574,42 +2331,29 @@ class TestNewDestinationLoaders(unittest.TestCase):
 
     def test_fabric_raises_without_adlfs(self):
         import pipeline_v3 as pv3
-        orig = pv3.HAS_FABRIC; pv3.HAS_FABRIC = False
-        try:
-            with self.assertRaises(RuntimeError): pv3.MicrosoftFabricLoader(self.gov)
-        finally: pv3.HAS_FABRIC = orig
+        with patch("pipeline.loaders.microsoft_fabric_loader.HAS_FABRIC", False):
+            with self.assertRaises(RuntimeError):
+                pv3.MicrosoftFabricLoader(self.gov)
 
     def test_fabric_missing_workspace_id_raises(self):
-        from pipeline_v3 import HAS_FABRIC
-        if not HAS_FABRIC:
-            self.skipTest('adlfs not installed')
         loader = MicrosoftFabricLoader(self.gov)
         with self.assertRaises(ValueError) as ctx:
             loader.load(self._df(), {"lakehouse_id": "lh"}, table="t")
         self.assertIn("workspace_id", str(ctx.exception))
 
     def test_fabric_missing_lakehouse_id_raises(self):
-        from pipeline_v3 import HAS_FABRIC
-        if not HAS_FABRIC:
-            self.skipTest('adlfs not installed')
         loader = MicrosoftFabricLoader(self.gov)
         with self.assertRaises(ValueError) as ctx:
             loader.load(self._df(), {"workspace_id": "ws"}, table="t")
         self.assertIn("lakehouse_id", str(ctx.exception))
 
     def test_fabric_empty_df_returns_zero(self):
-        from pipeline_v3 import HAS_FABRIC
-        if not HAS_FABRIC:
-            self.skipTest('adlfs not installed')
         loader = MicrosoftFabricLoader(self.gov)
         rows = loader.load(pd.DataFrame(),
                            {"workspace_id": "ws", "lakehouse_id": "lh"}, table="t")
         self.assertEqual(rows, 0)
 
     def test_fabric_calls_adlfs(self):
-        from pipeline_v3 import HAS_FABRIC
-        if not HAS_FABRIC:
-            self.skipTest('adlfs not installed')
         loader = MicrosoftFabricLoader(self.gov)
         mock_fs   = MagicMock()
         mock_file = MagicMock()

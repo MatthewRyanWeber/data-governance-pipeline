@@ -68,8 +68,6 @@ class BigQueryVectorLoader:
             raise ValueError(
                 "BigQueryVectorLoader: cfg must contain 'dataset'."
             )
-        validate_sql_identifier(cfg["project"], "project")
-        validate_sql_identifier(cfg["dataset"], "dataset")
         validate_sql_identifier(table, "table")
 
         if df.empty:
@@ -138,20 +136,7 @@ class BigQueryVectorLoader:
             raise ValueError(
                 "BigQueryVectorLoader: cfg must contain 'dataset'."
             )
-        validate_sql_identifier(cfg["project"], "project")
-        validate_sql_identifier(cfg["dataset"], "dataset")
         validate_sql_identifier(table, "table")
-
-        client_kwargs = {}
-        if cfg.get("credentials_path"):
-            from google.oauth2 import service_account
-            client_kwargs["credentials"] = (
-                service_account.Credentials
-                .from_service_account_file(cfg["credentials_path"])
-            )
-
-        client = bigquery.Client(project=cfg["project"], **client_kwargs)
-        table_id = f"{cfg['project']}.{cfg['dataset']}.{table}"
 
         if options and not re.fullmatch(r"[\w=.,\s]+", options):
             raise ValueError(
@@ -165,6 +150,17 @@ class BigQueryVectorLoader:
                 f"'COSINE' or 'EUCLIDEAN', got '{distance}'."
             )
         query_vector = validate_float_vector(query_vector, "query_vector")
+
+        client_kwargs = {}
+        if cfg.get("credentials_path"):
+            from google.oauth2 import service_account
+            client_kwargs["credentials"] = (
+                service_account.Credentials
+                .from_service_account_file(cfg["credentials_path"])
+            )
+
+        client = bigquery.Client(project=cfg["project"], **client_kwargs)
+        table_id = f"{cfg['project']}.{cfg['dataset']}.{table}"
         vec_literal = "[" + ",".join(str(v) for v in query_vector) + "]"
 
         sql = f"""

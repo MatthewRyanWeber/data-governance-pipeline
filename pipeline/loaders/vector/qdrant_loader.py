@@ -226,14 +226,15 @@ class QdrantLoader:
         try:
             kwargs: dict = {
                 "collection_name": collection_name,
-                "query_vector": query_vector,
+                "query": query_vector,
                 "limit": limit,
                 "with_payload": with_payload,
             }
             if query_filter:
                 kwargs["query_filter"] = query_filter
 
-            results = client.search(**kwargs)
+            response = client.query_points(**kwargs)
+            results = response.points
         finally:
             client.close()
 
