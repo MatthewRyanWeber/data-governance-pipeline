@@ -9,16 +9,21 @@ Layer 3 — imports from Layer 0 (constants), Layer 1 (governance_logger).
 Revision history
 ────────────────
 1.0   2026-06-08   Initial release.
+1.1   2026-06-08   Add dry_run, thread lock, stricter sanitization, atomic
+                   manifest writes, input validation.
 """
 
 import hashlib
 import json
 import logging
+import re
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from pipeline.constants import BASE_DIR
+from pipeline.helpers import atomic_json_write
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -46,16 +51,21 @@ class SnapshotStore:
         self,
         gov: "GovernanceLogger",
         snapshot_dir: str | Path | None = None,
+        dry_run: bool = False,
     ) -> None:
         self.gov = gov
+        self.dry_run = dry_run
+        self._lock = threading.Lock()
         self.base_dir = Path(snapshot_dir) if snapshot_dir else _SNAPSHOT_DIR
         self.base_dir.mkdir(parents=True, exist_ok=True)
 
     def _dataset_dir(self, dataset: str) -> Path:
-        safe = dataset.replace("/", "_").replace("\\", "_")
-        d = self.base_dir / safe
-        d.mkdir(parents=True, exist_ok=True)
-        return d
+        safe = re.sub(r'[^\w\-.]', '_', dataset)
+        if not safe:
+            raise ValueError("Dataset name produced empty path after sanitization")
+        dataset_directory = self.base_dir / safe
+        dataset_directory.mkdir(parents=True, exist_ok=True)
+        return dataset_directory
 
     def _manifest_path(self, dataset: str) -> Path:
         return self._dataset_dir(dataset) / "manifest.json"
@@ -68,7 +78,7 @@ class SnapshotStore:
 
     def _save_manifest(self, dataset: str, manifest: dict) -> None:
         path = self._manifest_path(dataset)
-        path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+        atomic_json_write(path, json.dumps(manifest, indent=2))
 
     def snapshot(
         self,
@@ -82,43 +92,52 @@ class SnapshotStore:
 
         Returns the version number (1-indexed).
         """
-        manifest = self._load_manifest(dataset)
-        version = len(manifest["versions"]) + 1
+        if not dataset or not dataset.strip():
+            raise ValueError("Dataset name must not be empty")
 
-        csv_data = df.to_csv(index=False, encoding="utf-8")
-        content_hash = hashlib.sha256(csv_data.encode("utf-8")).hexdigest()
+        with self._lock:
+            manifest = self._load_manifest(dataset)
+            version = len(manifest["versions"]) + 1
 
-        if manifest["versions"]:
-            last = manifest["versions"][-1]
-            if last["content_hash"] == content_hash:
-                logger.info("[SNAPSHOT] '%s' v%d skipped — identical to v%d",
-                            dataset, version, last["version"])
-                return last["version"]
+            csv_data = df.to_csv(index=False, encoding="utf-8")
+            content_hash = hashlib.sha256(csv_data.encode("utf-8")).hexdigest()
 
-        snapshot_file = self._dataset_dir(dataset) / f"v{version}.csv"
-        snapshot_file.write_text(csv_data, encoding="utf-8")
+            if manifest["versions"]:
+                last = manifest["versions"][-1]
+                if last["content_hash"] == content_hash:
+                    logger.info("[SNAPSHOT] '%s' v%d skipped — identical to v%d",
+                                dataset, version, last["version"])
+                    return last["version"]
 
-        manifest["versions"].append({
-            "version": version,
-            "content_hash": content_hash,
-            "rows": len(df),
-            "columns": len(df.columns),
-            "column_names": list(df.columns),
-            "message": message,
-            "author": author,
-            "created_utc": datetime.now(timezone.utc).isoformat(),
-            "file": snapshot_file.name,
-        })
-        self._save_manifest(dataset, manifest)
+            if self.dry_run:
+                logger.info("[DRY RUN] Would snapshot '%s' v%d — %d rows, hash=%s",
+                            dataset, version, len(df), content_hash[:12])
+                return version
 
-        self.gov.transformation_applied("SNAPSHOT_CREATED", {
-            "dataset": dataset, "version": version,
-            "rows": len(df), "columns": len(df.columns),
-            "content_hash": content_hash[:12],
-        })
-        logger.info("[SNAPSHOT] '%s' v%d — %d rows, hash=%s",
-                     dataset, version, len(df), content_hash[:12])
-        return version
+            snapshot_file = self._dataset_dir(dataset) / f"v{version}.csv"
+            snapshot_file.write_text(csv_data, encoding="utf-8")
+
+            manifest["versions"].append({
+                "version": version,
+                "content_hash": content_hash,
+                "rows": len(df),
+                "columns": len(df.columns),
+                "column_names": list(df.columns),
+                "message": message,
+                "author": author,
+                "created_utc": datetime.now(timezone.utc).isoformat(),
+                "file": snapshot_file.name,
+            })
+            self._save_manifest(dataset, manifest)
+
+            self.gov.transformation_applied("SNAPSHOT_CREATED", {
+                "dataset": dataset, "version": version,
+                "rows": len(df), "columns": len(df.columns),
+                "content_hash": content_hash[:12],
+            })
+            logger.info("[SNAPSHOT] '%s' v%d — %d rows, hash=%s",
+                         dataset, version, len(df), content_hash[:12])
+            return version
 
     def checkout(self, dataset: str, version: int | None = None) -> "pd.DataFrame":
         """
@@ -218,22 +237,27 @@ class SnapshotStore:
 
     def delete_version(self, dataset: str, version: int) -> bool:
         """Delete a specific version snapshot."""
-        manifest = self._load_manifest(dataset)
-        entry = None
-        for v in manifest["versions"]:
-            if v["version"] == version:
-                entry = v
-                break
-        if not entry:
-            return False
+        with self._lock:
+            manifest = self._load_manifest(dataset)
+            entry = None
+            for v in manifest["versions"]:
+                if v["version"] == version:
+                    entry = v
+                    break
+            if not entry:
+                return False
 
-        path = self._dataset_dir(dataset) / entry["file"]
-        if path.exists():
-            path.unlink()
+            if self.dry_run:
+                logger.info("[DRY RUN] Would delete '%s' v%d", dataset, version)
+                return True
 
-        manifest["versions"] = [
-            v for v in manifest["versions"] if v["version"] != version
-        ]
-        self._save_manifest(dataset, manifest)
-        logger.info("[SNAPSHOT] Deleted '%s' v%d", dataset, version)
-        return True
+            path = self._dataset_dir(dataset) / entry["file"]
+            if path.exists():
+                path.unlink()
+
+            manifest["versions"] = [
+                v for v in manifest["versions"] if v["version"] != version
+            ]
+            self._save_manifest(dataset, manifest)
+            logger.info("[SNAPSHOT] Deleted '%s' v%d", dataset, version)
+            return True

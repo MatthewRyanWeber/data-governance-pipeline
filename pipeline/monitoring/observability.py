@@ -10,13 +10,19 @@ Revision history
 ────────────────
 1.0   2026-06-08   Initial release.
 1.1   2026-06-08   Fix drift detection: persist column_stats in observations.
+1.2   2026-06-08   Taste fixes: dry_run, thread lock, column_stats moved to
+                   observe(), guard empty df, use read_jsonl_tail, rename
+                   rec→observation_record / ds→dataset_name.
 """
 
 import json
 import logging
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+from pipeline.helpers import read_jsonl_tail
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -43,6 +49,7 @@ class DataObserver:
         freshness_threshold_hours: float = 24.0,
         volume_change_threshold: float = 0.5,
         drift_threshold: float = 0.1,
+        dry_run: bool = False,
     ) -> None:
         self.gov = gov
         self.history_file = (
@@ -52,6 +59,8 @@ class DataObserver:
         self.freshness_hours = freshness_threshold_hours
         self.volume_threshold = volume_change_threshold
         self.drift_threshold = drift_threshold
+        self.dry_run = dry_run
+        self._lock = threading.Lock()
 
     def observe(
         self,
@@ -64,6 +73,20 @@ class DataObserver:
 
         Returns dict with freshness, volume, and drift alerts.
         """
+        if df.empty:
+            logger.info(
+                "[OBSERVE] '%s': empty DataFrame — skipping volume/drift checks",
+                dataset,
+            )
+            return {
+                "dataset": dataset,
+                "row_count": 0,
+                "column_count": len(df.columns),
+                "alerts": [],
+                "alert_count": 0,
+                "observed_utc": datetime.now(timezone.utc).isoformat(),
+            }
+
         alerts: list[dict] = []
 
         freshness = self._check_freshness(df, timestamp_col)
@@ -86,7 +109,20 @@ class DataObserver:
             "observed_utc": datetime.now(timezone.utc).isoformat(),
         }
 
-        self._save_observation(report, df)
+        # Compute column stats here so _save_observation stays I/O-only
+        column_stats = []
+        for col in df.select_dtypes(include="number").columns:
+            series = df[col].dropna()
+            if series.empty:
+                continue
+            column_stats.append({
+                "name": col,
+                "mean": round(float(series.mean()), 6),
+                "std": round(float(series.std()), 6) if len(series) > 1 else 0.0,
+            })
+        report["column_stats"] = column_stats
+
+        self._save_observation(report)
 
         if alerts:
             self.gov.transformation_applied("OBSERVABILITY_ALERTS", {
@@ -214,63 +250,41 @@ class DataObserver:
 
         return alerts
 
-    def _save_observation(self, report: dict, df: "pd.DataFrame") -> None:
-        """Persist observation with column stats for future drift detection."""
-        entry = dict(report)
-        column_stats = []
-        for col in df.select_dtypes(include="number").columns:
-            series = df[col].dropna()
-            if series.empty:
-                continue
-            column_stats.append({
-                "name": col,
-                "mean": round(float(series.mean()), 6),
-                "std": round(float(series.std()), 6) if len(series) > 1 else 0.0,
-            })
-        entry["column_stats"] = column_stats
-        with open(self.history_file, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(entry, default=str) + "\n")
+    def _save_observation(self, report: dict) -> None:
+        """Persist observation to JSONL history. Skipped when dry_run."""
+        if self.dry_run:
+            logger.info("[OBSERVE] dry_run — would save observation for '%s'",
+                        report.get("dataset", ""))
+            return
+        with self._lock:
+            with open(self.history_file, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(report, default=str) + "\n")
 
     def _load_history(self, dataset: str, n: int = 5) -> list[dict]:
         """Load last n observations for a dataset."""
-        if not self.history_file.exists():
-            return []
-        lines = self.history_file.read_text(encoding="utf-8").strip().splitlines()
-        records = []
-        for line in reversed(lines):
-            try:
-                rec = json.loads(line)
-                if rec.get("dataset") == dataset:
-                    records.append(rec)
-                    if len(records) >= n:
-                        break
-            except json.JSONDecodeError:
-                pass
-        return records
+        return read_jsonl_tail(
+            self.history_file,
+            count=n,
+            filter_fn=lambda observation_record: observation_record.get("dataset") == dataset,
+        )
 
     def freshness_report(self, datasets: list[str] | None = None) -> list[dict]:
         """Generate a freshness report across all observed datasets."""
-        if not self.history_file.exists():
-            return []
+        all_records = read_jsonl_tail(self.history_file, count=500)
 
-        lines = self.history_file.read_text(encoding="utf-8").strip().splitlines()
         latest: dict[str, dict] = {}
-        for line in reversed(lines):
-            try:
-                rec = json.loads(line)
-                ds = rec.get("dataset", "")
-                if ds and ds not in latest:
-                    if datasets is None or ds in datasets:
-                        latest[ds] = rec
-            except json.JSONDecodeError:
-                pass
+        for observation_record in all_records:
+            dataset_name = observation_record.get("dataset", "")
+            if dataset_name and dataset_name not in latest:
+                if datasets is None or dataset_name in datasets:
+                    latest[dataset_name] = observation_record
 
         return [
             {
-                "dataset": ds,
-                "last_observed": rec["observed_utc"],
-                "row_count": rec["row_count"],
-                "alert_count": rec["alert_count"],
+                "dataset": dataset_name,
+                "last_observed": observation_record["observed_utc"],
+                "row_count": observation_record["row_count"],
+                "alert_count": observation_record["alert_count"],
             }
-            for ds, rec in sorted(latest.items())
+            for dataset_name, observation_record in sorted(latest.items())
         ]

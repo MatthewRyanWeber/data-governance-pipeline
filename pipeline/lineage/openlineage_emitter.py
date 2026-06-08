@@ -11,10 +11,13 @@ Layer 3 — imports from Layer 0 (constants), Layer 1 (governance_logger).
 Revision history
 ────────────────
 1.0   2026-06-08   Initial release.
+1.1   2026-06-08   Add dry_run, thread lock, quality_threshold ctor param,
+                   ImportError guard in _post_event, extract _persist_event.
 """
 
 import json
 import logging
+import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,7 +32,6 @@ logger = logging.getLogger(__name__)
 
 _OL_SCHEMA = "https://openlineage.io/spec/2-0-2/OpenLineage.json"
 _PRODUCER = f"data-governance-pipeline/{VERSION}"
-_DEFAULT_QUALITY_THRESHOLD = 70.0
 
 
 class OpenLineageEmitter:
@@ -50,6 +52,8 @@ class OpenLineageEmitter:
         namespace: str = "data-governance-pipeline",
         output_file: str | Path | None = None,
         http_endpoint: str | None = None,
+        quality_threshold: float = 70.0,
+        dry_run: bool = False,
     ) -> None:
         self.gov = gov
         self.namespace = namespace
@@ -58,7 +62,9 @@ class OpenLineageEmitter:
             else gov.log_dir / "openlineage_events.jsonl"
         )
         self.http_endpoint = http_endpoint
-        self.quality_threshold = _DEFAULT_QUALITY_THRESHOLD
+        self.quality_threshold = quality_threshold
+        self.dry_run = dry_run
+        self._lock = threading.Lock()
         self._run_id = str(uuid.uuid4())
 
     def emit_start(
@@ -177,8 +183,11 @@ class OpenLineageEmitter:
             "schemaURL": _OL_SCHEMA,
         }
 
-        with open(self.output_file, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(event) + "\n")
+        if self.dry_run:
+            logger.info("[OL] DRY RUN — would emit %s %s", event_type, job_name)
+            return event
+
+        self._persist_event(event)
 
         if self.http_endpoint:
             self._post_event(event)
@@ -194,6 +203,12 @@ class OpenLineageEmitter:
                      event_type, job_name,
                      len(event["inputs"]), len(event["outputs"]))
         return event
+
+    def _persist_event(self, event: dict) -> None:
+        """Append a serialised event to the JSONL log file (thread-safe)."""
+        with self._lock:
+            with open(self.output_file, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(event) + "\n")
 
     def _normalize_datasets(self, datasets: list | None) -> list[dict]:
         """Convert string dataset names to OpenLineage dataset objects."""
@@ -224,6 +239,10 @@ class OpenLineageEmitter:
             if resp.status_code >= 400:
                 logger.warning("[OL] HTTP POST failed: %d %s",
                                resp.status_code, resp.text[:200])
+        except ImportError:
+            logger.warning("[OL] 'requests' package not installed "
+                           "— cannot POST events. pip install requests")
+            return
         except Exception as exc:
             logger.warning("[OL] Could not POST event: %s", exc)
 

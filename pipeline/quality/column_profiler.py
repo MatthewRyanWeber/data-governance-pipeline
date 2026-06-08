@@ -9,10 +9,14 @@ Layer 3 — imports from Layer 0 (constants), Layer 1 (governance_logger).
 Revision history
 ────────────────
 1.0   2026-06-08   Initial release.
+1.1   2026-06-08   Taste fixes: dry_run support, thread-safe file writes,
+                   empty-DataFrame guard, clearer variable names, log
+                   corrupt JSONL lines instead of silent pass.
 """
 
 import json
 import logging
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -39,8 +43,11 @@ class ColumnProfiler:
         self,
         gov: "GovernanceLogger",
         history_file: str | Path | None = None,
+        dry_run: bool = False,
     ) -> None:
         self.gov = gov
+        self.dry_run = dry_run
+        self._lock = threading.Lock()
         self.history_file = (
             Path(history_file) if history_file
             else gov.log_dir / "column_profiles.jsonl"
@@ -60,10 +67,20 @@ class ColumnProfiler:
         """
         import pandas as pd
 
-        columns = []
+        if df.empty:
+            logger.info("[PROFILE] Empty DataFrame for '%s' — returning minimal profile", dataset_name)
+            return {
+                "dataset_name": dataset_name,
+                "row_count": 0,
+                "column_count": len(df.columns),
+                "generated_utc": datetime.now(timezone.utc).isoformat(),
+                "columns": [],
+            }
+
+        column_profiles = []
         for col in df.columns:
             series = df[col]
-            prof: dict = {
+            column_profile: dict = {
                 "name": col,
                 "dtype": str(series.dtype),
                 "null_count": int(series.isna().sum()),
@@ -78,7 +95,7 @@ class ColumnProfiler:
 
             if pd.api.types.is_numeric_dtype(series):
                 desc = non_null.describe()
-                prof.update({
+                column_profile.update({
                     "min": float(desc["min"]) if len(non_null) > 0 else None,
                     "max": float(desc["max"]) if len(non_null) > 0 else None,
                     "mean": round(float(desc["mean"]), 4) if len(non_null) > 0 else None,
@@ -92,7 +109,7 @@ class ColumnProfiler:
 
             elif pd.api.types.is_datetime64_any_dtype(series):
                 if len(non_null) > 0:
-                    prof.update({
+                    column_profile.update({
                         "min": str(non_null.min()),
                         "max": str(non_null.max()),
                         "range_days": (non_null.max() - non_null.min()).days,
@@ -102,31 +119,35 @@ class ColumnProfiler:
                 str_vals = non_null.astype(str)
                 if len(str_vals) > 0:
                     lengths = str_vals.str.len()
-                    prof.update({
+                    column_profile.update({
                         "min_length": int(lengths.min()),
                         "max_length": int(lengths.max()),
                         "mean_length": round(float(lengths.mean()), 1),
                         "empty_count": int((str_vals == "").sum()),
                     })
 
-            if prof["unique_count"] > 0:
+            if column_profile["unique_count"] > 0:
                 vc = non_null.value_counts().head(top_n)
-                prof["top_values"] = {str(k): int(v) for k, v in vc.items()}
-                if prof["unique_count"] > top_n * 2:
-                    prof["top_values_truncated"] = True
+                column_profile["top_values"] = {str(k): int(v) for k, v in vc.items()}
+                if column_profile["unique_count"] > top_n * 2:
+                    column_profile["top_values_truncated"] = True
 
-            columns.append(prof)
+            column_profiles.append(column_profile)
 
         report = {
             "dataset_name": dataset_name,
             "row_count": len(df),
             "column_count": len(df.columns),
             "generated_utc": datetime.now(timezone.utc).isoformat(),
-            "columns": columns,
+            "columns": column_profiles,
         }
 
-        with open(self.history_file, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(report, default=str) + "\n")
+        if not self.dry_run:
+            with self._lock:
+                with open(self.history_file, "a", encoding="utf-8") as fh:
+                    fh.write(json.dumps(report, default=str) + "\n")
+        else:
+            logger.info("[PROFILE] dry_run — skipping history write for '%s'", dataset_name)
 
         self.gov.transformation_applied("COLUMN_PROFILE_GENERATED", {
             "dataset": dataset_name,
@@ -144,12 +165,12 @@ class ColumnProfiler:
         records = []
         for line in reversed(lines):
             try:
-                rec = json.loads(line)
-                if dataset_name and rec.get("dataset_name") != dataset_name:
+                profile_record = json.loads(line)
+                if dataset_name and profile_record.get("dataset_name") != dataset_name:
                     continue
-                records.append(rec)
+                records.append(profile_record)
                 if len(records) >= n:
                     break
             except json.JSONDecodeError:
-                pass
+                logger.warning("Corrupt profile record: %s", line[:100])
         return records

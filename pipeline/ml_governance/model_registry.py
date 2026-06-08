@@ -4,22 +4,25 @@ AI/ML model registry — tracks model-to-dataset relationships.
 Records which datasets trained which models, model versioning,
 training data lineage, and quality metrics per model version.
 
-Layer 3 — imports from Layer 0 (constants), Layer 1 (governance_logger).
+Layer 3 — imports from Layer 0 (constants, helpers), Layer 1 (governance_logger).
 
 Revision history
 ────────────────
 1.0   2026-06-08   Initial release.
+1.1   2026-06-08   Taste fixes: dry_run support, instance lock, use
+                   atomic_json_write, fix mutable-default falsy trap,
+                   warn on auto-register, rename terse locals.
 """
 
 import json
 import logging
-import tempfile
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from pipeline.constants import BASE_DIR
+from pipeline.helpers import atomic_json_write
 
 if TYPE_CHECKING:
     from pipeline.governance_logger import GovernanceLogger
@@ -27,7 +30,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _REGISTRY_FILE = BASE_DIR / "config" / "model_registry.json"
-_LOCK = threading.Lock()
 
 
 class ModelRegistry:
@@ -48,8 +50,11 @@ class ModelRegistry:
         self,
         gov: "GovernanceLogger",
         registry_file: str | Path | None = None,
+        dry_run: bool = False,
     ) -> None:
         self.gov = gov
+        self.dry_run = dry_run
+        self._lock = threading.Lock()
         self.registry_file = Path(registry_file) if registry_file else _REGISTRY_FILE
         self.registry_file.parent.mkdir(parents=True, exist_ok=True)
         self._registry: dict = self._load()
@@ -64,19 +69,10 @@ class ModelRegistry:
             return {"models": {}}
 
     def _save(self) -> None:
-        with _LOCK:
+        with self._lock:
             self._registry["updated_utc"] = datetime.now(timezone.utc).isoformat()
             data = json.dumps(self._registry, indent=2, default=str)
-            tmp_fd, tmp_path = tempfile.mkstemp(
-                dir=str(self.registry_file.parent), suffix=".tmp",
-            )
-            try:
-                with open(tmp_fd, "w", encoding="utf-8") as fh:
-                    fh.write(data)
-                Path(tmp_path).replace(self.registry_file)
-            except BaseException:
-                Path(tmp_path).unlink(missing_ok=True)
-                raise
+            atomic_json_write(self.registry_file, data)
 
     def register_model(
         self,
@@ -99,6 +95,10 @@ class ModelRegistry:
         datasets   : list[str]     Training dataset names (links to catalog).
         tags       : list[str]     Searchable tags.
         """
+        if self.dry_run:
+            logger.info("[ML] [DRY RUN] Would register model '%s'", model_name)
+            return self._registry["models"].get(model_name, {})
+
         now = datetime.now(timezone.utc).isoformat()
 
         existing = self._registry["models"].get(model_name, {})
@@ -107,8 +107,8 @@ class ModelRegistry:
             "framework": framework or existing.get("framework", ""),
             "description": description or existing.get("description", ""),
             "owner": owner or existing.get("owner", ""),
-            "datasets": datasets or existing.get("datasets", []),
-            "tags": tags or existing.get("tags", []),
+            "datasets": datasets if datasets is not None else existing.get("datasets", []),
+            "tags": tags if tags is not None else existing.get("tags", []),
             "versions": existing.get("versions", []),
             "created_utc": existing.get("created_utc", now),
             "updated_utc": now,
@@ -138,7 +138,12 @@ class ModelRegistry:
         """
         Log a training run for a model. Returns the version number.
         """
+        if self.dry_run:
+            logger.info("[ML] [DRY RUN] Would log training run for '%s'", model_name)
+            return 0
+
         if model_name not in self._registry["models"]:
+            logger.warning("[ML] Auto-registering unknown model '%s'", model_name)
             self.register_model(model_name, datasets=datasets)
 
         model = self._registry["models"][model_name]
@@ -240,6 +245,10 @@ class ModelRegistry:
 
     def delete_model(self, model_name: str) -> bool:
         """Remove a model from the registry."""
+        if self.dry_run:
+            logger.info("[ML] [DRY RUN] Would delete model '%s'", model_name)
+            return False
+
         if model_name in self._registry["models"]:
             del self._registry["models"][model_name]
             self._save()
@@ -256,22 +265,23 @@ class ModelRegistry:
         if not model:
             raise ValueError(f"Model '{model_name}' not found")
 
-        va = vb = None
+        version_a_entry = version_b_entry = None
         for v in model["versions"]:
             if v["version"] == version_a:
-                va = v
+                version_a_entry = v
             if v["version"] == version_b:
-                vb = v
+                version_b_entry = v
 
-        if not va or not vb:
+        if not version_a_entry or not version_b_entry:
             raise ValueError(f"Version(s) not found for '{model_name}'")
 
         metric_diff = {}
-        all_metrics = set(va.get("metrics", {})) | set(vb.get("metrics", {}))
-        for m in all_metrics:
-            val_a = va.get("metrics", {}).get(m)
-            val_b = vb.get("metrics", {}).get(m)
-            metric_diff[m] = {
+        all_metrics = (set(version_a_entry.get("metrics", {}))
+                       | set(version_b_entry.get("metrics", {})))
+        for metric_name in all_metrics:
+            val_a = version_a_entry.get("metrics", {}).get(metric_name)
+            val_b = version_b_entry.get("metrics", {}).get(metric_name)
+            metric_diff[metric_name] = {
                 "version_a": val_a,
                 "version_b": val_b,
                 "diff": (val_b - val_a) if val_a is not None and val_b is not None else None,
@@ -282,6 +292,6 @@ class ModelRegistry:
             "version_a": version_a,
             "version_b": version_b,
             "metric_diff": metric_diff,
-            "datasets_a": va.get("datasets_used", []),
-            "datasets_b": vb.get("datasets_used", []),
+            "datasets_a": version_a_entry.get("datasets_used", []),
+            "datasets_b": version_b_entry.get("datasets_used", []),
         }

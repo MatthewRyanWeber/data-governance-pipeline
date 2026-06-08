@@ -8,6 +8,9 @@ Layer 3 — imports from catalog_store.
 Revision history
 ────────────────
 1.0   2026-06-08   Initial release.
+1.1   2026-06-08   Taste fixes: renamed import to CATALOG_DB, added dry_run,
+                   guard clauses on search/search_columns, FTS fallback warning,
+                   renamed d -> dataset_record.
 """
 
 import json
@@ -16,7 +19,7 @@ import sqlite3
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from pipeline.catalog.catalog_store import _CATALOG_DB
+from pipeline.catalog.catalog_store import CATALOG_DB
 
 if TYPE_CHECKING:
     from pipeline.governance_logger import GovernanceLogger
@@ -39,9 +42,11 @@ class CatalogSearch:
         self,
         gov: "GovernanceLogger",
         db_path: str | Path | None = None,
+        dry_run: bool = False,
     ) -> None:
         self.gov = gov
-        self.db_path = Path(db_path) if db_path else _CATALOG_DB
+        self.dry_run = dry_run
+        self.db_path = Path(db_path) if db_path else CATALOG_DB
 
     def _conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self.db_path))
@@ -55,6 +60,8 @@ class CatalogSearch:
         Uses FTS5 for ranked full-text search with fallback to LIKE
         if FTS table is unavailable.
         """
+        if not query or not query.strip():
+            return []
         if not self.db_path.exists():
             return []
 
@@ -69,7 +76,8 @@ class CatalogSearch:
                     ORDER BY fts.rank
                     LIMIT ?
                 """, (query, limit)).fetchall()
-            except sqlite3.OperationalError:
+            except sqlite3.OperationalError as exc:
+                logger.warning("[CATALOG] FTS search failed, falling back to LIKE: %s", exc)
                 like_q = f"%{query}%"
                 rows = conn.execute("""
                     SELECT *, 0 as rank FROM datasets
@@ -80,9 +88,9 @@ class CatalogSearch:
 
             results = []
             for row in rows:
-                d = dict(row)
-                d["tags"] = json.loads(d.get("tags", "[]"))
-                results.append(d)
+                dataset_record = dict(row)
+                dataset_record["tags"] = json.loads(dataset_record.get("tags", "[]"))
+                results.append(dataset_record)
 
             self.gov.transformation_applied("CATALOG_SEARCH", {
                 "query": query, "results": len(results),
@@ -93,6 +101,8 @@ class CatalogSearch:
 
     def search_columns(self, query: str, limit: int = 100) -> list[dict]:
         """Search columns by name, description, or glossary term."""
+        if not query or not query.strip():
+            return []
         if not self.db_path.exists():
             return []
 
@@ -143,9 +153,9 @@ class CatalogSearch:
             ).fetchall()
             results = []
             for row in rows:
-                d = dict(row)
-                d["tags"] = json.loads(d.get("tags", "[]"))
-                results.append(d)
+                dataset_record = dict(row)
+                dataset_record["tags"] = json.loads(dataset_record.get("tags", "[]"))
+                results.append(dataset_record)
             return results
         finally:
             conn.close()

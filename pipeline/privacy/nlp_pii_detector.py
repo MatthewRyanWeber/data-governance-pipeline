@@ -11,10 +11,13 @@ Layer 3 — imports from Layer 0 (constants), Layer 1 (governance_logger).
 Revision history
 ────────────────
 1.0   2026-06-08   Initial release.
+1.1   2026-06-08   Taste fixes: dry_run, return types, guard clause, naming,
+                   configurable random seed, defaultdict, regex ordering.
 """
 
 import logging
 import re
+from collections import defaultdict
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -50,6 +53,7 @@ _REGEX_DETECTORS: list[tuple[str, re.Pattern]] = [
         r"\b(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\b"
     )),
     ("US_PASSPORT", re.compile(r"\b[A-Z]\d{8}\b")),
+    # Overlaps with US_PASSPORT (8 digits); passport checked first so it takes priority in dedup
     ("US_DRIVERS_LICENSE", re.compile(r"\b[A-Z]\d{7,12}\b")),
     ("IBAN", re.compile(r"\b[A-Z]{2}\d{2}[A-Z0-9]{11,30}\b")),
 ]
@@ -72,14 +76,18 @@ class NLPPIIDetector:
         model_name: str = "en_core_web_sm",
         confidence_threshold: float = 0.5,
         sample_size: int = 1000,
+        random_seed: int = 42,
+        dry_run: bool = False,
     ) -> None:
         self.gov = gov
         self.model_name = model_name
         self.confidence = confidence_threshold
         self.sample_size = sample_size
+        self.random_seed = random_seed
+        self.dry_run = dry_run
         self._nlp = None
 
-    def _load_model(self):
+    def _load_model(self) -> object | None:
         if self._nlp is not None:
             return self._nlp
         if not _HAS_SPACY:
@@ -115,6 +123,9 @@ class NLPPIIDetector:
         -------
         list[dict]  Findings with column, entity_type, count, sample_values.
         """
+        if df is None or df.empty:
+            return []
+
         if text_columns is None:
             text_columns = list(df.select_dtypes(include=["object"]).columns)
 
@@ -126,7 +137,7 @@ class NLPPIIDetector:
 
             sample = df[col].dropna()
             if len(sample) > self.sample_size:
-                sample = sample.sample(self.sample_size, random_state=42)
+                sample = sample.sample(self.sample_size, random_state=self.random_seed)
 
             col_findings = self._scan_column_ner(col, sample)
             if include_regex:
@@ -149,26 +160,26 @@ class NLPPIIDetector:
 
         return findings
 
-    def _scan_column_ner(self, col: str, sample: "pd.Series") -> list[dict]:
+    def _scan_column_ner(self, column_name: str, sample: "pd.Series") -> list[dict]:
         nlp = self._load_model()
         if nlp is None:
             return []
 
-        entity_counts: dict[str, int] = {}
+        entity_counts: dict[str, int] = defaultdict(int)
         text_batch = sample.astype(str).tolist()
 
         for doc in nlp.pipe(text_batch, batch_size=64, disable=["tagger", "parser", "lemmatizer"]):
             for ent in doc.ents:
                 pii_type = _ENTITY_PII_MAP.get(ent.label_)
                 if pii_type:
-                    entity_counts[pii_type] = entity_counts.get(pii_type, 0) + 1
+                    entity_counts[pii_type] += 1
 
         findings = []
         for entity_type, count in entity_counts.items():
             detection_rate = count / max(len(sample), 1)
             if detection_rate >= self.confidence:
                 findings.append({
-                    "column": col,
+                    "column": column_name,
                     "entity_type": entity_type,
                     "detection_method": "NER",
                     "count": count,
@@ -178,7 +189,7 @@ class NLPPIIDetector:
 
         return findings
 
-    def _scan_column_regex(self, col: str, sample: "pd.Series") -> list[dict]:
+    def _scan_column_regex(self, column_name: str, sample: "pd.Series") -> list[dict]:
         findings = []
         text_values = sample.astype(str)
 
@@ -189,7 +200,7 @@ class NLPPIIDetector:
                 detection_rate = count / max(len(sample), 1)
                 if detection_rate >= self.confidence / 10:
                     findings.append({
-                        "column": col,
+                        "column": column_name,
                         "entity_type": pii_type,
                         "detection_method": "REGEX",
                         "count": count,
@@ -200,12 +211,12 @@ class NLPPIIDetector:
 
     def _deduplicate(self, findings: list[dict]) -> list[dict]:
         merged: dict[tuple, dict] = {}
-        for f in findings:
-            key = (f["column"], f["entity_type"])
+        for finding in findings:
+            key = (finding["column"], finding["entity_type"])
             if key not in merged:
-                merged[key] = f
+                merged[key] = finding
             else:
-                merged[key]["count"] = max(merged[key]["count"], f["count"])
+                merged[key]["count"] = max(merged[key]["count"], finding["count"])
         return list(merged.values())
 
     def scan_and_classify(

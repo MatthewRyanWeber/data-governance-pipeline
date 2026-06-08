@@ -10,18 +10,21 @@ Revision history
 ────────────────
 1.0   2026-06-08   Initial release.
 1.1   2026-06-08   Fail-closed on missing role, sanitize row_filter, atomic writes.
+1.2   2026-06-08   Taste fixes: dry_run support, instance lock, use atomic_json_write,
+                    module-level _FORBIDDEN regex, warn on no-role fail-open, re-raise
+                    on bad row_filter, document first-role-wins strategy.
 """
 
 import json
 import logging
 import re
-import tempfile
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from pipeline.constants import BASE_DIR
+from pipeline.helpers import atomic_json_write
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -30,7 +33,11 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _POLICY_FILE = BASE_DIR / "config" / "access_policies.json"
-_LOCK = threading.Lock()
+
+_FORBIDDEN = re.compile(
+    r"__\w+__|import\s*\(|exec\s*\(|eval\s*\(|open\s*\(|compile\s*\(",
+    re.IGNORECASE,
+)
 
 
 class AccessPolicy:
@@ -50,8 +57,11 @@ class AccessPolicy:
         self,
         gov: "GovernanceLogger",
         policy_file: str | Path | None = None,
+        dry_run: bool = False,
     ) -> None:
         self.gov = gov
+        self.dry_run = dry_run
+        self._lock = threading.Lock()
         self.policy_file = Path(policy_file) if policy_file else _POLICY_FILE
         self.policy_file.parent.mkdir(parents=True, exist_ok=True)
         self._policies: dict = self._load()
@@ -66,19 +76,10 @@ class AccessPolicy:
             return {"roles": {}, "user_roles": {}, "dataset_policies": {}}
 
     def _save(self) -> None:
-        with _LOCK:
+        with self._lock:
             self._policies["updated_utc"] = datetime.now(timezone.utc).isoformat()
             data = json.dumps(self._policies, indent=2)
-            tmp_fd, tmp_path = tempfile.mkstemp(
-                dir=str(self.policy_file.parent), suffix=".tmp",
-            )
-            try:
-                with open(tmp_fd, "w", encoding="utf-8") as fh:
-                    fh.write(data)
-                Path(tmp_path).replace(self.policy_file)
-            except BaseException:
-                Path(tmp_path).unlink(missing_ok=True)
-                raise
+            atomic_json_write(self.policy_file, data)
 
     def add_role(
         self,
@@ -99,6 +100,9 @@ class AccessPolicy:
         row_filter       : str | None  Pandas query string for row filtering.
         description      : str         Human-readable role description.
         """
+        if self.dry_run:
+            logger.info("[RBAC][DRY RUN] Would create role '%s'", role)
+            return
         self._policies["roles"][role] = {
             "allowed_columns": allowed_columns,
             "denied_columns": denied_columns or [],
@@ -118,6 +122,9 @@ class AccessPolicy:
         """Assign a role to a user."""
         if role not in self._policies["roles"]:
             raise ValueError(f"Role '{role}' does not exist")
+        if self.dry_run:
+            logger.info("[RBAC][DRY RUN] Would assign role '%s' to user '%s'", role, user)
+            return
         user_roles = self._policies["user_roles"].setdefault(user, [])
         if role not in user_roles:
             user_roles.append(role)
@@ -129,6 +136,9 @@ class AccessPolicy:
         public: bool = False,
     ) -> None:
         """Set the default access policy for a dataset."""
+        if self.dry_run:
+            logger.info("[RBAC][DRY RUN] Would set dataset policy for '%s'", dataset)
+            return
         self._policies["dataset_policies"][dataset] = {
             "default_role": default_role,
             "public": public,
@@ -151,6 +161,7 @@ class AccessPolicy:
         effective_role = role
         if not effective_role and user:
             user_roles = self._policies["user_roles"].get(user, [])
+            # First-role-wins: a user's earliest assigned role takes precedence
             effective_role = user_roles[0] if user_roles else None
 
         if not effective_role and dataset:
@@ -158,7 +169,9 @@ class AccessPolicy:
             effective_role = dp.get("default_role")
 
         if not effective_role:
-            logger.debug("[RBAC] No role resolved — returning full DataFrame")
+            # Fail-open by design: callers without a role see unfiltered data.
+            # This matches the "public by default" model — lock down via roles.
+            logger.warning("[RBAC] No role resolved — returning full DataFrame")
             return df
 
         policy = self._policies["roles"].get(effective_role)
@@ -185,10 +198,6 @@ class AccessPolicy:
         rows_before = len(result)
         if policy["row_filter"]:
             row_filter = policy["row_filter"]
-            _FORBIDDEN = re.compile(
-                r"__\w+__|import\s*\(|exec\s*\(|eval\s*\(|open\s*\(|compile\s*\(",
-                re.IGNORECASE,
-            )
             if _FORBIDDEN.search(row_filter):
                 raise ValueError(
                     f"Row filter contains forbidden pattern: {row_filter!r}"
@@ -196,7 +205,11 @@ class AccessPolicy:
             try:
                 result = result.query(row_filter)
             except Exception as exc:
-                logger.warning("[RBAC] Row filter failed: %s", exc)
+                # Security boundary: never return unfiltered data on filter failure
+                raise ValueError(
+                    f"Row filter {row_filter!r} failed — refusing to return "
+                    f"unfiltered data: {exc}"
+                ) from exc
 
         rows_filtered = rows_before - len(result)
 

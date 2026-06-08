@@ -5,9 +5,11 @@ Layer 0 — imports only from constants (same layer).
 """
 
 import hashlib
+import json
 import logging
+import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from pipeline.constants import PII_FIELD_PATTERNS, SENSITIVE_CATEGORIES
 
@@ -94,6 +96,43 @@ def yes_no(message: str, default: bool = True) -> bool:
     suffix = "[Y/n]" if default else "[y/N]"
     response = input(f"{message} {suffix}: ").strip().lower()
     return default if not response else response in ("y", "yes")
+
+
+def atomic_json_write(path: Path, data: str) -> None:
+    """Write JSON string to *path* atomically via temp-file-then-rename."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+    try:
+        with open(tmp_fd, "w", encoding="utf-8") as fh:
+            fh.write(data)
+        Path(tmp_path).replace(path)
+    except Exception:
+        Path(tmp_path).unlink(missing_ok=True)
+        raise
+
+
+def read_jsonl_tail(
+    path: Path,
+    count: int = 30,
+    filter_fn: Callable[[dict], bool] | None = None,
+) -> list[dict]:
+    """Read the last *count* records from a JSONL file, newest first."""
+    if not path.exists():
+        return []
+    lines = path.read_text(encoding="utf-8").strip().splitlines()
+    records: list[dict] = []
+    for line in reversed(lines):
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            logger.warning("Corrupt JSONL line in %s: %s", path.name, line[:100])
+            continue
+        if filter_fn and not filter_fn(record):
+            continue
+        records.append(record)
+        if len(records) >= count:
+            break
+    return records
 
 
 def not_na(value: Any) -> bool:

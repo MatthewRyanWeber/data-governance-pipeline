@@ -9,6 +9,8 @@ Layer 3 — imports from Layer 0 (constants).
 Revision history
 ────────────────
 1.0   2026-06-08   Initial release.
+1.1   2026-06-08   Taste fixes: dry_run support, guard clause for None
+                   profile, clearer variable names, warn on empty suite.
 """
 
 import json
@@ -39,8 +41,9 @@ class TestGenerator:
     CARDINALITY_LOW_THRESHOLD = 20
     LENGTH_TOLERANCE = 1.5
 
-    def __init__(self, gov: "GovernanceLogger") -> None:
+    def __init__(self, gov: "GovernanceLogger", dry_run: bool = False) -> None:
         self.gov = gov
+        self.dry_run = dry_run
 
     def generate(self, profile: dict) -> list[dict]:
         """
@@ -54,10 +57,13 @@ class TestGenerator:
         -------
         list[dict]  List of expectation configs.
         """
+        if not profile:
+            raise ValueError("Profile must not be None")
+
         expectations: list[dict] = []
 
-        for col in profile.get("columns", []):
-            expectations.extend(self._generate_for_column(col))
+        for column_profile in profile.get("columns", []):
+            expectations.extend(self._generate_for_column(column_profile))
 
         row_count = profile.get("row_count", 0)
         if row_count > 0:
@@ -80,115 +86,115 @@ class TestGenerator:
                      len(expectations), profile.get("dataset_name", ""))
         return expectations
 
-    def _generate_for_column(self, col: dict) -> list[dict]:
+    def _generate_for_column(self, column_profile: dict) -> list[dict]:
         """Generate expectations for a single column based on its profile."""
-        exps: list[dict] = []
-        name = col["name"]
+        expectations: list[dict] = []
+        name = column_profile["name"]
         meta = {"source": "auto_generated", "column": name}
 
-        if col.get("null_rate", 0) == 0:
-            exps.append({
+        if column_profile.get("null_rate", 0) == 0:
+            expectations.append({
                 "expectation_type": "expect_column_values_to_not_be_null",
                 "kwargs": {"column": name},
                 "meta": meta,
             })
-        elif col.get("null_rate", 1) < self.NULL_RATE_TOLERANCE:
-            exps.append({
+        elif column_profile.get("null_rate", 1) < self.NULL_RATE_TOLERANCE:
+            expectations.append({
                 "expectation_type": "expect_column_values_to_not_be_null",
-                "kwargs": {"column": name, "mostly": 1 - col["null_rate"] - 0.02},
+                "kwargs": {"column": name, "mostly": 1 - column_profile["null_rate"] - 0.02},
                 "meta": meta,
             })
 
-        dtype = col.get("dtype", "")
+        dtype = column_profile.get("dtype", "")
 
         if "int" in dtype or "float" in dtype:
-            exps.extend(self._numeric_expectations(name, col, meta))
+            expectations.extend(self._numeric_expectations(name, column_profile, meta))
         elif "datetime" in dtype:
-            exps.extend(self._datetime_expectations(name, col, meta))
+            expectations.extend(self._datetime_expectations(name, column_profile, meta))
         elif dtype == "object" or "str" in dtype:
-            exps.extend(self._string_expectations(name, col, meta))
+            expectations.extend(self._string_expectations(name, column_profile, meta))
 
-        if (col.get("unique_count", 0) > 0
-                and col.get("cardinality_rate", 1) == 1.0
-                and col.get("null_rate", 1) == 0):
-            exps.append({
+        if (column_profile.get("unique_count", 0) > 0
+                and column_profile.get("cardinality_rate", 1) == 1.0
+                and column_profile.get("null_rate", 1) == 0):
+            expectations.append({
                 "expectation_type": "expect_column_values_to_be_unique",
                 "kwargs": {"column": name},
                 "meta": meta,
             })
 
-        if col.get("top_values") and col["unique_count"] <= self.CARDINALITY_LOW_THRESHOLD:
-            exps.append({
+        if column_profile.get("top_values") and column_profile["unique_count"] <= self.CARDINALITY_LOW_THRESHOLD:
+            expectations.append({
                 "expectation_type": "expect_column_values_to_be_in_set",
                 "kwargs": {
                     "column": name,
-                    "value_set": list(col["top_values"].keys()),
+                    "value_set": list(column_profile["top_values"].keys()),
                 },
                 "meta": meta,
             })
 
-        return exps
+        return expectations
 
-    def _numeric_expectations(self, name: str, col: dict, meta: dict) -> list[dict]:
-        exps = []
-        if col.get("min") is not None and col.get("max") is not None:
-            margin = max(abs(col["max"] - col["min"]) * 0.1, 1)
-            exps.append({
+    def _numeric_expectations(self, name: str, column_profile: dict, meta: dict) -> list[dict]:
+        expectations = []
+        if column_profile.get("min") is not None and column_profile.get("max") is not None:
+            margin = max(abs(column_profile["max"] - column_profile["min"]) * 0.1, 1)
+            expectations.append({
                 "expectation_type": "expect_column_values_to_be_between",
                 "kwargs": {
                     "column": name,
-                    "min_value": col["min"] - margin,
-                    "max_value": col["max"] + margin,
+                    "min_value": column_profile["min"] - margin,
+                    "max_value": column_profile["max"] + margin,
                     "mostly": 0.99,
                 },
                 "meta": meta,
             })
 
-        if col.get("negative_count", 0) == 0 and col.get("min", -1) >= 0:
-            exps.append({
+        if column_profile.get("negative_count", 0) == 0 and column_profile.get("min", -1) >= 0:
+            expectations.append({
                 "expectation_type": "expect_column_values_to_be_between",
                 "kwargs": {"column": name, "min_value": 0},
                 "meta": {**meta, "reason": "no_negatives_observed"},
             })
 
-        return exps
+        return expectations
 
-    def _datetime_expectations(self, name: str, col: dict, meta: dict) -> list[dict]:
-        exps = []
-        if col.get("min") and col.get("max"):
-            exps.append({
+    def _datetime_expectations(self, name: str, column_profile: dict, meta: dict) -> list[dict]:
+        expectations = []
+        if column_profile.get("min") and column_profile.get("max"):
+            expectations.append({
                 "expectation_type": "expect_column_values_to_be_between",
                 "kwargs": {
                     "column": name,
-                    "min_value": col["min"],
-                    "max_value": col["max"],
+                    "min_value": column_profile["min"],
+                    "max_value": column_profile["max"],
                     "parse_strings_as_datetimes": True,
                 },
                 "meta": meta,
             })
-        return exps
+        return expectations
 
-    def _string_expectations(self, name: str, col: dict, meta: dict) -> list[dict]:
-        exps = []
-        if col.get("max_length") is not None:
-            exps.append({
+    def _string_expectations(self, name: str, column_profile: dict, meta: dict) -> list[dict]:
+        expectations = []
+        if column_profile.get("max_length") is not None:
+            expectations.append({
                 "expectation_type": "expect_column_value_lengths_to_be_between",
                 "kwargs": {
                     "column": name,
                     "min_value": 0,
-                    "max_value": int(col["max_length"] * self.LENGTH_TOLERANCE),
+                    "max_value": int(column_profile["max_length"] * self.LENGTH_TOLERANCE),
                 },
                 "meta": meta,
             })
 
-        if col.get("empty_count", 0) == 0:
-            exps.append({
+        if column_profile.get("empty_count", 0) == 0:
+            expectations.append({
                 "expectation_type": "expect_column_value_lengths_to_be_between",
                 "kwargs": {"column": name, "min_value": 1},
                 "meta": {**meta, "reason": "no_empty_strings_observed"},
             })
 
-        return exps
+        return expectations
 
     def to_ge_suite(
         self, expectations: list[dict], suite_name: str = "auto_generated",
@@ -209,9 +215,18 @@ class TestGenerator:
         suite_name: str = "auto_generated",
     ) -> Path:
         """Save expectations as a Great Expectations suite JSON file."""
+        if not expectations:
+            logger.warning("[TESTGEN] Saving suite '%s' with zero expectations", suite_name)
+
         suite = self.to_ge_suite(expectations, suite_name)
         out_path = Path(path)
-        out_path.write_text(json.dumps(suite, indent=2), encoding="utf-8")
-        logger.info("[TESTGEN] Saved suite '%s' with %d expectations to %s",
-                     suite_name, len(expectations), out_path)
+
+        if not self.dry_run:
+            out_path.write_text(json.dumps(suite, indent=2), encoding="utf-8")
+            logger.info("[TESTGEN] Saved suite '%s' with %d expectations to %s",
+                         suite_name, len(expectations), out_path)
+        else:
+            logger.info("[TESTGEN] dry_run — skipping write of suite '%s' to %s",
+                         suite_name, out_path)
+
         return out_path
