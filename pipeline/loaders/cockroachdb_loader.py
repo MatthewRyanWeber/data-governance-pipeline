@@ -14,7 +14,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from pipeline.constants import HAS_COCKROACH
-from pipeline.loaders.base import validate_sql_identifier
+from pipeline.loaders.base import BaseLoader, validate_sql_identifier
 
 if TYPE_CHECKING:
     from pipeline.governance_logger import GovernanceLogger
@@ -22,11 +22,11 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class CockroachDBLoader:
+class CockroachDBLoader(BaseLoader):
     """CockroachDB loader with INSERT and ON CONFLICT DO UPDATE upsert."""
 
-    def __init__(self, gov: "GovernanceLogger") -> None:
-        self.gov = gov
+    def __init__(self, gov: "GovernanceLogger", dry_run: bool = False) -> None:
+        super().__init__(gov, dry_run=dry_run)
 
     def load(self, df, cfg, table="", if_exists="append",
              natural_keys=None) -> int:
@@ -43,6 +43,9 @@ class CockroachDBLoader:
         if not cfg.get("db_name"):
             raise ValueError("CockroachDBLoader: cfg must contain 'db_name'.")
         validate_sql_identifier(table, "table")
+        if self._dry_run_guard(table, len(df)):
+            return 0
+        self._validate_config(cfg, ["host", "user", "db_name"])
 
         if df.empty:
             return 0

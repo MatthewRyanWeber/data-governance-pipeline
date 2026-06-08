@@ -1066,8 +1066,8 @@ class TestVectorLoaders(unittest.TestCase):
         from pipeline_v3 import WeaviateLoader
         loader = WeaviateLoader(self.gov)
         with self.assertRaises(ValueError) as ctx:
-            loader.load(self._df(), {"collection": "Docs"})
-        self.assertIn("url", str(ctx.exception))
+            loader.load(self._df(), {"class_name": "Docs"}, table="Docs")
+        self.assertIn("url", str(ctx.exception).lower())
 
     def test_weaviate_missing_collection_raises(self):
         from pipeline_v3 import WeaviateLoader

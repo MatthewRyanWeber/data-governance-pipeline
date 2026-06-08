@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 import pandas as pd
 
 from pipeline.constants import HAS_DB2
+from pipeline.loaders.base import BaseLoader, validate_sql_identifier
 
 if TYPE_CHECKING:
     from pipeline.governance_logger import GovernanceLogger
@@ -24,7 +25,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class Db2Loader:
+class Db2Loader(BaseLoader):
     """IBM Db2 Warehouse loader with bulk INSERT and MERGE upsert."""
 
     _DTYPE_MAP: dict[str, str] = {
@@ -36,8 +37,8 @@ class Db2Loader:
         "object": "VARCHAR(32672)",
     }
 
-    def __init__(self, gov: "GovernanceLogger") -> None:
-        self.gov = gov
+    def __init__(self, gov: "GovernanceLogger", dry_run: bool = False) -> None:
+        super().__init__(gov, dry_run=dry_run)
         if not HAS_DB2:
             raise RuntimeError(
                 "ibm-db / ibm-db-sa not installed.  "
@@ -70,6 +71,12 @@ class Db2Loader:
 
     def load(self, df, cfg, table, if_exists="append", natural_keys=None):
         table = table.upper()
+        validate_sql_identifier(table, "table")
+        if cfg.get("schema"):
+            validate_sql_identifier(cfg["schema"], "schema")
+        if self._dry_run_guard(table, len(df)):
+            return
+        self._validate_config(cfg, ["host", "user", "password", "database"])
         if natural_keys:
             self._upsert(df, cfg, table, natural_keys)
         else:

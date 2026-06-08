@@ -13,19 +13,21 @@ Revision history
 import logging
 from typing import TYPE_CHECKING
 
+from pipeline.loaders.base import BaseLoader
+
 if TYPE_CHECKING:
     from pipeline.governance_logger import GovernanceLogger
 
 logger = logging.getLogger(__name__)
 
 
-class S3Loader:
+class S3Loader(BaseLoader):
     """Write DataFrames to S3, GCS, or Azure Blob as flat files."""
 
     _FORMATS = ("parquet", "csv", "json", "jsonl")
 
-    def __init__(self, gov: "GovernanceLogger") -> None:
-        self.gov = gov
+    def __init__(self, gov: "GovernanceLogger", dry_run: bool = False) -> None:
+        super().__init__(gov, dry_run=dry_run)
 
     def load(self, df, cfg, table="", if_exists="replace",
              natural_keys=None) -> int:
@@ -47,6 +49,9 @@ class S3Loader:
                 f"S3Loader: format must be one of {self._FORMATS}, "
                 f"got '{fmt}'."
             )
+        if self._dry_run_guard(f"{bucket}/{key}", len(df)):
+            return 0
+        self._validate_config(cfg, ["bucket"])
 
         if df.empty:
             return 0

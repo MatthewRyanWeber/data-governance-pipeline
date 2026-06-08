@@ -15,6 +15,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from pipeline.constants import HAS_KAFKA_LOADER
+from pipeline.loaders.base import BaseLoader
 
 if TYPE_CHECKING:
     from pipeline.governance_logger import GovernanceLogger
@@ -22,11 +23,11 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class KafkaLoader:
+class KafkaLoader(BaseLoader):
     """Publish DataFrames to Kafka topics with delivery guarantees."""
 
-    def __init__(self, gov: "GovernanceLogger") -> None:
-        self.gov = gov
+    def __init__(self, gov: "GovernanceLogger", dry_run: bool = False) -> None:
+        super().__init__(gov, dry_run=dry_run)
         if not HAS_KAFKA_LOADER:
             raise RuntimeError(
                 "KafkaLoader requires the kafka-python package.\n"
@@ -55,6 +56,9 @@ class KafkaLoader:
             raise ValueError(
                 "KafkaLoader: cfg must contain 'bootstrap_servers'."
             )
+        if self._dry_run_guard(topic, len(df)):
+            return 0
+        self._validate_config(cfg, ["bootstrap_servers", "topic"])
 
         producer = self._build_producer(cfg)
         try:
@@ -132,11 +136,11 @@ class KafkaLoader:
     def _publish_append(self, df, producer, topic, cfg) -> int:
         """Publish every row as an individual Kafka message."""
         key_col = cfg.get("key_column")
+        records = df.to_dict(orient="records")
         futures = []
-        for _, row in df.iterrows():
-            key = (str(row[key_col]) if key_col and key_col in row.index
-                   else None)
-            futures.append(producer.send(topic, key=key, value=row.to_dict()))
+        for rec in records:
+            key = str(rec[key_col]) if key_col and key_col in rec else None
+            futures.append(producer.send(topic, key=key, value=rec))
 
         sent = 0
         for fut in futures:
@@ -151,13 +155,13 @@ class KafkaLoader:
         """Upsert via tombstone + record for log-compacted topics."""
         key_col = (natural_keys[0] if len(natural_keys) == 1
                    else cfg.get("key_column"))
+        records = df.to_dict(orient="records")
         futures = []
-        for _, row in df.iterrows():
-            key = (str(row[key_col]) if key_col and key_col in row.index
-                   else None)
+        for rec in records:
+            key = str(rec[key_col]) if key_col and key_col in rec else None
             if key:
                 producer.send(topic, key=key, value=None)
-            futures.append(producer.send(topic, key=key, value=row.to_dict()))
+            futures.append(producer.send(topic, key=key, value=rec))
 
         sent = 0
         for fut in futures:

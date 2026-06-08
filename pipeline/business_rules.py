@@ -138,6 +138,11 @@ class BusinessRuleEngine:
                             "eq": lambda s, v: s == v,
                             "neq": lambda s, v: s != v,
                         }
+                        if op not in ops:
+                            raise ValueError(
+                                f"Unknown flag operator: {op!r}. "
+                                f"Must be one of: {sorted(ops)}"
+                            )
                         numeric_col = pd.to_numeric(df[col], errors="coerce")
                         flagged = int(ops[op](numeric_col, thr).sum())
                         df[rule["new_column"]] = ops[op](numeric_col, thr)
@@ -147,6 +152,7 @@ class BusinessRuleEngine:
                     logger.warning("[RULES] Unknown rule type: %r", rule_type)
 
             except Exception as exc:
+                logger.warning("[RULES] Rule '%s' failed: %s", rule_name, exc)
                 self.gov.error(f"RULE_FAILED:{rule_name}", exc)
 
         return df

@@ -14,6 +14,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from pipeline.constants import HAS_DATASPHERE
+from pipeline.loaders.base import BaseLoader
 
 if TYPE_CHECKING:
     from pipeline.governance_logger import GovernanceLogger
@@ -21,13 +22,13 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class DatasphereLoader:
+class DatasphereLoader(BaseLoader):
     """SAP Datasphere loader via OData v4 REST API with OAuth2."""
 
     _ODATA_PATH = "/api/v1/dwc/catalog/spaces/{space}/assets/{table}/data"
 
-    def __init__(self, gov: "GovernanceLogger") -> None:
-        self.gov = gov
+    def __init__(self, gov: "GovernanceLogger", dry_run: bool = False) -> None:
+        super().__init__(gov, dry_run=dry_run)
         if not HAS_DATASPHERE:
             raise RuntimeError(
                 "requests not installed.  Run: pip install requests"
@@ -89,6 +90,9 @@ class DatasphereLoader:
     def load(self, df, cfg, table=None, if_exists="append", natural_keys=None):
         """Upload df to a SAP Datasphere Local Table via OData v4."""
         tbl = cfg.get("table", table or "")
+        if self._dry_run_guard(tbl or "datasphere_table", len(df)):
+            return
+        self._validate_config(cfg, ["tenant_url", "token|token_url"])
         timeout = cfg.get("timeout", 30)
         batch = cfg.get("batch_size", 1_000)
 

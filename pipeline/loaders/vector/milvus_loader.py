@@ -13,6 +13,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from pipeline.constants import HAS_MILVUS
+from pipeline.loaders.base import BaseLoader
 
 if TYPE_CHECKING:
     from pipeline.governance_logger import GovernanceLogger
@@ -20,7 +21,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class MilvusLoader:
+class MilvusLoader(BaseLoader):
     """
     Milvus vector database loader with insert, upsert, and overwrite.
 
@@ -38,8 +39,8 @@ class MilvusLoader:
 
     _BATCH = 100
 
-    def __init__(self, gov: "GovernanceLogger") -> None:
-        self.gov = gov
+    def __init__(self, gov: "GovernanceLogger", dry_run: bool = False) -> None:
+        super().__init__(gov, dry_run=dry_run)
         if not HAS_MILVUS:
             raise RuntimeError(
                 "MilvusLoader requires the pymilvus package.\n"
@@ -58,16 +59,17 @@ class MilvusLoader:
                 f"'overwrite', got '{if_exists}'."
             )
 
-        uri = cfg.get("uri")
         collection = table or cfg.get("collection")
-
-        if not uri:
-            raise ValueError("MilvusLoader: cfg must contain 'uri'.")
         if not collection:
             raise ValueError(
                 "MilvusLoader: supply collection name via cfg['collection'] "
                 "or the table parameter."
             )
+        if self._dry_run_guard(collection, len(df)):
+            return 0
+        self._validate_config(cfg, ["uri"])
+
+        uri = cfg.get("uri")
 
         vector_col = cfg.get("vector_column")
         embed_cols = cfg.get("embed_columns")
@@ -111,15 +113,14 @@ class MilvusLoader:
                     auto_id=(id_col not in df.columns),
                 )
 
+            all_records = df.to_dict(orient="records")
             total = 0
-            for i in range(0, len(df), batch_size):
-                chunk = df.iloc[i: i + batch_size]
+            for i in range(0, len(all_records), batch_size):
                 records = []
-                for _, row in chunk.iterrows():
-                    vec = row[vector_col]
+                for rec in all_records[i: i + batch_size]:
+                    vec = rec[vector_col]
                     if isinstance(vec, _np.ndarray):
                         vec = vec.tolist()
-                    rec = row.to_dict()
                     rec[vector_col] = vec
                     records.append(rec)
 

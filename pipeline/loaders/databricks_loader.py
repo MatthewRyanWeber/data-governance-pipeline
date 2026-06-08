@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 import pandas as pd
 
 from pipeline.constants import HAS_DATABRICKS
+from pipeline.loaders.base import BaseLoader, validate_sql_identifier
 
 if TYPE_CHECKING:
     from pipeline.governance_logger import GovernanceLogger
@@ -21,7 +22,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class DatabricksLoader:
+class DatabricksLoader(BaseLoader):
     """Databricks / Delta Lake loader with MERGE upsert and time-travel audit."""
 
     _DTYPE_MAP: dict[str, str] = {
@@ -32,8 +33,8 @@ class DatabricksLoader:
         "object": "STRING",
     }
 
-    def __init__(self, gov: "GovernanceLogger") -> None:
-        self.gov = gov
+    def __init__(self, gov: "GovernanceLogger", dry_run: bool = False) -> None:
+        super().__init__(gov, dry_run=dry_run)
         if not HAS_DATABRICKS:
             raise RuntimeError(
                 "databricks-sql-connector not installed.  "
@@ -79,6 +80,14 @@ class DatabricksLoader:
 
     def load(self, df, cfg, table, if_exists="append", natural_keys=None,
              schema_evolution=True):
+        validate_sql_identifier(table, "table")
+        if cfg.get("catalog"):
+            validate_sql_identifier(cfg["catalog"], "catalog")
+        if cfg.get("schema"):
+            validate_sql_identifier(cfg["schema"], "schema")
+        if self._dry_run_guard(table, len(df)):
+            return
+        self._validate_config(cfg, ["server_hostname", "http_path"])
         if natural_keys:
             self._upsert(df, cfg, table, natural_keys, schema_evolution)
         else:

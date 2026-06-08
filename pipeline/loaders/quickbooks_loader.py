@@ -15,13 +15,15 @@ import json
 import logging
 from typing import TYPE_CHECKING
 
+from pipeline.loaders.base import BaseLoader
+
 if TYPE_CHECKING:
     from pipeline.governance_logger import GovernanceLogger
 
 logger = logging.getLogger(__name__)
 
 
-class QuickBooksLoader:
+class QuickBooksLoader(BaseLoader):
     """Load DataFrames into QuickBooks Online via the QBO REST API v3."""
 
     _PROD_BASE = "https://quickbooks.api.intuit.com"
@@ -38,8 +40,8 @@ class QuickBooksLoader:
         "Class": ["Name"],
     }
 
-    def __init__(self, gov: "GovernanceLogger") -> None:
-        self.gov = gov
+    def __init__(self, gov: "GovernanceLogger", dry_run: bool = False) -> None:
+        super().__init__(gov, dry_run=dry_run)
 
     def _refresh_access_token(self, cfg: dict) -> str:
         import requests
@@ -126,6 +128,9 @@ class QuickBooksLoader:
     def load(self, df, cfg, table=None, if_exists="append", natural_keys=None):
         """Write df rows to QuickBooks Online as the specified entity type."""
         entity = cfg.get("entity", table or "Customer")
+        if self._dry_run_guard(entity, len(df)):
+            return
+        self._validate_config(cfg, ["client_id", "client_secret", "refresh_token", "realm_id"])
         sparse = cfg.get("sparse", True)
         timeout = cfg.get("timeout", 30)
         delay = cfg.get("batch_delay", 0.1)
@@ -144,12 +149,13 @@ class QuickBooksLoader:
         created = updated = skipped = errors = 0
 
         logger.info("[QBO] Writing %s rows -> %s", f"{len(df):,}", entity)
-        for idx, row in df.iterrows():
+        records = df.to_dict(orient="records")
+        for idx, rec in enumerate(records):
             try:
                 if callable(custom_transform):
-                    body = custom_transform(row)
+                    body = custom_transform(rec)
                 else:
-                    body = self._row_to_body(row, entity, sparse)
+                    body = self._row_to_body(rec, entity, sparse)
 
                 missing = self._validate_row(body, entity)
                 if missing:

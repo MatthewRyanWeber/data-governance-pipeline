@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING
 import pandas as pd
 
 from pipeline.constants import HAS_DUCKDB
-from pipeline.loaders.base import validate_sql_identifier
+from pipeline.loaders.base import BaseLoader, validate_sql_identifier
 
 if TYPE_CHECKING:
     from pipeline.governance_logger import GovernanceLogger
@@ -38,11 +38,11 @@ _READONLY_SQL_RE = re.compile(
 )
 
 
-class DuckDBLoader:
+class DuckDBLoader(BaseLoader):
     """DuckDB loader with INSERT, REPLACE, and ON CONFLICT upsert."""
 
-    def __init__(self, gov: "GovernanceLogger") -> None:
-        self.gov = gov
+    def __init__(self, gov: "GovernanceLogger", dry_run: bool = False) -> None:
+        super().__init__(gov, dry_run=dry_run)
         if not HAS_DUCKDB:
             raise RuntimeError(
                 "DuckDBLoader requires the duckdb package.\n"
@@ -64,6 +64,9 @@ class DuckDBLoader:
         if not cfg.get("db_path"):
             raise ValueError("DuckDBLoader: cfg must contain 'db_path'.")
         validate_sql_identifier(table, "table")
+        if self._dry_run_guard(table, len(df)):
+            return 0
+        self._validate_config(cfg, ["db_path"])
 
         if df.empty:
             return 0

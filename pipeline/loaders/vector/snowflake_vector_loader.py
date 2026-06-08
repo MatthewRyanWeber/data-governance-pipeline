@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 import pandas as pd
 
 from pipeline.constants import HAS_SNOWFLAKE
-from pipeline.loaders.base import validate_sql_identifier, validate_float_vector
+from pipeline.loaders.base import BaseLoader, validate_sql_identifier, validate_float_vector
 
 if TYPE_CHECKING:
     from pipeline.governance_logger import GovernanceLogger
@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class SnowflakeVectorLoader:
+class SnowflakeVectorLoader(BaseLoader):
     """
     Snowflake vector loader with VECTOR(FLOAT, N) and similarity search.
 
@@ -40,8 +40,8 @@ class SnowflakeVectorLoader:
         loader.load(df, cfg, "vectors_table")
     """
 
-    def __init__(self, gov: "GovernanceLogger") -> None:
-        self.gov = gov
+    def __init__(self, gov: "GovernanceLogger", dry_run: bool = False) -> None:
+        super().__init__(gov, dry_run=dry_run)
         if not HAS_SNOWFLAKE:
             raise RuntimeError(
                 "SnowflakeVectorLoader requires snowflake-sqlalchemy.\n"
@@ -66,6 +66,9 @@ class SnowflakeVectorLoader:
                 "SnowflakeVectorLoader: table name is required."
             )
         validate_sql_identifier(table, "table")
+        if self._dry_run_guard(table, len(df)):
+            return 0
+        self._validate_config(cfg, ["account", "user", "password", "database", "warehouse"])
 
         if df.empty:
             return 0

@@ -12,6 +12,7 @@ import hashlib
 import logging
 import re
 from typing import TYPE_CHECKING
+from urllib.parse import quote_plus as _qp
 
 if TYPE_CHECKING:
     from pipeline.governance_logger import GovernanceLogger
@@ -139,17 +140,17 @@ class ErasureHandler:
             return create_engine(f"sqlite:///{db_cfg['db_name']}.db")
         if t in ("postgresql", "postgres"):
             return create_engine(
-                f"postgresql+psycopg2://{db_cfg['user']}:{db_cfg['password']}"
+                f"postgresql+psycopg2://{_qp(db_cfg['user'])}:{_qp(db_cfg['password'])}"
                 f"@{db_cfg['host']}:{db_cfg.get('port', 5432)}/{db_cfg['db_name']}"
             )
         if t == "mysql":
             return create_engine(
-                f"mysql+pymysql://{db_cfg['user']}:{db_cfg['password']}"
+                f"mysql+pymysql://{_qp(db_cfg['user'])}:{_qp(db_cfg['password'])}"
                 f"@{db_cfg['host']}:{db_cfg.get('port', 3306)}/{db_cfg['db_name']}"
             )
         if t == "mssql":
             return create_engine(
-                f"mssql+pyodbc://{db_cfg['user']}:{db_cfg['password']}"
+                f"mssql+pyodbc://{_qp(db_cfg['user'])}:{_qp(db_cfg['password'])}"
                 f"@{db_cfg['host']}:{db_cfg.get('port', 1433)}/{db_cfg['db_name']}"
                 f"?driver={db_cfg.get('driver', 'ODBC+Driver+17+for+SQL+Server')}"
             )

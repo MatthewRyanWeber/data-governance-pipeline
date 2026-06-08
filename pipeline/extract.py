@@ -77,7 +77,7 @@ class Extractor:
     @staticmethod
     def _xml_to_df(path: str, flatten_kw: dict):
         import pandas as pd
-        import xml.etree.ElementTree as ET
+        import defusedxml.ElementTree as ET
 
         def _element_to_dict(elem, prefix=""):
             result = {}

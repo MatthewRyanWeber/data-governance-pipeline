@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 import pandas as pd
 
 from pipeline.constants import HAS_REDSHIFT
+from pipeline.loaders.base import BaseLoader, validate_sql_identifier
 
 if TYPE_CHECKING:
     from pipeline.governance_logger import GovernanceLogger
@@ -21,7 +22,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class RedshiftLoader:
+class RedshiftLoader(BaseLoader):
     """
     Amazon Redshift loader with S3-staged COPY, MERGE upsert, and retry.
 
@@ -42,8 +43,8 @@ class RedshiftLoader:
         "object":              "VARCHAR(65535)",
     }
 
-    def __init__(self, gov: "GovernanceLogger") -> None:
-        self.gov = gov
+    def __init__(self, gov: "GovernanceLogger", dry_run: bool = False) -> None:
+        super().__init__(gov, dry_run=dry_run)
         if not HAS_REDSHIFT:
             raise RuntimeError(
                 "redshift-connector not installed.  "
@@ -80,6 +81,12 @@ class RedshiftLoader:
         natural_keys: list[str] | None = None,
     ) -> None:
         table = table.lower()
+        validate_sql_identifier(table, "table")
+        if cfg.get("schema"):
+            validate_sql_identifier(cfg["schema"], "schema")
+        if self._dry_run_guard(table, len(df)):
+            return
+        self._validate_config(cfg, ["host", "database", "user", "password"])
         if natural_keys:
             self._upsert(df, cfg, table, natural_keys)
         elif cfg.get("s3_bucket"):

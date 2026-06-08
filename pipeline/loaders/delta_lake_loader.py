@@ -14,6 +14,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from pipeline.constants import HAS_DELTALAKE
+from pipeline.loaders.base import BaseLoader
 
 if TYPE_CHECKING:
     from pipeline.governance_logger import GovernanceLogger
@@ -21,11 +22,11 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class DeltaLakeLoader:
+class DeltaLakeLoader(BaseLoader):
     """Delta Lake loader with append, overwrite, and MERGE upsert."""
 
-    def __init__(self, gov: "GovernanceLogger") -> None:
-        self.gov = gov
+    def __init__(self, gov: "GovernanceLogger", dry_run: bool = False) -> None:
+        super().__init__(gov, dry_run=dry_run)
         if not HAS_DELTALAKE:
             raise RuntimeError(
                 "DeltaLakeLoader requires the deltalake package.\n"
@@ -46,6 +47,9 @@ class DeltaLakeLoader:
         path = cfg.get("path")
         if not path:
             raise ValueError("DeltaLakeLoader: cfg must contain 'path'.")
+        if self._dry_run_guard(path, len(df)):
+            return 0
+        self._validate_config(cfg, ["path"])
 
         if df.empty:
             return 0

@@ -106,13 +106,14 @@ class DataStandardiser:
 
         changed = 0
         results = []
+        if HAS_PHONENUMBERS:
+            import phonenumbers
         for val in series:
             if pd.isna(val):
                 results.append(val)
                 continue
             if HAS_PHONENUMBERS:
                 try:
-                    import phonenumbers
                     parsed = phonenumbers.parse(str(val), region)
                     e164 = phonenumbers.format_number(
                         parsed, phonenumbers.PhoneNumberFormat.E164,

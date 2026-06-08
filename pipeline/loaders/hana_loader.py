@@ -14,6 +14,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from pipeline.constants import HAS_HANA
+from pipeline.loaders.base import BaseLoader, validate_sql_identifier
 
 if TYPE_CHECKING:
     from pipeline.governance_logger import GovernanceLogger
@@ -21,7 +22,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class HanaLoader:
+class HanaLoader(BaseLoader):
     """SAP HANA loader with chunked INSERT and MERGE upsert."""
 
     _DTYPE_MAP: dict[str, str] = {
@@ -35,8 +36,8 @@ class HanaLoader:
 
     _CHUNK = 5_000
 
-    def __init__(self, gov: "GovernanceLogger") -> None:
-        self.gov = gov
+    def __init__(self, gov: "GovernanceLogger", dry_run: bool = False) -> None:
+        super().__init__(gov, dry_run=dry_run)
         if not HAS_HANA:
             raise RuntimeError(
                 "hdbcli not installed.  "
@@ -114,6 +115,11 @@ class HanaLoader:
 
     def load(self, df, cfg, table, if_exists="append", natural_keys=None):
         schema = cfg.get("schema", "PIPELINE")
+        validate_sql_identifier(table, "table")
+        validate_sql_identifier(schema, "schema")
+        if self._dry_run_guard(table, len(df)):
+            return
+        self._validate_config(cfg, ["host", "user", "password"])
         conn = self._connect(cfg)
         cur = conn.cursor()
 

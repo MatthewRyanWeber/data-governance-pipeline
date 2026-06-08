@@ -13,6 +13,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from pipeline.constants import HAS_CHROMA
+from pipeline.loaders.base import BaseLoader
 
 if TYPE_CHECKING:
     from pipeline.governance_logger import GovernanceLogger
@@ -20,7 +21,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class ChromaLoader:
+class ChromaLoader(BaseLoader):
     """
     ChromaDB vector database loader with batch add/upsert.
 
@@ -38,8 +39,8 @@ class ChromaLoader:
 
     _BATCH = 100
 
-    def __init__(self, gov: "GovernanceLogger") -> None:
-        self.gov = gov
+    def __init__(self, gov: "GovernanceLogger", dry_run: bool = False) -> None:
+        super().__init__(gov, dry_run=dry_run)
         if not HAS_CHROMA:
             raise RuntimeError(
                 "ChromaLoader requires the chromadb package.\n"
@@ -61,6 +62,9 @@ class ChromaLoader:
                 "ChromaLoader: supply collection name via cfg['collection'] "
                 "or the table parameter."
             )
+        if self._dry_run_guard(collection, len(df)):
+            return 0
+        self._validate_config(cfg, ["id_column"])
 
         vector_col = cfg.get("vector_column")
         embed_cols = cfg.get("embed_columns")

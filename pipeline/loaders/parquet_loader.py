@@ -13,17 +13,19 @@ Revision history
 import logging
 from typing import TYPE_CHECKING
 
+from pipeline.loaders.base import BaseLoader
+
 if TYPE_CHECKING:
     from pipeline.governance_logger import GovernanceLogger
 
 logger = logging.getLogger(__name__)
 
 
-class ParquetLoader:
+class ParquetLoader(BaseLoader):
     """Write DataFrames to Parquet files with optional partitioning."""
 
-    def __init__(self, gov: "GovernanceLogger") -> None:
-        self.gov = gov
+    def __init__(self, gov: "GovernanceLogger", dry_run: bool = False) -> None:
+        super().__init__(gov, dry_run=dry_run)
         try:
             import pyarrow as _pa
             _ = _pa  # availability check only
@@ -51,6 +53,8 @@ class ParquetLoader:
                 "ParquetLoader: supply output path via cfg['path'] or the "
                 "table parameter."
             )
+        if self._dry_run_guard(path, len(df)):
+            return 0
 
         if df.empty:
             return 0

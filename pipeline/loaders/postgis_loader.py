@@ -13,7 +13,7 @@ Revision history
 import logging
 from typing import TYPE_CHECKING
 
-from pipeline.loaders.base import validate_sql_identifier
+from pipeline.loaders.base import BaseLoader, validate_sql_identifier
 
 if TYPE_CHECKING:
     from pipeline.governance_logger import GovernanceLogger
@@ -21,11 +21,11 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class PostGISLoader:
+class PostGISLoader(BaseLoader):
     """Write DataFrames with WKT geometry columns to PostGIS."""
 
-    def __init__(self, gov: "GovernanceLogger") -> None:
-        self.gov = gov
+    def __init__(self, gov: "GovernanceLogger", dry_run: bool = False) -> None:
+        super().__init__(gov, dry_run=dry_run)
 
     def load(self, df, cfg, table="", if_exists="append",
              natural_keys=None) -> int:
@@ -43,6 +43,9 @@ class PostGISLoader:
         if not cfg.get("host"):
             raise ValueError("PostGISLoader: cfg must contain 'host'.")
         validate_sql_identifier(table, "table")
+        if self._dry_run_guard(table, len(df)):
+            return 0
+        self._validate_config(cfg, ["host", "user", "password", "db_name"])
 
         if df.empty:
             return 0
@@ -73,15 +76,21 @@ class PostGISLoader:
                     f"{geom_col} geometry"
                 ))
                 conn.commit()
-                for idx, row in df[[geom_col]].iterrows():
-                    wkt = row[geom_col]
-                    if wkt:
-                        conn.execute(sa_text(
+                params = [
+                    {"wkt": wkt, "srid": srid, "idx": i}
+                    for i, wkt in enumerate(df[geom_col])
+                    if wkt is not None and wkt != ""
+                ]
+                if params:
+                    conn.execute(
+                        sa_text(
                             f"UPDATE {table} SET {geom_col} = "
                             f"ST_GeomFromText(:wkt, :srid) "
                             f"WHERE ctid = (SELECT ctid FROM {table} "
                             f"ORDER BY ctid OFFSET :idx LIMIT 1)"
-                        ), {"wkt": wkt, "srid": srid, "idx": int(idx)})
+                        ),
+                        params,
+                    )
                 conn.commit()
 
         self.gov._event(

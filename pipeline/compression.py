@@ -5,18 +5,85 @@ Supports .gz, .bz2, .zip, .zst, .lz4, .tgz — auto-detected by extension.
 Files without a compression extension pass through unchanged.
 
 Layer 2 — imports from Layer 0 (constants).
+
+Revision history
+────────────────
+1.0   2026-06-07   Initial extraction from pipeline_v3.py.
+1.1   2026-06-08   Added archive path traversal validation, zip bomb protection,
+                   ZipFile resource leak fix, builtins_open ordering fix.
 """
 
 import bz2
 import gzip
 import io
 import logging
+import os
 import zipfile
 from pathlib import Path
 
-from pipeline.constants import HAS_LZ4, HAS_ZSTD
+from pipeline.constants import HAS_LZ4, HAS_ZSTD, MAX_DECOMPRESSED_SIZE
 
 logger = logging.getLogger(__name__)
+
+# Alias to avoid shadowing built-in open() in class methods
+_builtin_open = open
+
+
+def _validate_archive_member(name: str) -> None:
+    """Reject archive members with path traversal or absolute paths."""
+    normalized = os.path.normpath(name)
+    if (normalized.startswith("..")
+            or os.path.isabs(normalized)
+            or name.startswith("/")
+            or name.startswith("\\")):
+        raise ValueError(
+            f"Archive member '{name}' contains a path traversal or "
+            "absolute path — refusing to extract."
+        )
+
+
+class SizeLimitedReader(io.RawIOBase):
+    """
+    Wraps a readable stream and raises ValueError when the cumulative
+    bytes read exceed max_bytes (zip bomb protection).
+    """
+
+    def __init__(self, stream: io.IOBase, max_bytes: int) -> None:
+        self._stream = stream
+        self._max_bytes = max_bytes
+        self._bytes_read = 0
+
+    def readable(self):
+        return True
+
+    def readinto(self, b):
+        data = self._stream.read(len(b))
+        if not data:
+            return 0
+        n = len(data)
+        self._bytes_read += n
+        if self._bytes_read > self._max_bytes:
+            raise ValueError(
+                f"Decompression size limit exceeded: {self._max_bytes:,} bytes. "
+                "Possible zip bomb detected."
+            )
+        b[:n] = data
+        return n
+
+    def read(self, size=-1):
+        data = self._stream.read(size)
+        if data:
+            self._bytes_read += len(data)
+            if self._bytes_read > self._max_bytes:
+                raise ValueError(
+                    f"Decompression size limit exceeded: {self._max_bytes:,} bytes. "
+                    "Possible zip bomb detected."
+                )
+        return data
+
+    def close(self):
+        self._stream.close()
+        super().close()
 
 
 class CompressionHandler:
@@ -39,43 +106,57 @@ class CompressionHandler:
     def open(self, path: str | Path) -> io.IOBase:
         """Open a potentially-compressed file and return a readable byte stream."""
         ext = Path(path).suffix.lower()
+        limit = MAX_DECOMPRESSED_SIZE
 
         if ext == ".gz":
-            return gzip.open(path, "rb")
+            stream = gzip.open(path, "rb")
+            return SizeLimitedReader(stream, limit)
 
         if ext == ".bz2":
-            return bz2.open(path, "rb")
+            stream = bz2.open(path, "rb")
+            return SizeLimitedReader(stream, limit)
 
         if ext == ".zip":
             zf = zipfile.ZipFile(path, "r")
             members = [m for m in zf.namelist() if not m.endswith("/")]
             if not members:
+                zf.close()
                 raise ValueError(f"ZIP archive is empty: {path}")
-            return zf.open(members[0])
+            _validate_archive_member(members[0])
+            inner = zf.open(members[0])
+            return SizeLimitedReader(inner, limit)
 
         if ext == ".zst":
             if not HAS_ZSTD:
                 raise RuntimeError("Zstandard decompression requires: pip install zstandard")
             import zstandard
             dctx = zstandard.ZstdDecompressor()
-            fh = builtins_open(str(path), "rb")
-            return dctx.stream_reader(fh)
+            fh = _builtin_open(str(path), "rb")
+            stream = dctx.stream_reader(fh)
+            return SizeLimitedReader(stream, limit)
 
         if ext == ".lz4":
             if not HAS_LZ4:
                 raise RuntimeError("LZ4 decompression requires: pip install lz4")
             import lz4.frame
-            return lz4.frame.open(path, "rb")
+            stream = lz4.frame.open(path, "rb")
+            return SizeLimitedReader(stream, limit)
 
         if ext == ".tgz":
             import tarfile
             tf = tarfile.open(path, "r:gz")
             members = [m for m in tf.getmembers() if m.isfile()]
             if not members:
+                tf.close()
                 raise ValueError(f"TGZ archive is empty: {path}")
-            return tf.extractfile(members[0])
+            _validate_archive_member(members[0].name)
+            inner = tf.extractfile(members[0])
+            if inner is None:
+                tf.close()
+                raise ValueError(f"Could not extract member from TGZ: {path}")
+            return SizeLimitedReader(inner, limit)
 
-        return builtins_open(str(path), "rb")
+        return _builtin_open(str(path), "rb")
 
     def inner_extension(self, path: str | Path) -> str:
         """
@@ -94,6 +175,7 @@ class CompressionHandler:
                 with tarfile.open(path, "r:gz") as tf:
                     members = [m for m in tf.getmembers() if m.isfile()]
                     if members:
+                        _validate_archive_member(members[0].name)
                         return Path(members[0].name).suffix.lower()
             except Exception as exc:
                 logger.warning("Could not inspect archive %s: %s — defaulting to .csv", path, exc)
@@ -104,6 +186,7 @@ class CompressionHandler:
                 with zipfile.ZipFile(path, "r") as zf:
                     members = [m for m in zf.namelist() if not m.endswith("/")]
                     if members:
+                        _validate_archive_member(members[0])
                         return Path(members[0]).suffix.lower()
             except Exception as exc:
                 logger.warning("Could not inspect archive %s: %s — defaulting to .csv", path, exc)
@@ -111,7 +194,3 @@ class CompressionHandler:
 
         inner = Path(p.stem).suffix.lower()
         return inner if inner else ".csv"
-
-
-# Alias to avoid shadowing built-in open()
-builtins_open = open

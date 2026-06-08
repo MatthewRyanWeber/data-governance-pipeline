@@ -12,6 +12,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from pipeline.constants import HAS_CLICKHOUSE
+from pipeline.loaders.base import BaseLoader, validate_sql_identifier
 
 if TYPE_CHECKING:
     from pipeline.governance_logger import GovernanceLogger
@@ -19,7 +20,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class ClickHouseLoader:
+class ClickHouseLoader(BaseLoader):
     """ClickHouse loader with native bulk insert and ReplacingMergeTree upsert."""
 
     _DTYPE_MAP: dict[str, str] = {
@@ -31,8 +32,8 @@ class ClickHouseLoader:
         "object": "Nullable(String)",
     }
 
-    def __init__(self, gov: "GovernanceLogger") -> None:
-        self.gov = gov
+    def __init__(self, gov: "GovernanceLogger", dry_run: bool = False) -> None:
+        super().__init__(gov, dry_run=dry_run)
         if not HAS_CLICKHOUSE:
             raise RuntimeError(
                 "clickhouse-connect not installed.  "
@@ -51,6 +52,11 @@ class ClickHouseLoader:
         )
 
     def load(self, df, cfg, table, if_exists="append", natural_keys=None):
+        validate_sql_identifier(table, "table")
+        if cfg.get("database"):
+            validate_sql_identifier(cfg["database"], "database")
+        if self._dry_run_guard(table, len(df)):
+            return
         if natural_keys:
             self._upsert(df, cfg, table, natural_keys)
         else:

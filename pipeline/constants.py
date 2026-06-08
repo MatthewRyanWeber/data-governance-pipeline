@@ -4,6 +4,7 @@ Pipeline-level constants, PII patterns, dependency flags, and run context.
 Layer 0 — no internal package imports.
 """
 
+import os
 import re
 import threading
 import uuid
@@ -14,6 +15,11 @@ from pathlib import Path
 
 VERSION = "4.0.0"
 DEFAULT_CHUNK_SIZE = 50_000
+
+# Safety limit for decompressed archive size (zip bomb protection)
+MAX_DECOMPRESSED_SIZE: int = int(
+    os.environ.get("PIPELINE_MAX_DECOMPRESSED_SIZE", 1_073_741_824)
+)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 WATERMARK_FILE = BASE_DIR / "config" / "pipeline_watermark.json"

@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 import pandas as pd
 
 from pipeline.constants import HAS_PINECONE
-from pipeline.loaders.base import validate_float_vector
+from pipeline.loaders.base import BaseLoader, validate_float_vector
 
 if TYPE_CHECKING:
     from pipeline.governance_logger import GovernanceLogger
@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class PineconeLoader:
+class PineconeLoader(BaseLoader):
     """
     Pinecone managed vector database loader with batched upserts.
 
@@ -43,8 +43,8 @@ class PineconeLoader:
 
     _BATCH = 100
 
-    def __init__(self, gov: "GovernanceLogger") -> None:
-        self.gov = gov
+    def __init__(self, gov: "GovernanceLogger", dry_run: bool = False) -> None:
+        super().__init__(gov, dry_run=dry_run)
         if not HAS_PINECONE:
             raise RuntimeError(
                 "PineconeLoader requires the pinecone-client package.\n"
@@ -72,16 +72,17 @@ class PineconeLoader:
                 f"'overwrite', got '{if_exists}'."
             )
 
-        api_key = cfg.get("api_key")
-        if not api_key:
-            raise ValueError("PineconeLoader: cfg must contain 'api_key'.")
-
         index_name = table or cfg.get("index_name")
         if not index_name:
             raise ValueError(
                 "PineconeLoader: supply index name via cfg['index_name'] "
                 "or the table parameter."
             )
+        if self._dry_run_guard(index_name, len(df)):
+            return 0
+        self._validate_config(cfg, ["api_key", "index_name"])
+
+        api_key = cfg.get("api_key")
 
         vector_col = cfg.get("vector_column", "embedding")
         embed_cols = cfg.get("embed_columns")
@@ -122,22 +123,22 @@ class PineconeLoader:
         meta_cols = [c for c in df.columns
                      if c not in (id_col, vector_col)]
 
+        all_records = df.to_dict(orient="records")
         total = 0
-        for i in range(0, len(df), batch_size):
-            chunk = df.iloc[i: i + batch_size]
+        for i in range(0, len(all_records), batch_size):
             vectors = []
-            for _, row in chunk.iterrows():
-                vec = row[vector_col]
+            for rec in all_records[i: i + batch_size]:
+                vec = rec[vector_col]
                 if isinstance(vec, _np.ndarray):
                     vec = vec.tolist()
                 elif not isinstance(vec, list):
                     vec = list(vec)
 
-                metadata = {col: row[col] for col in meta_cols
-                            if pd.notna(row[col])}
+                metadata = {col: rec[col] for col in meta_cols
+                            if pd.notna(rec[col])}
 
                 vectors.append({
-                    "id": str(row[id_col]),
+                    "id": str(rec[id_col]),
                     "values": vec,
                     "metadata": metadata,
                 })

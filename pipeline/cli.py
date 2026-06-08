@@ -104,6 +104,9 @@ def _cmd_run(args: argparse.Namespace) -> None:
     config = _load_config(args.config_path)
     run_context = RunContext()
 
+    from pipeline.logging_setup import set_correlation_id
+    set_correlation_id(run_context.pipeline_id)
+
     gov = GovernanceLogger(
         source_name=args.source,
         run_context=run_context,
@@ -153,10 +156,12 @@ def _run_single_file(source, args, config, gov, metrics) -> None:
     from pipeline.transform import Transformer
     from pipeline.loaders import resolve_loader, validate_loader_config
     from pipeline.profiler import DataProfiler
+    from pipeline.logging_setup import timed_operation
 
     metrics.start_stage("extract")
     extractor = Extractor(gov)
-    df = extractor.extract(str(source))
+    with timed_operation("extract"):
+        df = extractor.extract(str(source))
     metrics.end_stage("extract", rows=len(df))
 
     if df.empty:
@@ -173,13 +178,15 @@ def _run_single_file(source, args, config, gov, metrics) -> None:
     else:
         pii_findings = []
 
-    df = transformer.transform(df, pii_findings, "mask", drop_cols=[])
+    with timed_operation("transform"):
+        df = transformer.transform(df, pii_findings, "mask", drop_cols=[])
     metrics.end_stage("transform", rows=len(df))
 
     # ── Profile ──────────────────────────────────────────────────────
     if not args.skip_quality:
         profiler = DataProfiler(gov)
-        profiler.profile(df)
+        with timed_operation("profile"):
+            profiler.profile(df)
 
     # ── Load ─────────────────────────────────────────────────────────
     metrics.start_stage("load")
@@ -189,11 +196,12 @@ def _run_single_file(source, args, config, gov, metrics) -> None:
     validate_loader_config(destination, config, table_name)
     loader_class, needs_db_type, uses_mongo = resolve_loader(destination)
     if needs_db_type:
-        loader = loader_class(gov, db_type=destination)
+        loader = loader_class(gov, db_type=destination, dry_run=args.dry_run)
     else:
-        loader = loader_class(gov)
+        loader = loader_class(gov, dry_run=args.dry_run)
 
-    loader.load(df, config, table_name)
+    with timed_operation(f"load:{destination}"):
+        loader.load(df, config, table_name)
     metrics.end_stage("load", rows=len(df))
 
 

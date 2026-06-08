@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 import pandas as pd
 
 from pipeline.constants import HAS_WEAVIATE
-from pipeline.loaders.base import validate_float_vector
+from pipeline.loaders.base import BaseLoader, validate_float_vector
 
 if TYPE_CHECKING:
     from pipeline.governance_logger import GovernanceLogger
@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class WeaviateLoader:
+class WeaviateLoader(BaseLoader):
     """
     Weaviate vector database loader with schema management and batch imports.
 
@@ -43,8 +43,8 @@ class WeaviateLoader:
 
     _BATCH = 100
 
-    def __init__(self, gov: "GovernanceLogger") -> None:
-        self.gov = gov
+    def __init__(self, gov: "GovernanceLogger", dry_run: bool = False) -> None:
+        super().__init__(gov, dry_run=dry_run)
         if not HAS_WEAVIATE:
             raise RuntimeError(
                 "WeaviateLoader requires the weaviate-client package.\n"
@@ -70,16 +70,18 @@ class WeaviateLoader:
                 f"'overwrite', got '{if_exists}'."
             )
 
-        url = cfg.get("url")
-        if not url:
-            raise ValueError("WeaviateLoader: cfg must contain 'url'.")
-
         class_name = table or cfg.get("class_name")
         if not class_name:
             raise ValueError(
                 "WeaviateLoader: supply class name via cfg['class_name'] "
                 "or the table parameter."
             )
+        if self._dry_run_guard(class_name, len(df)):
+            return 0
+        self._validate_config(cfg, ["url"])
+
+        url = cfg.get("url")
+
         if class_name[0].islower():
             raise ValueError(
                 f"WeaviateLoader: class name '{class_name}' must start with "
@@ -110,18 +112,19 @@ class WeaviateLoader:
             total = 0
 
             property_cols = [c for c in df.columns if c != vector_col]
+            all_records = df.to_dict(orient="records")
 
             with client.batch.fixed_size(batch_size=batch_size) as batch:
-                for _, row in df.iterrows():
+                for rec in all_records:
                     properties = {}
                     for col in property_cols:
-                        val = row[col]
+                        val = rec[col]
                         if pd.notna(val):
                             properties[col] = val
 
                     vector = None
                     if vector_col and vector_col in df.columns:
-                        vec = row[vector_col]
+                        vec = rec[vector_col]
                         if isinstance(vec, _np.ndarray):
                             vector = vec.tolist()
                         elif isinstance(vec, list):

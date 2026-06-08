@@ -14,7 +14,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from pipeline.constants import HAS_BIGQUERY
-from pipeline.loaders.base import validate_sql_identifier, validate_float_vector
+from pipeline.loaders.base import BaseLoader, validate_sql_identifier, validate_float_vector
 
 if TYPE_CHECKING:
     from pipeline.governance_logger import GovernanceLogger
@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class BigQueryVectorLoader:
+class BigQueryVectorLoader(BaseLoader):
     """
     BigQuery vector loader with ARRAY<FLOAT64> and VECTOR_SEARCH().
 
@@ -37,8 +37,8 @@ class BigQueryVectorLoader:
         loader.load(df, cfg, "vectors_table")
     """
 
-    def __init__(self, gov: "GovernanceLogger") -> None:
-        self.gov = gov
+    def __init__(self, gov: "GovernanceLogger", dry_run: bool = False) -> None:
+        super().__init__(gov, dry_run=dry_run)
         if not HAS_BIGQUERY:
             raise RuntimeError(
                 "BigQueryVectorLoader requires google-cloud-bigquery.\n"
@@ -60,15 +60,10 @@ class BigQueryVectorLoader:
             raise ValueError(
                 "BigQueryVectorLoader: table name is required."
             )
-        if not cfg.get("project"):
-            raise ValueError(
-                "BigQueryVectorLoader: cfg must contain 'project'."
-            )
-        if not cfg.get("dataset"):
-            raise ValueError(
-                "BigQueryVectorLoader: cfg must contain 'dataset'."
-            )
         validate_sql_identifier(table, "table")
+        if self._dry_run_guard(table, len(df)):
+            return 0
+        self._validate_config(cfg, ["project", "dataset"])
 
         if df.empty:
             return 0

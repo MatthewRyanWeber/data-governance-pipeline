@@ -12,10 +12,12 @@ Revision history
 import time
 import logging
 from typing import TYPE_CHECKING
+from urllib.parse import quote_plus as _qp
 
 import pandas as pd
 
 from pipeline.constants import HAS_ORACLE
+from pipeline.loaders.base import BaseLoader, validate_sql_identifier
 
 if TYPE_CHECKING:
     from pipeline.governance_logger import GovernanceLogger
@@ -23,7 +25,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class OracleLoader:
+class OracleLoader(BaseLoader):
     """Oracle loader with array INSERT (batcherrors) and MERGE upsert."""
 
     _DTYPE_MAP: dict[str, str] = {
@@ -35,8 +37,8 @@ class OracleLoader:
         "object": "VARCHAR2(4000)",
     }
 
-    def __init__(self, gov: "GovernanceLogger") -> None:
-        self.gov = gov
+    def __init__(self, gov: "GovernanceLogger", dry_run: bool = False) -> None:
+        super().__init__(gov, dry_run=dry_run)
         if not HAS_ORACLE:
             raise RuntimeError("python-oracledb not installed.  Run: pip install oracledb")
 
@@ -55,7 +57,7 @@ class OracleLoader:
 
     def _engine(self, cfg: dict):
         from sqlalchemy import create_engine as _ce
-        user, password, dsn = cfg["user"], cfg["password"], cfg["dsn"]
+        user, password, dsn = _qp(cfg["user"]), _qp(cfg["password"]), cfg["dsn"]
         wallet = cfg.get("wallet_location", "")
         if wallet:
             return _ce(
@@ -67,6 +69,12 @@ class OracleLoader:
 
     def load(self, df, cfg, table, if_exists="append", natural_keys=None):
         table = table.upper()
+        validate_sql_identifier(table, "table")
+        if cfg.get("schema"):
+            validate_sql_identifier(cfg["schema"], "schema")
+        if self._dry_run_guard(table, len(df)):
+            return
+        self._validate_config(cfg, ["user", "password", "dsn"])
         if natural_keys:
             self._upsert(df, cfg, table, natural_keys)
         else:

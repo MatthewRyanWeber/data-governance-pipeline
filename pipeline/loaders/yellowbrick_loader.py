@@ -13,8 +13,10 @@ Revision history
 import time
 import logging
 from typing import TYPE_CHECKING
+from urllib.parse import quote_plus as _qp
 
 from pipeline.constants import HAS_YELLOWBRICK
+from pipeline.loaders.base import BaseLoader, validate_sql_identifier
 
 if TYPE_CHECKING:
     from pipeline.governance_logger import GovernanceLogger
@@ -22,7 +24,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class YellowbrickLoader:
+class YellowbrickLoader(BaseLoader):
     """Yellowbrick loader with COPY FROM STDIN and MERGE upsert."""
 
     _DTYPE_MAP: dict[str, str] = {
@@ -34,8 +36,8 @@ class YellowbrickLoader:
         "object": "VARCHAR(65535)",
     }
 
-    def __init__(self, gov: "GovernanceLogger") -> None:
-        self.gov = gov
+    def __init__(self, gov: "GovernanceLogger", dry_run: bool = False) -> None:
+        super().__init__(gov, dry_run=dry_run)
         if not HAS_YELLOWBRICK:
             raise RuntimeError(
                 "psycopg2 not installed.  "
@@ -59,11 +61,17 @@ class YellowbrickLoader:
         from sqlalchemy import create_engine as _ce
         port = cfg.get("port", 5432)
         return _ce(
-            f"postgresql+psycopg2://{cfg['user']}:{cfg['password']}"
+            f"postgresql+psycopg2://{_qp(cfg['user'])}:{_qp(cfg['password'])}"
             f"@{cfg['host']}:{port}/{cfg['database']}"
         )
 
     def load(self, df, cfg, table, if_exists="append", natural_keys=None):
+        validate_sql_identifier(table, "table")
+        if cfg.get("schema"):
+            validate_sql_identifier(cfg["schema"], "schema")
+        if self._dry_run_guard(table, len(df)):
+            return
+        self._validate_config(cfg, ["host", "database", "user", "password"])
         if natural_keys:
             self._upsert(df, cfg, table, natural_keys)
         else:
@@ -134,18 +142,16 @@ class YellowbrickLoader:
             on_clause = " AND ".join(
                 f't."{k}" = s."{k}"' for k in natural_keys
             )
-            update_clause = ", ".join(
-                f'"{c}" = s."{c}"' for c in non_key_cols
-            )
             all_cols = ", ".join(f'"{c}"' for c in df.columns)
             stage_cols = ", ".join(f's."{c}"' for c in df.columns)
 
-            merge_sql = (
-                f"MERGE INTO {fqt} AS t "
-                f"USING {fqt_tmp} AS s ON ({on_clause}) "
-                f"WHEN MATCHED THEN UPDATE SET {update_clause} "
-                f"WHEN NOT MATCHED THEN INSERT ({all_cols}) VALUES ({stage_cols})"
-            )
+            merge_sql = f"MERGE INTO {fqt} AS t USING {fqt_tmp} AS s ON ({on_clause}) "
+            if non_key_cols:
+                update_clause = ", ".join(
+                    f'"{c}" = s."{c}"' for c in non_key_cols
+                )
+                merge_sql += f"WHEN MATCHED THEN UPDATE SET {update_clause} "
+            merge_sql += f"WHEN NOT MATCHED THEN INSERT ({all_cols}) VALUES ({stage_cols})"
             cur.execute(merge_sql)
             cur.execute(f"DROP TABLE IF EXISTS {fqt_tmp}")
             conn.commit()

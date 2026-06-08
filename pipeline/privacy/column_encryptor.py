@@ -60,40 +60,44 @@ class ColumnEncryptor:
 
     def encrypt(self, df, columns: list[str]):
         """Encrypt specified columns. Null values are left as null."""
-        import pandas as pd
-
         if not self._fernet:
             return df
+        fernet = self._fernet
         for col in columns:
             if col not in df.columns:
                 continue
-            df[col] = df[col].apply(
-                lambda v: "ENCRYPTED:" + self._fernet.encrypt(
-                    str(v).encode()
-                ).decode() if pd.notna(v) else v
-            )
+            mask = df[col].notna()
+            if mask.any():
+                vals = df.loc[mask, col].astype(str).tolist()
+                encrypted = [
+                    "ENCRYPTED:" + fernet.encrypt(v.encode()).decode()
+                    for v in vals
+                ]
+                df.loc[mask, col] = encrypted
             self.gov.encryption_applied(col, "AES-256-CBC/Fernet")
         return df
 
     def decrypt(self, df, columns: list[str]):
         """Decrypt previously-encrypted columns."""
-        import pandas as pd
-
         if not self._fernet:
             return df
+        fernet = self._fernet
+        prefix = "ENCRYPTED:"
+        prefix_len = len(prefix)
         for col in columns:
             if col not in df.columns:
                 continue
-
-            def _decrypt_val(v, fernet=self._fernet):
-                if pd.isna(v) or not str(v).startswith("ENCRYPTED:"):
-                    return v
-                try:
-                    token = str(v)[len("ENCRYPTED:"):]
-                    return fernet.decrypt(token.encode()).decode()
-                except Exception as exc:
-                    logger.warning("Decryption failed: %s", exc)
-                    return v
-
-            df[col] = df[col].apply(_decrypt_val)
+            mask = df[col].notna() & df[col].astype(str).str.startswith(prefix)
+            if mask.any():
+                vals = df.loc[mask, col].astype(str).tolist()
+                decrypted = []
+                for v in vals:
+                    try:
+                        decrypted.append(
+                            fernet.decrypt(v[prefix_len:].encode()).decode()
+                        )
+                    except Exception as exc:
+                        logger.warning("Decryption failed: %s", exc)
+                        decrypted.append(v)
+                df.loc[mask, col] = decrypted
         return df

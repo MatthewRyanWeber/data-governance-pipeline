@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING
 import pandas as pd
 
 from pipeline.constants import HAS_PGVECTOR
-from pipeline.loaders.base import validate_sql_identifier, validate_float_vector
+from pipeline.loaders.base import BaseLoader, validate_sql_identifier, validate_float_vector
 
 if TYPE_CHECKING:
     from pipeline.governance_logger import GovernanceLogger
@@ -47,7 +47,7 @@ def _validate_where_clause(clause: str) -> str:
     return clause
 
 
-class PgvectorLoader:
+class PgvectorLoader(BaseLoader):
     """
     PostgreSQL pgvector loader with IVFFlat/HNSW index support.
 
@@ -63,8 +63,8 @@ class PgvectorLoader:
 
     _DIST_OPS = {"cosine": "<=>", "l2": "<->", "inner": "<#>"}
 
-    def __init__(self, gov: "GovernanceLogger") -> None:
-        self.gov = gov
+    def __init__(self, gov: "GovernanceLogger", dry_run: bool = False) -> None:
+        super().__init__(gov, dry_run=dry_run)
         if not HAS_PGVECTOR:
             raise RuntimeError(
                 "PgvectorLoader requires the pgvector package.\n"
@@ -84,9 +84,10 @@ class PgvectorLoader:
             )
         if not table:
             raise ValueError("PgvectorLoader: table name is required.")
-        if not cfg.get("host"):
-            raise ValueError("PgvectorLoader: cfg must contain 'host'.")
         validate_sql_identifier(table, "table")
+        if self._dry_run_guard(table, len(df)):
+            return 0
+        self._validate_config(cfg, ["host", "db_name"])
         validate_sql_identifier(
             cfg.get("vector_column", "embedding"), "vector_column"
         )

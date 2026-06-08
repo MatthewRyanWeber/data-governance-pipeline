@@ -21,6 +21,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_COL_SANITISE = re.compile(r"[^a-z0-9_]")
+
 
 class Transformer:
     """
@@ -103,7 +105,7 @@ class Transformer:
 
     def standardise_names(self, df):
         df = df.copy()
-        df.columns = [re.sub(r"[^a-z0-9_]", "", c.lower().replace(" ", "_")) for c in df.columns]
+        df.columns = [_COL_SANITISE.sub("", c.lower().replace(" ", "_")) for c in df.columns]
         return df
 
     def flatten_nested(self, df, sep: str = "_", max_level: int = 3):

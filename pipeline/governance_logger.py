@@ -164,10 +164,11 @@ class GovernanceLogger:
             raw_json = json.dumps(base_entry, sort_keys=True)
             self._prev_hash = hashlib.sha256(raw_json.encode()).hexdigest()
             base_entry["self_hash"] = self._prev_hash
+            final_json = json.dumps(base_entry, sort_keys=True)
 
             if not self.dry_run:
                 with open(self.ledger_file, "a", encoding="utf-8") as f:
-                    f.write(json.dumps(base_entry, sort_keys=True) + "\n")
+                    f.write(final_json + "\n")
 
             self.ledger_entries.append(base_entry)
 

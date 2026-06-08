@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 import pandas as pd
 
 from pipeline.constants import HAS_BIGQUERY
+from pipeline.loaders.base import BaseLoader, validate_sql_identifier
 
 if TYPE_CHECKING:
     from pipeline.governance_logger import GovernanceLogger
@@ -21,7 +22,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class BigQueryLoader:
+class BigQueryLoader(BaseLoader):
     """
     Google BigQuery loader with native bulk load, MERGE upsert, and
     automatic EU data-residency detection for GDPR compliance.
@@ -42,8 +43,8 @@ class BigQueryLoader:
         "object":              "STRING",
     }
 
-    def __init__(self, gov: "GovernanceLogger") -> None:
-        self.gov = gov
+    def __init__(self, gov: "GovernanceLogger", dry_run: bool = False) -> None:
+        super().__init__(gov, dry_run=dry_run)
         if not HAS_BIGQUERY:
             raise RuntimeError(
                 "google-cloud-bigquery not installed.  "
@@ -94,6 +95,11 @@ class BigQueryLoader:
         if_exists:    str = "append",
         natural_keys: list[str] | None = None,
     ) -> None:
+        validate_sql_identifier(table, "table")
+        validate_sql_identifier(cfg["dataset"], "dataset")
+        if self._dry_run_guard(table, len(df)):
+            return
+        self._validate_config(cfg, ["project"])
         if natural_keys:
             self._upsert(df, cfg, table, natural_keys)
         else:

@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 import pandas as pd
 
 from pipeline.constants import HAS_QDRANT
-from pipeline.loaders.base import validate_float_vector
+from pipeline.loaders.base import BaseLoader, validate_float_vector
 
 if TYPE_CHECKING:
     from pipeline.governance_logger import GovernanceLogger
@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class QdrantLoader:
+class QdrantLoader(BaseLoader):
     """
     Qdrant vector database loader with collection management and batch upserts.
 
@@ -45,8 +45,8 @@ class QdrantLoader:
 
     _BATCH = 100
 
-    def __init__(self, gov: "GovernanceLogger") -> None:
-        self.gov = gov
+    def __init__(self, gov: "GovernanceLogger", dry_run: bool = False) -> None:
+        super().__init__(gov, dry_run=dry_run)
         if not HAS_QDRANT:
             raise RuntimeError(
                 "QdrantLoader requires the qdrant-client package.\n"
@@ -84,6 +84,9 @@ class QdrantLoader:
                 "QdrantLoader: supply collection name via "
                 "cfg['collection_name'] or the table parameter."
             )
+        if self._dry_run_guard(collection_name, len(df)):
+            return 0
+        self._validate_config(cfg, ["url|path|memory"])
 
         vector_col = cfg.get("vector_column", "embedding")
         embed_cols = cfg.get("embed_columns")
@@ -146,20 +149,21 @@ class QdrantLoader:
             payload_cols = [c for c in df.columns
                             if c not in (id_col, vector_col)]
 
+            all_records = df.to_dict(orient="records")
             total = 0
-            for i in range(0, len(df), batch_size):
-                chunk = df.iloc[i: i + batch_size]
+            for i in range(0, len(all_records), batch_size):
+                batch_recs = all_records[i: i + batch_size]
                 points = []
 
-                for row_idx, (_, row) in enumerate(chunk.iterrows()):
-                    vec = row[vector_col]
+                for row_idx, rec in enumerate(batch_recs):
+                    vec = rec[vector_col]
                     if isinstance(vec, _np.ndarray):
                         vec = vec.tolist()
                     elif not isinstance(vec, list):
                         vec = list(vec)
 
                     if id_col and id_col in df.columns:
-                        raw_id = row[id_col]
+                        raw_id = rec[id_col]
                         try:
                             point_id = int(raw_id)
                         except (ValueError, TypeError):
@@ -175,7 +179,7 @@ class QdrantLoader:
 
                     payload = {}
                     for col in payload_cols:
-                        val = row[col]
+                        val = rec[col]
                         if pd.notna(val):
                             payload[col] = val
 
