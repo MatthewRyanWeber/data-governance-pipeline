@@ -25,7 +25,7 @@ For healthcare data from Epic EHR systems, `epic_extensions.py` adds a complete 
 - 37 destination loaders (28 standard + 9 vector): PostgreSQL, MySQL, SQL Server, MongoDB, Snowflake, Redshift, BigQuery, Azure Synapse, Databricks, ClickHouse, Oracle, DB2, Firebolt, Yellowbrick, SAP HANA, SAP Datasphere, QuickBooks, Kafka, CockroachDB, DuckDB, Parquet, Delta Lake, Iceberg, S3, Athena, SFTP, Microsoft Fabric, PostGIS
 - 9 vector database loaders: pgvector, Snowflake Vector, BigQuery Vector, Chroma, Milvus, Pinecone, Weaviate, Qdrant, LanceDB
 - Chunked parallel processing, compression (gz/bz2/zip/zstd/lz4), incremental loading, checkpoint/resume
-- Modular architecture: 112 Python files across 13 packages with a 7-layer import DAG
+- Modular architecture: 122 Python modules across 13 packages with a 7-layer import DAG
 
 **Data governance — GDPR / CCPA**
 - Tamper-evident SHA-256 audit ledger — every event is chained; any modification is detectable
@@ -129,7 +129,7 @@ data-governance-pipeline/
 │   ├── advanced/                     # Reversible loads, DLQ replay, NL builder
 │   ├── reporting/                    # HTML reports, lineage graphs, cost estimator
 │   └── streaming/                    # Kafka/Kinesis/Pub/Sub extractors
-├── tests/                            # 711 tests across 16 test files
+├── tests/                            # 1128 tests across 30+ test files
 │   ├── test_new_features.py          # 38 tests for catalog, RBAC, lineage, etc.
 │   ├── test_security.py              # Security hardening tests
 │   ├── test_loaders/                 # Loader dispatch tests
@@ -147,12 +147,12 @@ data-governance-pipeline/
 
 ## Quick start
 
-**1. Clone and install core dependencies**
+**1. Clone and install**
 
 ```bash
 git clone https://github.com/matthewryanweber/data-governance-pipeline.git
 cd data-governance-pipeline
-pip install -r requirements.txt
+pip install -e ".[dev]"
 ```
 
 **2. Copy the credential template**
@@ -162,28 +162,41 @@ cp .env.example .env
 # Edit .env with your database credentials and SMTP settings
 ```
 
-**3. Run the interactive wizard**
+**3. Run the CLI**
 
 ```bash
-python pipeline_v3.py
+# Single pipeline run
+pipeline run data.csv postgresql --table customers
+
+# Validate a file against a schema
+pipeline validate data.csv --schema schema.json
+
+# Profile a dataset
+pipeline profile data.csv
+
+# Resume interrupted runs
+pipeline resume
+
+# Or run as a Python module
+python -m pipeline run data.csv postgresql
 ```
 
-The wizard asks:
-- Where is your source? (file path, database table, API, or stream)
-- GDPR / CCPA compliance questions (purpose, legal basis, data subjects)
-- Which destination? (choose from 37 platforms)
-- Review the run plan, then confirm
-
-**4. Optional: cloud and enterprise drivers**
+**4. Run the REST API**
 
 ```bash
-pip install -r requirements_v2.txt   # all optional extras
+python -m pipeline.api
+# Or with Docker:
+docker compose up pipeline-api
+```
 
-# Or install only what you need:
-pip install ".[cloud]"        # Snowflake, BigQuery, Databricks, etc.
-pip install ".[streaming]"    # Kafka / Kinesis / Pub/Sub
-pip install ".[healthcare]"   # Epic Clarity (pyodbc + pyarrow for OMOP)
-pip install ".[sap]"          # SAP HANA and Datasphere
+**5. Optional: cloud and enterprise drivers**
+
+```bash
+pip install -e ".[cloud]"        # Snowflake, BigQuery, Databricks, etc.
+pip install -e ".[streaming]"    # Kafka / Kinesis / Pub/Sub
+pip install -e ".[healthcare]"   # Epic Clarity (pyodbc + pyarrow for OMOP)
+pip install -e ".[sap]"          # SAP HANA and Datasphere
+pip install -e ".[all]"          # Everything
 ```
 
 ---
@@ -332,22 +345,36 @@ tracker.check_phi_load("snowflake_research")  # raises if BAA missing/expired
 ## Running tests
 
 ```bash
-pytest -v
+pip install -e ".[dev]"
+python -m pytest tests/ -q
 ```
 
-**711 tests, all passing.**
+**1128 tests, all passing.**
 
 | Suite | Tests |
 |-------|------:|
 | Loader dispatch | 232 |
-| Governance extensions | 59 |
-| Epic/HIPAA extensions | 80 |
-| Compliance monitoring | 58 |
-| Grafana integration | 60 |
-| Security hardening | 34 |
-| New features (catalog, RBAC, lineage, etc.) | 38 |
-| Logging, exceptions, base loader, dry run, etc. | 150 |
-| **Total** | **711** |
+| Extensions (governance, HIPAA, compliance, Grafana) | 257 |
+| Governance logger | 31 |
+| Privacy (PII, encryption, erasure, NLP) | 41 |
+| Quality (scoring, contracts, anomalies, profiling) | 39 |
+| Monitoring (metrics, SLA, observability, notifier) | 28 |
+| Reporting (HTML, lineage, cost estimator) | 18 |
+| Catalog (store, search, glossary) | 22 |
+| CLI (arg parsing, dispatch, config loading) | 18 |
+| Streaming (Kafka, Kinesis, Pub/Sub) | 12 |
+| ML governance (model registry) | 18 |
+| Lineage (OpenLineage emitter) | 10 |
+| Advanced (NL builder, reversible loader, DLQ) | 16 |
+| Security, logging, crash recovery, transform, etc. | 386 |
+| **Total** | **1128** |
+
+### Docker
+
+```bash
+docker build -t data-governance-pipeline .
+docker run --rm data-governance-pipeline python -m pytest tests/ -q
+```
 
 ---
 

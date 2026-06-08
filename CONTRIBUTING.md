@@ -28,32 +28,29 @@ git clone https://github.com/YOUR_USERNAME/data-governance-pipeline.git
 cd data-governance-pipeline
 ```
 
-**2. Install core dependencies**
+**2. Install dependencies**
 
 ```bash
-pip install -r requirements.txt
+pip install -e ".[dev]"
 ```
 
 **3. Install optional dependencies for the area you're working on**
 
 ```bash
-pip install -r requirements_v2.txt        # all cloud/enterprise drivers
-pip install ".[dev]"                       # pyflakes, black, ruff, pytest
-pip install kafka-python lancedb pyarrow  # if working on streaming/vector
-pip install prometheus_client             # if working on Grafana integration
+pip install -e ".[cloud]"               # Snowflake, BigQuery, Databricks, etc.
+pip install -e ".[streaming]"           # Kafka, Kinesis, Pub/Sub
+pip install -e ".[healthcare]"          # Epic Clarity + OMOP
+pip install -e ".[all]"                 # Everything
 ```
 
 **4. Run the test suite to confirm everything passes**
 
 ```bash
-python test_loader_dispatch.py
-python test_governance_extensions.py
-python test_epic_extensions.py
-python test_compliance_extensions.py
-python test_grafana_extensions.py
+python -m pytest tests/ -q
+python -m pyflakes pipeline/ tests/
 ```
 
-All 346 tests should pass before you make any changes.
+All 1128 tests should pass before you make any changes.
 
 ---
 
@@ -109,64 +106,51 @@ Revision history
 
 ## Adding a new destination loader
 
-The project has 20 destination loaders. Adding a new one is the most common
+The project has 37 destination loaders. Adding a new one is the most common
 contribution. Follow this pattern:
 
-**1. Add an optional import near the top of `pipeline_v3.py`**
+**1. Create a new loader module in `pipeline/loaders/`**
 
 ```python
-try:
-    import your_package as _your_pkg  # noqa: F401
-    HAS_YOUR_DEST = True
-except ImportError:
-    HAS_YOUR_DEST = False
-```
+from pipeline.loaders.base import BaseLoader, validate_sql_identifier
 
-**2. Add the loader class before `_LOADER_DISPATCH`**
+class YourLoader(BaseLoader):
+    """One-sentence summary."""
 
-```python
-class YourLoader:
-    """
-    One-sentence summary.
-
-    Required cfg keys
-    -----------------
-    host     : str
-    ...
-
-    Requirements
-    ------------
-        pip install your-package
-    """
-
-    def __init__(self, gov: "GovernanceLogger") -> None:
-        self.gov = gov
-        if not HAS_YOUR_DEST:
+    def __init__(self, gov, dry_run=False):
+        super().__init__(gov, dry_run=dry_run)
+        try:
+            import your_package
+        except ImportError:
             raise RuntimeError(
                 "YourLoader requires your-package.\n"
                 "Install with: pip install your-package"
             )
 
     def load(self, df, cfg, table, if_exists="append", natural_keys=None):
-        ...
-        self.gov._event("LOAD", "YOUR_DEST_WRITE_COMPLETE", {...})
-        return rows_written
+        validate_sql_identifier(table, "table")
+        if self._dry_run_guard(table, len(df)):
+            return
+        # ... your load logic ...
+        self.gov.load_complete(len(df), table)
 ```
 
-**3. Register in `_LOADER_DISPATCH`**
+**2. Register in `pipeline/loaders/__init__.py`**
+
+Add the dispatch entry in `_LOADER_DISPATCH`:
 
 ```python
 "yourdest": (YourLoader, False, False),
 ```
 
-**4. Add tests to `test_loader_dispatch.py`**
+**3. Add tests to `tests/test_loaders/test_loader_dispatch.py`**
 
 At minimum:
 - `test_yourdest_in_dispatch` — verifies the dispatch entry
 - `test_raises_without_package` — verifies graceful degradation
 - `test_load_calls_write` — verifies the load path with a mock
 
-**5. Update `requirements_v2.txt` with the new package**
+**4. Add the package to `pyproject.toml` optional dependencies**
 
 ---
 
@@ -191,11 +175,11 @@ use `pathlib.Path` with `encoding="utf-8"`.
 
 Before opening a PR, confirm:
 
-- [ ] All 346 existing tests still pass
+- [ ] All existing tests still pass (`python -m pytest tests/ -q`)
 - [ ] New tests added for the new functionality
 - [ ] `python -m pyflakes your_changed_files.py` returns zero warnings
 - [ ] Revision history updated in any modified files
-- [ ] `requirements_v2.txt` updated if a new package is introduced
+- [ ] `pyproject.toml` updated if a new package is introduced
 - [ ] `CHANGELOG.md` updated with a brief description of the change
 
 ---
