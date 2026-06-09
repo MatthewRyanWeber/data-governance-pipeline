@@ -99,7 +99,7 @@ class Transformer:
             df = df.fillna(fill)
         else:
             for col in df.columns:
-                if pd.api.types.is_string_dtype(df[col]):
+                if df[col].dtype == object or pd.api.types.is_string_dtype(df[col]):
                     df[col] = df[col].fillna("")
                 else:
                     df[col] = df[col].fillna(0)

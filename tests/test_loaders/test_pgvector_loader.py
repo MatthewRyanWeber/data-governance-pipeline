@@ -15,6 +15,7 @@ from unittest.mock import MagicMock, patch
 
 import pandas as pd
 
+from pipeline.constants import HAS_PGVECTOR
 from pipeline.loaders.vector.pgvector_loader import PgvectorLoader
 from pipeline.exceptions import ConfigValidationError
 
@@ -25,6 +26,7 @@ def _vec_df():
     return pd.DataFrame({"id": [1, 2], "embedding": [[0.1, 0.2], [0.3, 0.4]]})
 
 
+@unittest.skipUnless(HAS_PGVECTOR, "pgvector not installed")
 class TestPgvectorValidation(unittest.TestCase):
     def setUp(self):
         self.gov = MagicMock()
@@ -63,6 +65,7 @@ class TestPgvectorValidation(unittest.TestCase):
         self.assertEqual(self.loader.load(empty, _CFG, "t"), 0)
 
 
+@unittest.skipUnless(HAS_PGVECTOR, "pgvector not installed")
 class TestPgvectorLoadPath(unittest.TestCase):
     def setUp(self):
         self.gov = MagicMock()

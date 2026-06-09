@@ -14,6 +14,7 @@ from unittest.mock import MagicMock, patch
 
 import pandas as pd
 
+from pipeline.constants import HAS_ORACLE
 from pipeline.loaders.oracle_loader import OracleLoader
 from pipeline.exceptions import ConfigValidationError
 
@@ -27,6 +28,7 @@ def _executed_sql(cursor):
     return [c[0][0] for c in calls if c[0]]
 
 
+@unittest.skipUnless(HAS_ORACLE, "oracledb not installed")
 class TestOracleLoader(unittest.TestCase):
     def setUp(self):
         self.gov = MagicMock()

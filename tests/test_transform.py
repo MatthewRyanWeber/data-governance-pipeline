@@ -48,8 +48,8 @@ class TestMaskPii(unittest.TestCase):
     def test_none_values_preserved(self):
         df = pd.DataFrame({"email": [None, "alice@example.com"]})
         result = self.t.mask_pii(df, ["email"])
-        self.assertIsNone(result["email"].iloc[0])
-        self.assertIsNotNone(result["email"].iloc[1])
+        self.assertTrue(pd.isna(result["email"].iloc[0]))
+        self.assertFalse(pd.isna(result["email"].iloc[1]))
 
     def test_missing_column_ignored(self):
         df = pd.DataFrame({"name": ["Alice Test"]})

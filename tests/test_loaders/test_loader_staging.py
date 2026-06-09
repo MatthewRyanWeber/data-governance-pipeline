@@ -19,6 +19,8 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 
 import pipeline.loaders.redshift_loader as rs_mod
+import pipeline.loaders.snowflake_loader as sf_mod
+import pipeline.loaders.synapse_loader as syn_mod
 from pipeline.loaders.snowflake_loader import SnowflakeLoader
 from pipeline.loaders.redshift_loader import RedshiftLoader
 from pipeline.loaders.synapse_loader import SynapseLoader
@@ -34,7 +36,8 @@ def _cursor_sql(cursor):
 class TestSnowflakeStaging(unittest.TestCase):
     def setUp(self):
         self.gov = MagicMock()
-        self.loader = SnowflakeLoader(self.gov)
+        with patch.object(sf_mod, "HAS_SNOWFLAKE", True):
+            self.loader = SnowflakeLoader(self.gov)
         self.conn = MagicMock()
         self.cursor = self.conn.cursor.return_value
         # COPY INTO returns a result row whose [3] is the loaded row count.
@@ -98,7 +101,8 @@ class TestRedshiftS3Copy(unittest.TestCase):
 class TestSynapseBlobCopy(unittest.TestCase):
     def setUp(self):
         self.gov = MagicMock()
-        self.loader = SynapseLoader(self.gov)
+        with patch.object(syn_mod, "HAS_SYNAPSE", True):
+            self.loader = SynapseLoader(self.gov)
         self.conn = MagicMock()
         self.cursor = self.conn.cursor.return_value
         self.cfg = {"host": "h", "database": "d", "user": "u", "password": "p",
