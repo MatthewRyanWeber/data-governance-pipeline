@@ -3,8 +3,37 @@ services:
     build: .
     ports:
       - "5000:5000"
+    restart: unless-stopped
     environment:
       - PIPELINE_API_KEYS=${PIPELINE_API_KEYS}
+      - PIPELINE_JWT_SECRET=${PIPELINE_JWT_SECRET:-}
+      - PIPELINE_JWT_REVOCATION_DB=/data/revocation.db
+      - PIPELINE_RATE_LIMIT_DB=/data/rate_limit.db
+      - PIPELINE_MAX_QUEUE_SIZE=${PIPELINE_MAX_QUEUE_SIZE:-100}
+      - PIPELINE_CONTAINER=1
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - pipeline-data:/data
+      - ./config:/app/config:ro
+    deploy:
+      resources:
+        limits:
+          cpus: "4"
+          memory: 16G
+        reservations:
+          cpus: "1"
+          memory: 2G
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
 
   test:
     build:
@@ -12,3 +41,6 @@ services:
       target: test
     profiles:
       - test
+
+volumes:
+  pipeline-data:
