@@ -15,6 +15,7 @@ Revision history
 """
 
 import functools
+import hmac
 import logging
 import os
 import threading
@@ -89,26 +90,31 @@ def create_app(pipeline_fn=None) -> "Flask":
     api_keys = _load_api_keys()
     rate_limiter = _RateLimiter()
 
+    if not api_keys:
+        logger.warning("PIPELINE_API_KEYS not set — API is running WITHOUT authentication")
+
     # ── Authentication ──────────────────────────────────────────────────
 
     def require_auth(fn):
         """Decorator: reject requests without a valid API key."""
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
-            if not api_keys:
-                return fn(*args, **kwargs)
-
             key = (
                 request.headers.get("X-API-Key")
                 or request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
             )
-            if not key or key not in api_keys:
+
+            rate_limit_id = key or request.remote_addr
+            if not rate_limiter.allow(rate_limit_id):
+                return jsonify({"error": "Rate limit exceeded. Try again later."}), 429
+
+            if not api_keys:
+                return fn(*args, **kwargs)
+
+            if not key or not any(hmac.compare_digest(key, k) for k in api_keys):
                 logger.warning("[API] Unauthorized request to %s from %s",
                                request.path, request.remote_addr)
                 return jsonify({"error": "Unauthorized. Provide a valid API key."}), 401
-
-            if not rate_limiter.allow(key):
-                return jsonify({"error": "Rate limit exceeded. Try again later."}), 429
 
             return fn(*args, **kwargs)
         return wrapper
@@ -150,6 +156,12 @@ def create_app(pipeline_fn=None) -> "Flask":
                 _state["error"] = str(exc)
                 _state["metrics"] = {"duration_s": elapsed}
             logger.error("Pipeline run %s failed after %.2fs: %s", run_id, elapsed, exc)
+        finally:
+            with _state_lock:
+                if _state["status"] == "running":
+                    _state["status"] = "failed"
+                    _state["error"] = "Pipeline thread terminated unexpectedly"
+                    _state["finished_at"] = datetime.now(timezone.utc).isoformat()
 
     # ── Endpoints ───────────────────────────────────────────────────────
 
@@ -195,6 +207,7 @@ def create_app(pipeline_fn=None) -> "Flask":
             _state["started_at"] = datetime.now(timezone.utc).isoformat()
             _state["finished_at"] = None
             _state["error"] = None
+            _state["metrics"] = {}
 
         thread = threading.Thread(
             target=_run_pipeline,
@@ -237,7 +250,7 @@ def create_app(pipeline_fn=None) -> "Flask":
     try:
         from pipeline.openapi_spec import register_docs_routes
         register_docs_routes(app)
-    except Exception as exc:
+    except ImportError as exc:
         logger.warning("Could not register OpenAPI docs routes: %s", exc)
 
     logger.info("Pipeline Flask API created.")

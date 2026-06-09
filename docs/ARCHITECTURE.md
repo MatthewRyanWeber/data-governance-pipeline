@@ -196,7 +196,7 @@ The CLI processes data in chunks (default 50,000 rows). After each chunk:
 | `quality/` | 3 | `DataQualityScorer`, `QualityAnomalyAlerter`, `DataDiffReporter`, `SchemaEvolver`, `DataContractEnforcer`, `SyntheticDataGenerator`, `ColumnProfiler`, `TestGenerator` | Quality scoring, anomaly detection, contracts, schema evolution |
 | `catalog/` | 3 | `CatalogStore`, `CatalogSearch`, `BusinessGlossary` | SQLite-backed data catalog with FTS5 search |
 | `security/` | 3 | `AccessPolicy` | RBAC column/row access policies, fail-closed enforcement |
-| `monitoring/` | 3 | `SLAMonitor`, `MetricsCollector`, `Notifier`, `ObservabilityMonitor` | SLA monitoring, metrics collection, email/Slack notifications |
+| `monitoring/` | 3 | `SLAMonitor`, `MetricsCollector`, `Notifier`, `DataObserver` | SLA monitoring, metrics collection, email/Slack notifications |
 | `lineage/` | 3 | `OpenLineageEmitter` | OpenLineage v2.0.2 event emission |
 | `versioning/` | 3 | `SnapshotStore` | Content-addressable dataset snapshots with diff and checkout |
 | `ml_governance/` | 3 | `ModelRegistry` | ML model registration, training lineage, impact analysis |

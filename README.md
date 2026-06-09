@@ -377,7 +377,7 @@ classification = detector.scan_and_classify(df)
 ### GDPR governance
 
 ```python
-from pipeline_v3 import GovernanceLogger
+from pipeline.governance_logger import GovernanceLogger
 from governance_extensions import RoPAGenerator, ConsentManager, PseudonymVault
 
 gov = GovernanceLogger(run_id="run_001", src="hr_system")
@@ -399,7 +399,7 @@ ropa.save_html("ropa_report.html")
 ### HIPAA Safe Harbor de-identification
 
 ```python
-from pipeline_v3 import GovernanceLogger
+from pipeline.governance_logger import GovernanceLogger
 from epic_extensions import HIPAASafeHarborFilter, BAATracker
 
 gov  = GovernanceLogger(run_id="run_001", src="clarity_extract")

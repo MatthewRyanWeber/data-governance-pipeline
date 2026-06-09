@@ -26,6 +26,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_BAD_CHARS_RE = re.compile(r"[;'\"\-\-/\\*]")
+
 
 def validate_sql_identifier(name: str, label: str = "identifier") -> str:
     """
@@ -79,10 +81,9 @@ def validate_column_names(df: "pd.DataFrame", label: str = "DataFrame") -> None:
     Rejects columns containing SQL-injection characters (semicolons, quotes,
     comment markers, etc.).  Raises ValueError on the first invalid column.
     """
-    _bad_chars = re.compile(r"[;'\"\-\-/\\*]")
     for col in df.columns:
         col_str = str(col)
-        if _bad_chars.search(col_str):
+        if _BAD_CHARS_RE.search(col_str):
             raise ValueError(
                 f"{label} column name {col_str!r} contains disallowed "
                 "characters for SQL DDL construction."

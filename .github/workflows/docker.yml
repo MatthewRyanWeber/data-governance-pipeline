@@ -16,8 +16,4 @@ jobs:
         run: docker build -t data-governance-pipeline .
 
       - name: Run tests in Docker
-        run: >
-          docker run --rm --entrypoint python data-governance-pipeline
-          -m pytest tests/ -q --tb=short
-          --ignore=tests/test_extensions
-          --ignore=tests/test_loaders/test_loader_dispatch.py
+        run: docker build --target test -t data-governance-pipeline-test .

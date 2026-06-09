@@ -92,8 +92,8 @@ class SizeLimitedReader(io.RawIOBase):
         if self._owner is not None:
             try:
                 self._owner.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Failed to close archive owner: %s", exc)
         super().close()
 
 

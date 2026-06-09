@@ -37,8 +37,8 @@ class SchemaValidator:
                  run_context=None) -> None:
         self.gov = gov
         self.dlq = dlq
-        rc = run_context or default_run_context()
-        self.suite_name = f"pipeline_suite_{rc.pipeline_id[:8]}"
+        self.run_context = run_context or default_run_context()
+        self.suite_name = f"pipeline_suite_{self.run_context.pipeline_id[:8]}"
         self.expectation_configs: list[dict] = []
 
     def build_suite(self, df: "pd.DataFrame", interactive: bool = True) -> list:
@@ -122,7 +122,7 @@ class SchemaValidator:
 
         import great_expectations as gx
 
-        rc = default_run_context()
+        rc = self.run_context
         logger.info("[GREAT_EXPECTATIONS] Running schema validation…")
         ctx = gx.get_context(mode="ephemeral")
         ds = ctx.data_sources.add_pandas("pipeline_ds")

@@ -5,7 +5,6 @@ include CLAUDE.md
 include pyproject.toml
 
 recursive-include pipeline *.py
-recursive-include config *.json
 
 prune tests
 prune docs

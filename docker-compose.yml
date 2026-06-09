@@ -4,11 +4,21 @@ services:
     ports:
       - "5000:5000"
     environment:
-      - PIPELINE_API_KEYS=${PIPELINE_API_KEYS:-dev-key}
+      - PIPELINE_API_KEYS=${PIPELINE_API_KEYS}
     command: ["python", "-m", "pipeline.api"]
 
   test:
-    build: .
-    command: ["python", "-m", "pytest", "tests/", "-q", "--tb=short"]
+    build:
+      context: .
+      target: test
+    command:
+      - python
+      - -m
+      - pytest
+      - tests/
+      - -q
+      - --tb=short
+      - --ignore=tests/test_extensions
+      - --ignore=tests/test_loaders/test_loader_dispatch.py
     profiles:
       - test
