@@ -12,11 +12,14 @@ Layer 6 — imports from Layer 0 (constants, helpers), Layer 1 (governance_logge
 Revision history
 ────────────────
 1.0   2026-06-07   Initial release: 7-check preflight gate with interactive prompts.
+1.1   2026-06-09   Close consent.db handle via contextlib.closing (was leaked,
+                   risking a Windows file lock).
 """
 
 import json
 import logging
 import sqlite3
+from contextlib import closing
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
@@ -336,7 +339,10 @@ def run_governance_preflight(
     if consent_db_path.exists():
         summary["checks_discovered"] += 1
         try:
-            with sqlite3.connect(str(consent_db_path)) as conn:
+            # contextlib.closing guarantees the handle is released — a bare
+            # `with sqlite3.connect(...)` commits but never closes, which can
+            # leave consent.db locked on Windows.
+            with closing(sqlite3.connect(str(consent_db_path))) as conn:
                 cursor = conn.cursor()
 
                 # Check if the consent table exists
