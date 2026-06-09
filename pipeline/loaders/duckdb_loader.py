@@ -9,6 +9,8 @@ Revision history
 1.0   2026-06-07   Extracted from pipeline_v3.py (class DuckDBLoader).
 1.1   2026-06-07   Added Layer 4 docstring convention.
 1.2   2026-06-08   Fixed SQL injection: query() now rejects mutating statements.
+1.3   2026-06-09   Fix broken upsert: create a unique index on the natural keys
+                   so ON CONFLICT has a target; DO NOTHING when no non-key cols.
 """
 
 import logging
@@ -101,13 +103,27 @@ class DuckDBLoader(BaseLoader):
                     f"SELECT * FROM df WHERE 1=0"
                 )
                 key_str = ", ".join(natural_keys)
-                non_keys = [c for c in df.columns if c not in natural_keys]
-                update_str = ", ".join(
-                    f"{c} = excluded.{c}" for c in non_keys
+                # DuckDB's ON CONFLICT requires the conflict target to be backed
+                # by a UNIQUE/PK constraint or index; the CTAS above creates
+                # none, so add a unique index on the keys before the upsert.
+                index_name = "idx_" + table.replace(".", "_") + "_upsert_keys"
+                validate_sql_identifier(index_name, "index")
+                conn.execute(
+                    f"CREATE UNIQUE INDEX IF NOT EXISTS {index_name} "
+                    f"ON {table} ({key_str})"
                 )
+                non_keys = [c for c in df.columns if c not in natural_keys]
+                if non_keys:
+                    update_str = ", ".join(
+                        f"{c} = excluded.{c}" for c in non_keys
+                    )
+                    conflict_action = f"DO UPDATE SET {update_str}"
+                else:
+                    # No non-key columns to update — fall back to ignore-on-conflict.
+                    conflict_action = "DO NOTHING"
                 conn.execute(
                     f"INSERT INTO {table} SELECT * FROM df "
-                    f"ON CONFLICT ({key_str}) DO UPDATE SET {update_str}"
+                    f"ON CONFLICT ({key_str}) {conflict_action}"
                 )
             else:
                 conn.execute(
