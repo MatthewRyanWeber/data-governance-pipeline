@@ -7,6 +7,7 @@ and get_current_trace_ids.
 Revision history
 ────────────────
 1.0   2026-06-09   Initial release.
+1.1   2026-06-09   Added metrics no-op fallback tests.
 """
 
 import logging
@@ -14,6 +15,8 @@ import unittest
 
 from pipeline.tracing import (
     get_current_trace_ids,
+    get_instruments,
+    get_meter,
     get_tracer,
     traced_operation,
 )
@@ -27,7 +30,7 @@ class TestTracingNoopFallback(unittest.TestCase):
         self.assertIsNotNone(tracer)
 
     def test_traced_operation_yields(self):
-        with traced_operation("test_op") as span:
+        with traced_operation("test_op"):
             x = 1 + 1
         self.assertEqual(x, 2)
 
@@ -67,6 +70,38 @@ class TestTracingNoopFallback(unittest.TestCase):
     def test_traced_operation_with_attributes(self):
         with traced_operation("test_op", attributes={"source": "test.csv"}):
             pass
+
+
+class TestMetricsNoopFallback(unittest.TestCase):
+    """Metrics instruments work gracefully when OTEL metrics SDK is not installed."""
+
+    def test_get_meter_returns_usable_object(self):
+        meter = get_meter("test")
+        self.assertIsNotNone(meter)
+
+    def test_noop_counter_add_does_not_raise(self):
+        meter = get_meter("test")
+        counter = meter.create_counter("test.counter")
+        counter.add(42)
+
+    def test_noop_histogram_record_does_not_raise(self):
+        meter = get_meter("test")
+        histogram = meter.create_histogram("test.histogram")
+        histogram.record(1.5)
+
+    def test_get_instruments_returns_expected_keys(self):
+        instruments = get_instruments()
+        expected = {"extract_rows", "transform_duration", "load_rows",
+                    "load_errors", "load_duration"}
+        self.assertEqual(set(instruments.keys()), expected)
+
+    def test_instruments_are_callable_without_error(self):
+        instruments = get_instruments()
+        instruments["extract_rows"].add(100)
+        instruments["transform_duration"].record(0.5)
+        instruments["load_rows"].add(200)
+        instruments["load_errors"].add(1)
+        instruments["load_duration"].record(1.2)
 
 
 if __name__ == "__main__":

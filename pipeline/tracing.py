@@ -10,6 +10,8 @@ Layer 0 — no internal package imports.
 Revision history
 ────────────────
 1.0   2026-06-09   Initial release: init_tracing, get_tracer, traced_operation.
+1.1   2026-06-09   Added native OTEL metrics: init_metrics, get_meter,
+                   get_instruments.
 """
 
 import contextlib
@@ -28,7 +30,17 @@ try:
 except ImportError:
     HAS_OTEL = False
 
+try:
+    from opentelemetry import metrics as otel_metrics
+    from opentelemetry.sdk.metrics import MeterProvider
+    from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+    HAS_OTEL_METRICS = True
+except ImportError:
+    HAS_OTEL_METRICS = False
+
 _initialized = False
+_metrics_initialized = False
+_instruments: dict | None = None
 
 
 def init_tracing(
@@ -127,3 +139,99 @@ class _NoopTracer:
     @contextlib.contextmanager
     def start_as_current_span(self, name, **kwargs):
         yield _NoopSpan()
+
+
+# ── Metrics ────────────────────────────────────────────────────────────
+
+
+class _NoopCounter:
+    def add(self, amount, attributes=None):
+        pass
+
+
+class _NoopHistogram:
+    def record(self, amount, attributes=None):
+        pass
+
+
+class _NoopMeter:
+    def create_counter(self, name, **kwargs):
+        return _NoopCounter()
+
+    def create_histogram(self, name, **kwargs):
+        return _NoopHistogram()
+
+
+def init_metrics(
+    service_name: str = "data-governance-pipeline",
+    endpoint: str | None = None,
+) -> None:
+    """Configure the OpenTelemetry MeterProvider with an OTLP exporter.
+
+    Reads ``OTEL_EXPORTER_OTLP_ENDPOINT`` from the environment if *endpoint*
+    is not provided. Does nothing when opentelemetry metrics SDK is absent.
+    """
+    global _metrics_initialized
+    if not HAS_OTEL_METRICS or _metrics_initialized:
+        return
+
+    endpoint = endpoint or os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
+    if not endpoint:
+        logger.debug("[METRICS] No OTLP endpoint configured — metrics export disabled.")
+        return
+
+    try:
+        from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
+
+        resource = Resource.create({"service.name": service_name})
+        exporter = OTLPMetricExporter(endpoint=endpoint)
+        reader = PeriodicExportingMetricReader(exporter)
+        provider = MeterProvider(resource=resource, metric_readers=[reader])
+        otel_metrics.set_meter_provider(provider)
+        _metrics_initialized = True
+        logger.info("[METRICS] OpenTelemetry metrics initialized — exporting to %s", endpoint)
+    except Exception as exc:
+        logger.warning("[METRICS] Failed to initialize OTLP metrics exporter: %s", exc)
+
+
+def get_meter(name: str = __name__):
+    """Return an OpenTelemetry meter, or a no-op meter if OTEL is unavailable."""
+    if HAS_OTEL_METRICS:
+        return otel_metrics.get_meter(name)
+    return _NoopMeter()
+
+
+def get_instruments() -> dict:
+    """Return shared pipeline metric instruments, creating them on first call.
+
+    Keys: extract_rows, transform_duration, load_rows, load_errors,
+    load_duration. All are safe to call without OTEL installed.
+    """
+    global _instruments
+    if _instruments is not None:
+        return _instruments
+
+    meter = get_meter("pipeline")
+    _instruments = {
+        "extract_rows": meter.create_counter(
+            "pipeline.extract.rows",
+            description="Total rows extracted",
+        ),
+        "transform_duration": meter.create_histogram(
+            "pipeline.transform.duration_seconds",
+            description="Transform stage duration in seconds",
+        ),
+        "load_rows": meter.create_counter(
+            "pipeline.load.rows",
+            description="Total rows loaded",
+        ),
+        "load_errors": meter.create_counter(
+            "pipeline.load.errors",
+            description="Total load errors",
+        ),
+        "load_duration": meter.create_histogram(
+            "pipeline.load.duration_seconds",
+            description="Load stage duration in seconds",
+        ),
+    }
+    return _instruments
