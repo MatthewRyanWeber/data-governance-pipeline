@@ -1,6 +1,6 @@
 [build-system]
 requires = ["setuptools>=68", "wheel"]
-build-backend = "setuptools.backends.legacy:build"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "data-governance-pipeline"
@@ -171,6 +171,7 @@ dev = [
     "pytest>=7.4.0",
     "pytest-cov>=4.1.0",
     "pyflakes>=3.1.0",
+    "mypy>=1.8.0",
     "black>=23.0.0",
     "ruff>=0.1.0",
 ]
