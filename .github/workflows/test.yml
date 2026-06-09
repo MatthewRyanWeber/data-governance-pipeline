@@ -5,6 +5,7 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 jobs:
   test:
@@ -30,10 +31,13 @@ jobs:
         run: python -m pyflakes pipeline/ tests/
 
       - name: Run unit tests with coverage
-        # Integration tests run in the dedicated job below; exclude them here.
+        # Integration and benchmark tests run in dedicated jobs; exclude them here.
         run: >
           python -m pytest tests/ -q --tb=short
           --ignore=tests/test_integration_db.py
+          --ignore=tests/test_benchmarks.py
+          --ignore=tests/test_api_load.py
+          -m "not slow"
           --cov=pipeline --cov-report=term-missing
 
       - name: Type check with mypy
@@ -57,4 +61,25 @@ jobs:
       - name: Run live DB integration tests
         # Docker is available on GitHub's Linux runners; testcontainers spins
         # up real Postgres/MySQL/Mongo. Skips cleanly if Docker is ever absent.
-        run: python -m pytest tests/test_integration_db.py -v
+        run: python -m pytest tests/test_integration_db.py -v -m integration
+
+  benchmarks:
+    name: Performance benchmarks
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install -e ".[dev]"
+          pip install pyarrow duckdb paramiko boto3
+
+      - name: Run benchmarks
+        run: >
+          python -m pytest tests/test_benchmarks.py tests/test_api_load.py
+          -v -m slow -s
