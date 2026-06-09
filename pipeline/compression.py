@@ -18,6 +18,7 @@ import gzip
 import io
 import logging
 import os
+import re
 import zipfile
 from pathlib import Path
 
@@ -29,13 +30,17 @@ logger = logging.getLogger(__name__)
 _builtin_open = open
 
 
+_WIN_DRIVE_RE = re.compile(r"^[A-Za-z]:[/\\]")
+
+
 def _validate_archive_member(name: str) -> None:
     """Reject archive members with path traversal or absolute paths."""
     normalized = os.path.normpath(name)
     if (normalized.startswith("..")
             or os.path.isabs(normalized)
             or name.startswith("/")
-            or name.startswith("\\")):
+            or name.startswith("\\")
+            or _WIN_DRIVE_RE.match(name)):
         raise ValueError(
             f"Archive member '{name}' contains a path traversal or "
             "absolute path — refusing to extract."

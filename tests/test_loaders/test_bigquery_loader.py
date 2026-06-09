@@ -15,12 +15,14 @@ from unittest.mock import MagicMock, patch
 
 import pandas as pd
 
+from pipeline.constants import HAS_BIGQUERY
 from pipeline.loaders.bigquery_loader import BigQueryLoader
 
 _CFG = {"project": "proj", "dataset": "ds", "location": "US"}
 _DF = pd.DataFrame({"id": [1, 2], "name": ["a", "b"]})
 
 
+@unittest.skipUnless(HAS_BIGQUERY, "google-cloud-bigquery not installed")
 class TestBigQueryBulkLoad(unittest.TestCase):
     def setUp(self):
         self.gov = MagicMock()
@@ -51,6 +53,7 @@ class TestBigQueryBulkLoad(unittest.TestCase):
         self.assertEqual(table_id, "proj.ds.tbl")
 
 
+@unittest.skipUnless(HAS_BIGQUERY, "google-cloud-bigquery not installed")
 class TestBigQueryUpsert(unittest.TestCase):
     def setUp(self):
         self.gov = MagicMock()

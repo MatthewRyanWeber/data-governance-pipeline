@@ -21,6 +21,12 @@ import pandas as pd
 import pipeline.loaders.redshift_loader as rs_mod
 import pipeline.loaders.snowflake_loader as sf_mod
 import pipeline.loaders.synapse_loader as syn_mod
+
+try:
+    import azure.storage.blob  # noqa: F401
+    _HAS_AZURE = True
+except ImportError:
+    _HAS_AZURE = False
 from pipeline.loaders.snowflake_loader import SnowflakeLoader
 from pipeline.loaders.redshift_loader import RedshiftLoader
 from pipeline.loaders.synapse_loader import SynapseLoader
@@ -98,6 +104,7 @@ class TestRedshiftS3Copy(unittest.TestCase):
         fb.assert_called_once()
 
 
+@unittest.skipUnless(_HAS_AZURE, "azure-storage-blob not installed")
 class TestSynapseBlobCopy(unittest.TestCase):
     def setUp(self):
         self.gov = MagicMock()
