@@ -10,6 +10,7 @@ Revision history
 1.3   2026-06-09   Added TestAPIWithRealPipeline: real CSV-to-SQLite through API.
 1.4   2026-06-09   Added config validation tests for destination-specific required keys.
 2.0   2026-06-09   Migrated from Flask/unittest to Quart/pytest-asyncio.
+2.1   2026-06-09   Added Prometheus /metrics/prometheus endpoint tests.
 """
 
 import asyncio
@@ -609,3 +610,52 @@ class TestAPIWithRealPipeline:
             final_resp = await client.get("/status")
             final = await final_resp.get_json()
             assert final["status"] in ("idle", "failed")
+
+
+# ── Prometheus ────────────────────────────────────────────────────────────
+
+class TestPrometheusEndpoint:
+    """Tests for /metrics/prometheus Prometheus text scrape endpoint."""
+
+    def setup_method(self):
+        os.environ["PIPELINE_API_KEYS"] = "test-key"
+
+    def teardown_method(self):
+        os.environ.pop("PIPELINE_API_KEYS", None)
+
+    @pytest.mark.asyncio
+    async def test_returns_501_without_exporter(self):
+        from pipeline.api import create_app
+        app = create_app(pipeline_fn=lambda s, d, c: None)
+        async with app.test_client() as client:
+            resp = await client.get("/metrics/prometheus")
+            assert resp.status_code == 501
+
+    @pytest.mark.asyncio
+    async def test_returns_200_with_exporter(self):
+        from unittest.mock import MagicMock
+        exporter = MagicMock()
+        exporter._render_metrics.return_value = (
+            "# HELP pipeline_runs_total Total pipeline runs\n"
+            "# TYPE pipeline_runs_total counter\n"
+            "pipeline_runs_total 5\n"
+        )
+        from pipeline.api import create_app
+        app = create_app(pipeline_fn=lambda s, d, c: None, prometheus_exporter=exporter)
+        async with app.test_client() as client:
+            resp = await client.get("/metrics/prometheus")
+            assert resp.status_code == 200
+            assert "text/plain" in resp.content_type
+            body = (await resp.get_data()).decode()
+            assert "pipeline_runs_total" in body
+
+    @pytest.mark.asyncio
+    async def test_no_auth_required(self):
+        from unittest.mock import MagicMock
+        exporter = MagicMock()
+        exporter._render_metrics.return_value = "# empty\n"
+        from pipeline.api import create_app
+        app = create_app(pipeline_fn=lambda s, d, c: None, prometheus_exporter=exporter)
+        async with app.test_client() as client:
+            resp = await client.get("/metrics/prometheus")
+            assert resp.status_code == 200

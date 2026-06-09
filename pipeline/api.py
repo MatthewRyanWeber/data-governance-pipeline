@@ -23,6 +23,7 @@ Revision history
                    replaced _state dict with _RunStatus dataclass.
 2.2   2026-06-09   /health includes circuit breaker state, degrades status
                    when any breaker is open.
+2.3   2026-06-09   Added /metrics/prometheus endpoint for Prometheus text scraping.
 """
 
 import functools
@@ -85,7 +86,7 @@ def _fire_webhook(url: str, payload: dict) -> None:
         logger.warning("[API] Webhook to %s failed: %s", url, exc)
 
 
-def create_app(pipeline_fn=None, max_queue_size: int | None = None) -> "Quart":
+def create_app(pipeline_fn=None, max_queue_size: int | None = None, prometheus_exporter=None) -> "Quart":
     """
     Create and configure the Quart application.
 
@@ -541,6 +542,19 @@ def create_app(pipeline_fn=None, max_queue_size: int | None = None) -> "Quart":
                 "run_id": _status.run_id,
                 "metrics": _status.metrics,
             })
+
+    @app.route("/metrics/prometheus", methods=["GET"])
+    async def prometheus_metrics():
+        """Prometheus text exposition endpoint — no auth (standard for scraping)."""
+        if prometheus_exporter is None:
+            return _error_response(
+                "prometheus_not_configured",
+                "Prometheus exporter is not configured.",
+                501,
+            )
+        from quart import Response
+        body = prometheus_exporter._render_metrics()
+        return Response(body, content_type="text/plain; version=0.0.4")
 
     # ── Auth token endpoints ──────────────────────────────────────────
 
