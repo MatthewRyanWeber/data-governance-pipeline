@@ -12,7 +12,6 @@ Revision history
 import unittest
 from unittest.mock import MagicMock
 
-import numpy as np
 import pandas as pd
 
 from pipeline.data_standardiser import DataStandardiser
