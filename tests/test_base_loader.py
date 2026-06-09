@@ -6,6 +6,7 @@ Revision history
 1.0   2026-06-08   Initial test suite covering validate_sql_identifier,
                    validate_float_vector, validate_column_names, and BaseLoader.
 1.1   2026-06-09   Added retry_with_backoff and circuit breaker integration tests.
+1.2   2026-06-09   Added field-level encryption helpers tests.
 """
 
 import logging
@@ -264,6 +265,59 @@ class TestRetryWithBackoff(unittest.TestCase):
         first_call = gov.retry_attempt.call_args_list[0]
         self.assertEqual(first_call[0][0], 1)
         self.assertEqual(first_call[0][1], 3)
+
+
+# ── Field-level encryption helpers ─────────────────────────────────────────
+
+class TestFieldLevelEncryption(unittest.TestCase):
+    """Tests for BaseLoader._encrypt_columns, _decrypt_columns, _apply_load_encryption."""
+
+    def _make(self):
+        gov = MagicMock()
+        return BaseLoader(gov=gov), gov
+
+    def _key(self):
+        from pipeline.privacy.column_encryptor import ColumnEncryptor
+        return ColumnEncryptor.generate_key()
+
+    def test_encrypt_adds_prefix(self):
+        loader, _ = self._make()
+        df = pd.DataFrame({"secret": ["alice", "bob"]})
+        key = self._key()
+        result = loader._encrypt_columns(df, ["secret"], key)
+        for val in result["secret"]:
+            self.assertTrue(str(val).startswith("ENCRYPTED:"))
+
+    def test_round_trip_recovers_values(self):
+        loader, _ = self._make()
+        df = pd.DataFrame({"secret": ["alice", "bob"], "public": [1, 2]})
+        key = self._key()
+        encrypted = loader._encrypt_columns(df.copy(), ["secret"], key)
+        decrypted = loader._decrypt_columns(encrypted, ["secret"], key)
+        self.assertEqual(decrypted["secret"].tolist(), ["alice", "bob"])
+        self.assertEqual(decrypted["public"].tolist(), [1, 2])
+
+    def test_apply_load_encryption_no_op_without_config(self):
+        loader, _ = self._make()
+        df = pd.DataFrame({"a": [1, 2]})
+        result = loader._apply_load_encryption(df, {})
+        self.assertEqual(result["a"].tolist(), [1, 2])
+
+    def test_apply_load_encryption_encrypts_with_config(self):
+        loader, _ = self._make()
+        key = self._key()
+        df = pd.DataFrame({"secret": ["val1", "val2"]})
+        cfg = {"encrypt_columns": ["secret"], "encryption_key": key}
+        result = loader._apply_load_encryption(df, cfg)
+        for val in result["secret"]:
+            self.assertTrue(str(val).startswith("ENCRYPTED:"))
+
+    def test_missing_columns_ignored(self):
+        loader, _ = self._make()
+        key = self._key()
+        df = pd.DataFrame({"a": [1]})
+        result = loader._encrypt_columns(df, ["nonexistent"], key)
+        self.assertEqual(result["a"].tolist(), [1])
 
 
 if __name__ == "__main__":

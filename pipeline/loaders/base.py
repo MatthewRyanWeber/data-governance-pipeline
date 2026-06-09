@@ -12,6 +12,7 @@ Revision history
 1.2   2026-06-08   Added _engine_scope context manager.
 1.3   2026-06-09   Added opt-in circuit breaker helpers.
 1.4   2026-06-09   Added _retry_with_backoff helper with circuit breaker integration.
+1.5   2026-06-09   Added field-level encryption helpers for transparent encrypt-on-load.
 """
 
 import contextlib
@@ -231,3 +232,29 @@ class BaseLoader:
                     time.sleep(wait)
         self._record_circuit_failure()
         raise last_exc
+
+    # ── Field-level encryption (opt-in) ──────────────────────────────────
+
+    def _encrypt_columns(self, df, columns: list[str], key: str):
+        """Encrypt specified columns using Fernet AES-256-CBC."""
+        from pipeline.privacy.column_encryptor import ColumnEncryptor
+        enc = ColumnEncryptor(self.gov, key)
+        return enc.encrypt(df, columns)
+
+    def _decrypt_columns(self, df, columns: list[str], key: str):
+        """Decrypt previously-encrypted columns."""
+        from pipeline.privacy.column_encryptor import ColumnEncryptor
+        enc = ColumnEncryptor(self.gov, key)
+        return enc.decrypt(df, columns)
+
+    def _apply_load_encryption(self, df, cfg: dict):
+        """
+        Encrypt columns before load if cfg specifies encrypt_columns + encryption_key.
+
+        Returns df unchanged if encryption is not configured.
+        """
+        columns = cfg.get("encrypt_columns")
+        key = cfg.get("encryption_key")
+        if not columns or not key:
+            return df
+        return self._encrypt_columns(df, columns, key)
