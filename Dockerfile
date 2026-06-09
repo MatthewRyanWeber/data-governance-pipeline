@@ -1,16 +1,18 @@
-# Stage 1: builder — install dependencies into a virtual env
+# Stage 1: builder — install all dependencies
 FROM python:3.12-slim AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends unixodbc \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 COPY pyproject.toml .
-RUN pip install --no-cache-dir "." pyarrow duckdb paramiko boto3
+COPY pipeline/ pipeline/
+RUN pip install --no-cache-dir ".[dev]" pyarrow duckdb paramiko boto3
 
-# Stage 2: test — add dev deps + tests, run tests (used by CI)
+# Stage 2: test — run tests (used by CI via --target test)
 FROM builder AS test
 
-RUN pip install --no-cache-dir ".[dev]"
-COPY pipeline/ pipeline/
 COPY tests/ tests/
 RUN python -m pytest tests/ -q --tb=short \
     --ignore=tests/test_extensions \
