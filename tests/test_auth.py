@@ -5,9 +5,12 @@ Revision history
 ────────────────
 1.0   2026-06-09   Initial release.
 1.1   2026-06-09   Migrated API tests to async for Quart.
+1.2   2026-06-09   Added persistent revocation tests, fixed fixture ordering.
 """
 
 import os
+import shutil
+import tempfile
 import time
 import unittest
 
@@ -18,10 +21,11 @@ import pytest
 def _clean_auth_state():
     """Reset JWT module state between tests."""
     yield
-    from pipeline.auth import reset_state
-    reset_state()
+    os.environ.pop("PIPELINE_JWT_REVOCATION_DB", None)
     os.environ.pop("PIPELINE_API_KEYS", None)
     os.environ.pop("PIPELINE_JWT_SECRET", None)
+    from pipeline.auth import reset_state
+    reset_state()
 
 
 class TestJWTTokenCreation(unittest.TestCase):
@@ -256,3 +260,43 @@ class TestAPIWithoutJWT:
                                      headers={"X-API-Key": "static-key-only"},
                                      json={"jti": "some-jti"})
             assert resp.status_code == 501
+
+
+# ── Persistent revocation store ──────────────────────────────────────────
+
+class TestPersistentRevocation(unittest.TestCase):
+    """SQLite-backed revocation survives re-initialization."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="auth_revoke_")
+        self.db_path = os.path.join(self.tmpdir, "revoke.db")
+        os.environ["PIPELINE_JWT_SECRET"] = "test-secret-key-for-unit-tests-32b"
+        os.environ["PIPELINE_JWT_REVOCATION_DB"] = self.db_path
+        from pipeline.auth import reset_state
+        reset_state()
+
+    def tearDown(self):
+        os.environ.pop("PIPELINE_JWT_REVOCATION_DB", None)
+        os.environ.pop("PIPELINE_JWT_SECRET", None)
+        from pipeline.auth import reset_state
+        reset_state()
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_revocation_persists_across_reinit(self):
+        from pipeline.auth import create_token, validate_token, revoke_token, reset_state
+        result = create_token("test-user", 3600)
+        claims = validate_token(result["token"])
+        revoke_token(claims["jti"])
+
+        reset_state()
+
+        with self.assertRaises(ValueError):
+            validate_token(result["token"])
+
+    def test_prune_removes_expired_from_db(self):
+        from pipeline.auth import revoke_token, is_revoked, prune_revoked
+        revoke_token("old-jti", expires_at=time.time() - 10)
+        self.assertTrue(is_revoked("old-jti"))
+        removed = prune_revoked()
+        self.assertEqual(removed, 1)
+        self.assertFalse(is_revoked("old-jti"))

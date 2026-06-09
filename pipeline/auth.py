@@ -5,19 +5,26 @@ Opt-in via ``PIPELINE_JWT_SECRET`` env var. When the secret is not set,
 all JWT functions raise ``RuntimeError`` — the API falls through to
 static API key auth with zero behavior change.
 
+Revocation is in-memory by default (lost on restart). Set
+``PIPELINE_JWT_REVOCATION_DB`` to a file path for SQLite-backed
+persistent revocation that survives process restarts.
+
 Layer 0 — no internal package imports.
 
 Revision history
 ────────────────
 1.0   2026-06-09   Initial release: create, validate, revoke JWT tokens.
 1.1   2026-06-09   Removed stale env var caching, auto-prune on validate.
+1.2   2026-06-09   Added persistent SQLite revocation store (opt-in).
 """
 
 import logging
 import os
+import sqlite3
 import threading
 import time
 import uuid
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -31,8 +38,102 @@ _JWT_ALGORITHM = "HS256"
 _JWT_ISSUER = "data-governance-pipeline"
 _DEFAULT_EXPIRY_SECONDS = 3600
 
-_revoked_lock = threading.Lock()
-_revoked_tokens: dict[str, float] = {}
+
+# ── Revocation stores ─────────────────────────────────────────────────
+
+
+class _InMemoryRevocationStore:
+    """In-memory JTI revocation — lost on process restart."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._tokens: dict[str, float] = {}
+
+    def add(self, jti: str, expires_at: float) -> None:
+        with self._lock:
+            self._tokens[jti] = expires_at
+
+    def contains(self, jti: str) -> bool:
+        with self._lock:
+            return jti in self._tokens
+
+    def prune(self) -> int:
+        now = time.time()
+        with self._lock:
+            expired = [j for j, exp in self._tokens.items() if exp < now]
+            for j in expired:
+                del self._tokens[j]
+        return len(expired)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._tokens.clear()
+
+
+class _PersistentRevocationStore:
+    """SQLite-backed JTI revocation — survives process restarts."""
+
+    def __init__(self, db_path: str):
+        self._db_path = db_path
+        self._lock = threading.Lock()
+        self._conn = self._init_db()
+
+    def _init_db(self) -> sqlite3.Connection:
+        Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(self._db_path, check_same_thread=False)
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS revoked_tokens (
+                jti        TEXT PRIMARY KEY,
+                expires_at REAL NOT NULL
+            );
+        """)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        return conn
+
+    def add(self, jti: str, expires_at: float) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO revoked_tokens (jti, expires_at) VALUES (?, ?)",
+                (jti, expires_at),
+            )
+            self._conn.commit()
+
+    def contains(self, jti: str) -> bool:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT 1 FROM revoked_tokens WHERE jti = ?", (jti,)
+            ).fetchone()
+            return row is not None
+
+    def prune(self) -> int:
+        now = time.time()
+        with self._lock:
+            cursor = self._conn.execute(
+                "DELETE FROM revoked_tokens WHERE expires_at < ?", (now,)
+            )
+            self._conn.commit()
+            return cursor.rowcount
+
+    def clear(self) -> None:
+        with self._lock:
+            self._conn.execute("DELETE FROM revoked_tokens")
+            self._conn.commit()
+
+
+def _create_revocation_store():
+    """Factory: return persistent store if env var is set, else in-memory."""
+    db_path = os.environ.get("PIPELINE_JWT_REVOCATION_DB")
+    if db_path:
+        logger.info("[AUTH] Using persistent revocation store: %s", db_path)
+        return _PersistentRevocationStore(db_path)
+    return _InMemoryRevocationStore()
+
+
+_revocation_store = _create_revocation_store()
+
+
+# ── Public API ─────────────────────────────────────────────────────────
 
 
 def jwt_available() -> bool:
@@ -112,28 +213,21 @@ def validate_token(token: str) -> dict:
 def revoke_token(jti: str, expires_at: float | None = None) -> None:
     """Add a token ID to the revocation set."""
     exp = expires_at or (time.time() + _DEFAULT_EXPIRY_SECONDS)
-    with _revoked_lock:
-        _revoked_tokens[jti] = exp
+    _revocation_store.add(jti, exp)
     logger.info("[AUTH] Token revoked: jti=%s", jti)
 
 
 def is_revoked(jti: str) -> bool:
     """Check if a token has been revoked."""
-    with _revoked_lock:
-        return jti in _revoked_tokens
+    return _revocation_store.contains(jti)
 
 
 def prune_revoked() -> int:
     """Remove expired entries from the revocation set. Returns count removed."""
-    now = time.time()
-    with _revoked_lock:
-        expired = [jti for jti, exp in _revoked_tokens.items() if exp < now]
-        for jti in expired:
-            del _revoked_tokens[jti]
-    return len(expired)
+    return _revocation_store.prune()
 
 
 def reset_state() -> None:
-    """Clear all module-level state. For testing only."""
-    with _revoked_lock:
-        _revoked_tokens.clear()
+    """Reinitialize store from current env vars. For testing only."""
+    global _revocation_store
+    _revocation_store = _create_revocation_store()
