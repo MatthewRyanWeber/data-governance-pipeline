@@ -328,6 +328,9 @@ def create_app(pipeline_fn=None) -> "Flask":
 if __name__ == "__main__":
     import signal
 
+    from pipeline.logging_setup import auto_configure_logging
+    auto_configure_logging()
+
     def _shutdown(signum, frame):
         logger.info("Received signal %s — shutting down.", signum)
         raise SystemExit(0)

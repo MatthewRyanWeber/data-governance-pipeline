@@ -17,11 +17,14 @@ Revision history
 1.0   2026-06-07   Initial release: rotating file + console handlers.
 1.1   2026-06-08   Added JsonFormatter, CorrelationIdFilter, SensitiveDataFilter,
                    timed_operation, per-module level overrides.
+1.2   2026-06-09   Added container-aware logging (configure_container_logging,
+                   auto_configure_logging).
 """
 
 import contextlib
 import json
 import logging
+import os
 import re
 import sys
 import threading
@@ -197,3 +200,53 @@ def setup_logging(log_directory: Path | None = None, **kwargs) -> None:
     if log_directory is None:
         log_directory = Path("logs")
     configure_logging(log_directory, **kwargs)
+
+
+def _is_container_environment() -> bool:
+    """Detect whether the process is running inside a container."""
+    if os.environ.get("PIPELINE_CONTAINER"):
+        return True
+    if os.environ.get("KUBERNETES_SERVICE_HOST"):
+        return True
+    if os.path.isfile("/.dockerenv"):
+        return True
+    return False
+
+
+def configure_container_logging(
+    console_level: int = logging.INFO,
+    module_levels: dict[str, int] | None = None,
+) -> None:
+    """Set up JSON logging to stdout only — no file handlers.
+
+    Designed for container environments where log aggregators (Datadog,
+    CloudWatch, Loki, ELK) parse structured JSON from stdout.
+    """
+    root = logging.getLogger()
+    root.setLevel(logging.DEBUG)
+
+    if root.handlers:
+        return
+
+    formatter = JsonFormatter(datefmt="%Y-%m-%d %H:%M:%S")
+    correlation_filter = CorrelationIdFilter()
+    sensitive_filter = SensitiveDataFilter()
+
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setLevel(console_level)
+    handler.setFormatter(formatter)
+    handler.addFilter(correlation_filter)
+    handler.addFilter(sensitive_filter)
+    root.addHandler(handler)
+
+    if module_levels:
+        for module_name, level in module_levels.items():
+            logging.getLogger(module_name).setLevel(level)
+
+
+def auto_configure_logging(**kwargs) -> None:
+    """Pick container or file-based logging based on environment detection."""
+    if _is_container_environment():
+        configure_container_logging(**kwargs)
+    else:
+        setup_logging(**kwargs)

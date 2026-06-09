@@ -12,6 +12,7 @@ Revision history
 
 import json
 import logging
+import os
 import shutil
 import sys
 import tempfile
@@ -22,7 +23,9 @@ from pipeline.logging_setup import (
     CorrelationIdFilter,
     JsonFormatter,
     SensitiveDataFilter,
+    auto_configure_logging,
     clear_correlation_id,
+    configure_container_logging,
     configure_logging,
     get_correlation_id,
     set_correlation_id,
@@ -255,6 +258,64 @@ class TestConfigureLogging(unittest.TestCase):
         # Second call should return early
         configure_logging(self.log_path)
         self.assertEqual(len(root.handlers), handler_count)
+
+
+class TestContainerLogging(unittest.TestCase):
+    """Container-aware logging configuration."""
+
+    def setUp(self):
+        root = logging.getLogger()
+        root.handlers.clear()
+        self._orig_env = {
+            k: os.environ.pop(k, None)
+            for k in ("PIPELINE_CONTAINER", "KUBERNETES_SERVICE_HOST")
+        }
+
+    def tearDown(self):
+        root = logging.getLogger()
+        for handler in list(root.handlers):
+            handler.close()
+        root.handlers.clear()
+        for k, v in self._orig_env.items():
+            if v is not None:
+                os.environ[k] = v
+            else:
+                os.environ.pop(k, None)
+
+    def test_container_logging_uses_json_stdout(self):
+        configure_container_logging()
+        root = logging.getLogger()
+        self.assertEqual(len(root.handlers), 1)
+        handler = root.handlers[0]
+        self.assertIsInstance(handler, logging.StreamHandler)
+        self.assertIs(handler.stream, sys.stdout)
+        self.assertIsInstance(handler.formatter, JsonFormatter)
+
+    def test_container_logging_has_filters(self):
+        configure_container_logging()
+        handler = logging.getLogger().handlers[0]
+        filter_types = {type(f) for f in handler.filters}
+        self.assertIn(CorrelationIdFilter, filter_types)
+        self.assertIn(SensitiveDataFilter, filter_types)
+
+    def test_auto_configure_detects_container_env(self):
+        os.environ["PIPELINE_CONTAINER"] = "1"
+        auto_configure_logging()
+        root = logging.getLogger()
+        self.assertEqual(len(root.handlers), 1)
+        self.assertIsInstance(root.handlers[0].formatter, JsonFormatter)
+
+    def test_auto_configure_falls_back_to_file_logging(self):
+        tmpdir = tempfile.mkdtemp()
+        try:
+            auto_configure_logging(log_directory=Path(tmpdir))
+            root = logging.getLogger()
+            self.assertEqual(len(root.handlers), 3)
+        finally:
+            for handler in list(logging.getLogger().handlers):
+                handler.close()
+            logging.getLogger().handlers.clear()
+            shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 if __name__ == "__main__":

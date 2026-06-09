@@ -34,6 +34,8 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 COPY pyproject.toml .
 COPY pipeline/ pipeline/
 
+ENV PIPELINE_CONTAINER=1 PYTHONUNBUFFERED=1
+
 USER appuser
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
