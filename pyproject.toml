@@ -202,6 +202,7 @@ dev = [
     "PyYAML>=6.0.0",
     "faker>=22.0.0",
     "phonenumbers>=8.13.0",
+    "hypothesis>=6.90.0",
 ]
 
 # Everything
