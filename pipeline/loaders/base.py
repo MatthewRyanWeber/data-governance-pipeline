@@ -11,6 +11,7 @@ Revision history
 1.1   2026-06-08   Added BaseLoader, validate_column_names.
 1.2   2026-06-08   Added _engine_scope context manager.
 1.3   2026-06-09   Added opt-in circuit breaker helpers.
+1.4   2026-06-09   Added _retry_with_backoff helper with circuit breaker integration.
 """
 
 import contextlib
@@ -193,3 +194,40 @@ class BaseLoader:
         cb = getattr(self, "_circuit_breaker", None)
         if cb is not None:
             cb.record_failure()
+
+    # ── Retry with exponential backoff (opt-in) ──────────────────────────
+
+    def _retry_with_backoff(
+        self,
+        fn,
+        max_retries: int = 3,
+        base_delay: float = 1.0,
+    ):
+        """
+        Call fn() with exponential backoff, circuit breaker integration,
+        and governance logging per retry.
+
+        On success: records circuit success, returns result.
+        On exhaustion: records circuit failure, raises last exception.
+        """
+        import time
+
+        self._check_circuit()
+        last_exc = None
+        for attempt in range(max_retries):
+            try:
+                result = fn()
+                self._record_circuit_success()
+                return result
+            except Exception as exc:
+                last_exc = exc
+                if attempt < max_retries - 1:
+                    wait = base_delay * (2 ** attempt)
+                    self.gov.retry_attempt(attempt + 1, max_retries, wait, exc)
+                    logger.warning(
+                        "Retry %d/%d after %.1fs: %s",
+                        attempt + 1, max_retries, wait, exc,
+                    )
+                    time.sleep(wait)
+        self._record_circuit_failure()
+        raise last_exc

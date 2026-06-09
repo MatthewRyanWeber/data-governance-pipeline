@@ -5,15 +5,16 @@ Revision history
 ────────────────
 1.0   2026-06-08   Initial test suite covering validate_sql_identifier,
                    validate_float_vector, validate_column_names, and BaseLoader.
+1.1   2026-06-09   Added retry_with_backoff and circuit breaker integration tests.
 """
 
 import logging
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pandas as pd
 
-from pipeline.exceptions import ConfigValidationError
+from pipeline.exceptions import CircuitOpenError, ConfigValidationError
 from pipeline.loaders.base import (
     BaseLoader,
     validate_column_names,
@@ -191,6 +192,78 @@ class TestBaseLoader(unittest.TestCase):
         cfg = {"timeout": 30}
         with self.assertRaises(ConfigValidationError):
             loader._validate_config(cfg, ["host|path"])
+
+
+# ── Retry with backoff ─────────────────────────────────────────────────────
+
+class TestRetryWithBackoff(unittest.TestCase):
+    """Tests for BaseLoader._retry_with_backoff."""
+
+    def _make(self):
+        gov = MagicMock()
+        return BaseLoader(gov=gov), gov
+
+    def test_succeeds_first_try(self):
+        loader, gov = self._make()
+        fn = MagicMock(return_value="ok")
+        result = loader._retry_with_backoff(fn, max_retries=3, base_delay=0.01)
+        self.assertEqual(result, "ok")
+        fn.assert_called_once()
+        gov.retry_attempt.assert_not_called()
+
+    def test_succeeds_on_retry(self):
+        loader, gov = self._make()
+        fn = MagicMock(side_effect=[RuntimeError("fail"), "ok"])
+        result = loader._retry_with_backoff(fn, max_retries=3, base_delay=0.01)
+        self.assertEqual(result, "ok")
+        self.assertEqual(fn.call_count, 2)
+        gov.retry_attempt.assert_called_once()
+
+    def test_exhausted_raises_last_exception(self):
+        loader, gov = self._make()
+        fn = MagicMock(side_effect=RuntimeError("boom"))
+        with self.assertRaises(RuntimeError) as ctx:
+            loader._retry_with_backoff(fn, max_retries=3, base_delay=0.01)
+        self.assertIn("boom", str(ctx.exception))
+        self.assertEqual(fn.call_count, 3)
+        self.assertEqual(gov.retry_attempt.call_count, 2)
+
+    def test_circuit_success_recorded(self):
+        loader, gov = self._make()
+        loader._init_circuit_breaker("test_cb", failure_threshold=5)
+        cb = loader._circuit_breaker
+        fn = MagicMock(return_value="ok")
+        with patch.object(cb, "record_success") as mock_success:
+            loader._retry_with_backoff(fn, max_retries=3, base_delay=0.01)
+            mock_success.assert_called_once()
+
+    def test_circuit_failure_recorded_on_exhaust(self):
+        loader, gov = self._make()
+        loader._init_circuit_breaker("test_cb", failure_threshold=5)
+        cb = loader._circuit_breaker
+        fn = MagicMock(side_effect=RuntimeError("fail"))
+        with patch.object(cb, "record_failure") as mock_fail:
+            with self.assertRaises(RuntimeError):
+                loader._retry_with_backoff(fn, max_retries=2, base_delay=0.01)
+            mock_fail.assert_called_once()
+
+    def test_circuit_open_blocks_retry(self):
+        loader, gov = self._make()
+        loader._init_circuit_breaker("test_cb2", failure_threshold=1)
+        loader._circuit_breaker.record_failure()
+        fn = MagicMock(return_value="ok")
+        with self.assertRaises(CircuitOpenError):
+            loader._retry_with_backoff(fn, max_retries=3, base_delay=0.01)
+        fn.assert_not_called()
+
+    def test_governance_logging_per_retry(self):
+        loader, gov = self._make()
+        fn = MagicMock(side_effect=[RuntimeError("e1"), RuntimeError("e2"), "ok"])
+        loader._retry_with_backoff(fn, max_retries=3, base_delay=0.01)
+        self.assertEqual(gov.retry_attempt.call_count, 2)
+        first_call = gov.retry_attempt.call_args_list[0]
+        self.assertEqual(first_call[0][0], 1)
+        self.assertEqual(first_call[0][1], 3)
 
 
 if __name__ == "__main__":
