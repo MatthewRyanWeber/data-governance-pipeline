@@ -1,12 +1,24 @@
 """
 Backward-compatibility shim for pipeline_v3.
 
-All code that does ``from pipeline_v3 import X`` continues to work.
-The real implementations now live in the ``pipeline`` package.
+.. deprecated:: 4.25.0
+    This module will be removed in v5.0. Import directly from the
+    ``pipeline`` package instead.
 
-This file re-exports every public name that pipeline_v3.py previously
-exposed at module level.
+Revision history
+────────────────
+1.0   2026-06-07   Initial extraction as backward-compat shim.
+1.1   2026-06-09   Added deprecation warning (removal planned for v5.0).
 """
+
+import warnings
+
+warnings.warn(
+    "pipeline_v3 is deprecated and will be removed in v5.0. "
+    "Import directly from the 'pipeline' package instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 # ── Core classes ─────────────────────────────────────────────────────────────
 from pipeline.governance_logger import GovernanceLogger  # noqa: F401
