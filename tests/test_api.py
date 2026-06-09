@@ -1,15 +1,18 @@
 """
-Tests for the Flask REST API: authentication, validation, rate limiting.
+Tests for the Flask REST API: authentication, validation, rate limiting,
+run queue, history, and cancel.
 
 Revision history
 ────────────────
 1.0   2026-06-08   Initial release.
 1.1   2026-06-09   Updated for structured error responses, fixed flaky concurrent test.
+1.2   2026-06-09   Added tests for run queue, history, cancel, webhook.
 """
 
 import os
 import threading
 import unittest
+from unittest.mock import patch
 
 
 class TestAPIAuth(unittest.TestCase):
@@ -176,6 +179,191 @@ class TestAPIRateLimiting(unittest.TestCase):
         resp = self.client.get("/status", headers=headers)
         self.assertEqual(resp.status_code, 429)
         self.assertEqual(resp.get_json()["error"]["code"], "rate_limit_exceeded")
+
+
+class TestAPIQueue(unittest.TestCase):
+    """Run queue accepts multiple runs when max_queue_size > 0."""
+
+    def setUp(self):
+        os.environ.pop("PIPELINE_API_KEYS", None)
+
+    def test_queue_second_run_while_first_running(self):
+        started = threading.Event()
+        release = threading.Event()
+
+        def slow_pipeline(s, d, c):
+            started.set()
+            release.wait(timeout=5)
+
+        from pipeline.api import create_app
+        app = create_app(pipeline_fn=slow_pipeline, max_queue_size=5)
+        client = app.test_client()
+
+        resp1 = client.post("/run", json={"source": "a.csv", "destination": "sqlite"})
+        self.assertEqual(resp1.status_code, 202)
+        self.assertEqual(resp1.get_json()["status"], "started")
+
+        started.wait(timeout=5)
+
+        resp2 = client.post("/run", json={"source": "b.csv", "destination": "sqlite"})
+        self.assertEqual(resp2.status_code, 202)
+        self.assertEqual(resp2.get_json()["status"], "queued")
+        self.assertEqual(resp2.get_json()["position"], 1)
+
+        release.set()
+
+    def test_queue_overflow_rejected(self):
+        started = threading.Event()
+        release = threading.Event()
+
+        def slow_pipeline(s, d, c):
+            started.set()
+            release.wait(timeout=5)
+
+        from pipeline.api import create_app
+        app = create_app(pipeline_fn=slow_pipeline, max_queue_size=1)
+        client = app.test_client()
+
+        client.post("/run", json={"source": "a.csv", "destination": "sqlite"})
+        started.wait(timeout=5)
+        client.post("/run", json={"source": "b.csv", "destination": "sqlite"})
+        resp = client.post("/run", json={"source": "c.csv", "destination": "sqlite"})
+        self.assertEqual(resp.status_code, 429)
+        self.assertEqual(resp.get_json()["error"]["code"], "queue_full")
+        release.set()
+
+
+class TestAPICancel(unittest.TestCase):
+    """Cancel queued and running pipeline runs."""
+
+    def setUp(self):
+        os.environ.pop("PIPELINE_API_KEYS", None)
+
+    def test_cancel_queued_run(self):
+        started = threading.Event()
+        release = threading.Event()
+
+        def slow_pipeline(s, d, c):
+            started.set()
+            release.wait(timeout=5)
+
+        from pipeline.api import create_app
+        app = create_app(pipeline_fn=slow_pipeline, max_queue_size=5)
+        client = app.test_client()
+
+        client.post("/run", json={"source": "a.csv", "destination": "sqlite"})
+        started.wait(timeout=5)
+        resp2 = client.post("/run", json={"source": "b.csv", "destination": "sqlite"})
+        queued_id = resp2.get_json()["run_id"]
+
+        resp = client.post(f"/runs/{queued_id}/cancel")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.get_json()["status"], "cancelled")
+        release.set()
+
+    def test_cancel_running_run(self):
+        started = threading.Event()
+        release = threading.Event()
+
+        def slow_pipeline(s, d, c):
+            started.set()
+            release.wait(timeout=5)
+
+        from pipeline.api import create_app
+        app = create_app(pipeline_fn=slow_pipeline)
+        client = app.test_client()
+
+        resp1 = client.post("/run", json={"source": "a.csv", "destination": "sqlite"})
+        run_id = resp1.get_json()["run_id"]
+        started.wait(timeout=5)
+
+        resp = client.post(f"/runs/{run_id}/cancel")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.get_json()["status"], "cancel_requested")
+        release.set()
+
+    def test_cancel_unknown_run_returns_404(self):
+        from pipeline.api import create_app
+        app = create_app(pipeline_fn=lambda s, d, c: None)
+        client = app.test_client()
+        resp = client.post("/runs/nonexistent-id/cancel")
+        self.assertEqual(resp.status_code, 404)
+
+
+class TestAPIHistory(unittest.TestCase):
+    """Run history endpoints /runs and /runs/<id>."""
+
+    def setUp(self):
+        os.environ.pop("PIPELINE_API_KEYS", None)
+        from pipeline.api import create_app
+        self.app = create_app(pipeline_fn=lambda s, d, c: None)
+        self.client = self.app.test_client()
+
+    def test_list_runs_returns_json(self):
+        resp = self.client.get("/runs")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.get_json()
+        self.assertIn("runs", body)
+        self.assertIn("count", body)
+
+    def test_run_detail_not_found(self):
+        resp = self.client.get("/runs/nonexistent-id")
+        self.assertEqual(resp.status_code, 404)
+
+    def test_run_detail_found_after_run(self):
+        done = threading.Event()
+
+        def fast_pipeline(s, d, c):
+            done.set()
+
+        from pipeline.api import create_app
+        app = create_app(pipeline_fn=fast_pipeline)
+        client = app.test_client()
+
+        resp = client.post("/run", json={"source": "x.csv", "destination": "sqlite"})
+        run_id = resp.get_json()["run_id"]
+        done.wait(timeout=5)
+
+        import time
+        time.sleep(0.05)
+
+        resp = client.get(f"/runs/{run_id}")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.get_json()
+        self.assertEqual(body["run_id"], run_id)
+
+
+class TestAPIWebhook(unittest.TestCase):
+    """Webhook notifications on run completion."""
+
+    def setUp(self):
+        os.environ.pop("PIPELINE_API_KEYS", None)
+
+    @patch("pipeline.api._fire_webhook")
+    def test_webhook_fired_on_completion(self, mock_webhook):
+        done = threading.Event()
+
+        def fast_pipeline(s, d, c):
+            done.set()
+
+        from pipeline.api import create_app
+        app = create_app(pipeline_fn=fast_pipeline)
+        client = app.test_client()
+
+        resp = client.post("/run", json={
+            "source": "x.csv", "destination": "sqlite",
+            "webhook_url": "https://example.com/hook",
+        })
+        self.assertEqual(resp.status_code, 202)
+        done.wait(timeout=5)
+
+        import time
+        time.sleep(0.1)
+
+        mock_webhook.assert_called_once()
+        call_args = mock_webhook.call_args
+        self.assertEqual(call_args[0][0], "https://example.com/hook")
+        self.assertIn("run_id", call_args[0][1])
 
 
 if __name__ == "__main__":

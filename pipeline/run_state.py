@@ -15,6 +15,7 @@ Revision history
 1.0   2026-06-08   Initial release.
 1.1   2026-06-08   Merged CheckpointManager into RunStateManager.
 1.2   2026-06-09   Added public get_state() method for API progress tracking.
+1.3   2026-06-09   Added list_runs() for paginated run history.
 """
 
 import json
@@ -123,6 +124,31 @@ class RunStateManager:
     def get_state(self, run_id: str) -> RunState | None:
         """Return the persisted state for a given run, or None if not found."""
         return self._read(run_id)
+
+    def list_runs(
+        self,
+        limit: int = 20,
+        offset: int = 0,
+        status_filter: str | None = None,
+    ) -> list[RunState]:
+        """Return recent runs sorted by started_at descending."""
+        if not self.state_dir.exists():
+            return []
+
+        runs: list[RunState] = []
+        for path in self.state_dir.glob("*.json"):
+            try:
+                with open(path, encoding="utf-8") as f:
+                    data = json.load(f)
+                state = RunState(**data)
+                if status_filter and state.status != status_filter:
+                    continue
+                runs.append(state)
+            except (json.JSONDecodeError, TypeError, KeyError) as exc:
+                logger.warning("[RUN_STATE] Corrupt state file %s: %s", path, exc)
+
+        runs.sort(key=lambda r: r.started_at, reverse=True)
+        return runs[offset:offset + limit]
 
     def get_incomplete_runs(self) -> list[RunState]:
         """Find all runs in 'running' state — these are crash candidates."""
