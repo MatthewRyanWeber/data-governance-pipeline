@@ -231,7 +231,7 @@ class OpenLineageEmitter:
         try:
             import requests
             resp = requests.post(
-                self.http_endpoint,
+                self.http_endpoint,  # type: ignore[arg-type]
                 json=event,
                 timeout=5,
                 headers={"Content-Type": "application/json"},

@@ -168,11 +168,10 @@ class CompressionHandler:
                 if not tar_members:
                     raise ValueError(f"TGZ archive is empty: {path}")
                 _validate_archive_member(tar_members[0].name)
-                inner = tf.extractfile(tar_members[0])
-                if inner is None:
+                inner_stream = tf.extractfile(tar_members[0])
+                if inner_stream is None:
                     raise ValueError(f"Could not extract member from TGZ: {path}")
-                assert inner is not None
-                return SizeLimitedReader(inner, limit, owner=tf)  # type: ignore[arg-type]
+                return SizeLimitedReader(inner_stream, limit, owner=tf)  # type: ignore[arg-type]
             except Exception:
                 tf.close()
                 raise
