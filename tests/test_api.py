@@ -7,12 +7,18 @@ Revision history
 1.0   2026-06-08   Initial release.
 1.1   2026-06-09   Updated for structured error responses, fixed flaky concurrent test.
 1.2   2026-06-09   Added tests for run queue, history, cancel, webhook.
+1.3   2026-06-09   Added TestAPIWithRealPipeline: real CSV-to-SQLite through API.
 """
 
 import os
+import shutil
+import tempfile
 import threading
+import time
 import unittest
 from unittest.mock import patch
+
+import pandas as pd
 
 
 class TestAPIAuth(unittest.TestCase):
@@ -364,6 +370,106 @@ class TestAPIWebhook(unittest.TestCase):
         call_args = mock_webhook.call_args
         self.assertEqual(call_args[0][0], "https://example.com/hook")
         self.assertIn("run_id", call_args[0][1])
+
+
+class TestAPIWithRealPipeline(unittest.TestCase):
+    """Wire a real CSV-to-SQLite pipeline through the API endpoints."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="api_real_")
+        self.csv_path = os.path.join(self.tmpdir, "api_test.csv")
+        self.db_path = os.path.join(self.tmpdir, "output")
+
+        df = pd.DataFrame([
+            {"id": 1, "name": "Alice", "age": 30},
+            {"id": 2, "name": "Bob", "age": 25},
+            {"id": 3, "name": "Carol", "age": 40},
+        ])
+        df.to_csv(self.csv_path, index=False, encoding="utf-8")
+
+        from pipeline.constants import RunContext
+        from pipeline.extract import Extractor
+        from pipeline.governance_logger import GovernanceLogger
+        from pipeline.loaders.sql_loader import SQLLoader
+        from pipeline.transform import Transformer
+
+        def _real_pipeline(source, destination, config):
+            run_context = RunContext()
+            gov = GovernanceLogger(
+                source_name=os.path.basename(source),
+                log_dir=os.path.join(self.tmpdir, "gov"),
+                run_context=run_context,
+            )
+            gov.pipeline_start({"source": source})
+            extractor = Extractor(gov)
+            df_extracted = extractor.extract(source)
+            transformer = Transformer(gov, run_context=run_context)
+            df_out = transformer.transform(df_extracted, [], "mask", drop_cols=[])
+            loader = SQLLoader(gov, db_type="sqlite")
+            loader.load(df_out, {"db_name": self.db_path}, "api_result", if_exists="replace")
+            gov.pipeline_end({"rows": len(df_out)})
+
+        from pipeline.api import create_app
+        self.app = create_app(pipeline_fn=_real_pipeline)
+        self.client = self.app.test_client()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_api_runs_real_pipeline(self):
+        """POST /run with real pipeline, poll /status until complete, verify SQLite."""
+        resp = self.client.post("/run", json={
+            "source": self.csv_path,
+            "destination": "sqlite",
+            "config": {"db_name": self.db_path},
+        })
+        self.assertEqual(resp.status_code, 202)
+        run_id = resp.get_json()["run_id"]
+        self.assertIsNotNone(run_id)
+
+        for _ in range(50):
+            status_resp = self.client.get("/status")
+            status_data = status_resp.get_json()
+            if status_data.get("status") in ("idle", "completed"):
+                break
+            time.sleep(0.1)
+
+        final_status = self.client.get("/status").get_json()
+        self.assertIn(final_status["status"], ("idle", "completed"))
+
+        from sqlalchemy import create_engine
+        engine = create_engine(f"sqlite:///{self.db_path}.db")
+        try:
+            result = pd.read_sql('SELECT * FROM "api_result"', engine)
+        finally:
+            engine.dispose()
+        self.assertEqual(len(result), 3)
+        self.assertIn("_pipeline_id", result.columns)
+
+        metrics_resp = self.client.get("/metrics")
+        self.assertEqual(metrics_resp.status_code, 200)
+        metrics = metrics_resp.get_json()
+        self.assertIn("run_id", metrics)
+        self.assertIn("metrics", metrics)
+        self.assertIn("duration_s", metrics["metrics"])
+
+    def test_api_reports_real_error(self):
+        """POST /run with a nonexistent source, verify structured error in status."""
+        resp = self.client.post("/run", json={
+            "source": os.path.join(self.tmpdir, "DOES_NOT_EXIST.csv"),
+            "destination": "sqlite",
+        })
+        self.assertEqual(resp.status_code, 202)
+
+        for _ in range(50):
+            status_resp = self.client.get("/status")
+            status_data = status_resp.get_json()
+            if status_data.get("status") in ("idle", "failed"):
+                break
+            time.sleep(0.1)
+
+        final = self.client.get("/status").get_json()
+        self.assertIn(final["status"], ("idle", "failed"))
 
 
 if __name__ == "__main__":
