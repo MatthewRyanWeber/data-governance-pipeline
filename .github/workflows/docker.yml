@@ -12,8 +12,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build Docker image
-        run: docker build -t data-governance-pipeline .
-
       - name: Run tests in Docker
         run: docker build --target test -t data-governance-pipeline-test .
+
+      - name: Build production image
+        run: docker build -t data-governance-pipeline .

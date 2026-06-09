@@ -255,3 +255,8 @@ def create_app(pipeline_fn=None) -> "Flask":
 
     logger.info("Pipeline Flask API created.")
     return app
+
+
+if __name__ == "__main__":
+    app = create_app()
+    app.run(host="0.0.0.0", port=5000)

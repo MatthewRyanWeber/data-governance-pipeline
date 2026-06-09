@@ -1,4 +1,4 @@
-# Stage 1: builder — install all dependencies
+# Stage 1: builder — install production dependencies only
 FROM python:3.12-slim AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends unixodbc \
@@ -8,11 +8,12 @@ WORKDIR /app
 
 COPY pyproject.toml .
 COPY pipeline/ pipeline/
-RUN pip install --no-cache-dir ".[dev]" pyarrow duckdb paramiko boto3
+RUN pip install --no-cache-dir ".[api]" pyarrow duckdb paramiko boto3
 
-# Stage 2: test — run tests (used by CI via --target test)
+# Stage 2: test — add dev deps + tests, run tests (used by CI via --target test)
 FROM builder AS test
 
+RUN pip install --no-cache-dir ".[dev]"
 COPY tests/ tests/
 RUN python -m pytest tests/ -q --tb=short \
     --ignore=tests/test_extensions \
@@ -40,4 +41,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 
 EXPOSE 5000
 
-ENTRYPOINT ["python", "-m", "pipeline"]
+ENTRYPOINT ["python", "-m", "pipeline.api"]
