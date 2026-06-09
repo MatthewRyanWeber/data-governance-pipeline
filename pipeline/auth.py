@@ -16,6 +16,8 @@ Revision history
 1.0   2026-06-09   Initial release: create, validate, revoke JWT tokens.
 1.1   2026-06-09   Removed stale env var caching, auto-prune on validate.
 1.2   2026-06-09   Added persistent SQLite revocation store (opt-in).
+1.3   2026-06-09   PRAGMA synchronous=FULL for revocation durability,
+                   added close() to persistent store.
 """
 
 import logging
@@ -88,8 +90,13 @@ class _PersistentRevocationStore:
             );
         """)
         conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA synchronous=FULL")
         return conn
+
+    def close(self) -> None:
+        with self._lock:
+            if self._conn:
+                self._conn.close()
 
     def add(self, jti: str, expires_at: float) -> None:
         with self._lock:

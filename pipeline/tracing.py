@@ -12,11 +12,13 @@ Revision history
 1.0   2026-06-09   Initial release: init_tracing, get_tracer, traced_operation.
 1.1   2026-06-09   Added native OTEL metrics: init_metrics, get_meter,
                    get_instruments.
+1.2   2026-06-09   Thread-safe get_instruments() via double-checked locking.
 """
 
 import contextlib
 import logging
 import os
+import threading
 import time
 
 logger = logging.getLogger(__name__)
@@ -41,6 +43,7 @@ except ImportError:
 _initialized = False
 _metrics_initialized = False
 _instruments: dict | None = None
+_instruments_lock = threading.Lock()
 
 
 def init_tracing(
@@ -206,32 +209,37 @@ def get_instruments() -> dict:
 
     Keys: extract_rows, transform_duration, load_rows, load_errors,
     load_duration. All are safe to call without OTEL installed.
+    Thread-safe via double-checked locking.
     """
     global _instruments
     if _instruments is not None:
         return _instruments
 
-    meter = get_meter("pipeline")
-    _instruments = {
-        "extract_rows": meter.create_counter(
-            "pipeline.extract.rows",
-            description="Total rows extracted",
-        ),
-        "transform_duration": meter.create_histogram(
-            "pipeline.transform.duration_seconds",
-            description="Transform stage duration in seconds",
-        ),
-        "load_rows": meter.create_counter(
-            "pipeline.load.rows",
-            description="Total rows loaded",
-        ),
-        "load_errors": meter.create_counter(
-            "pipeline.load.errors",
-            description="Total load errors",
-        ),
-        "load_duration": meter.create_histogram(
-            "pipeline.load.duration_seconds",
-            description="Load stage duration in seconds",
-        ),
-    }
-    return _instruments
+    with _instruments_lock:
+        if _instruments is not None:
+            return _instruments
+
+        meter = get_meter("pipeline")
+        _instruments = {
+            "extract_rows": meter.create_counter(
+                "pipeline.extract.rows",
+                description="Total rows extracted",
+            ),
+            "transform_duration": meter.create_histogram(
+                "pipeline.transform.duration_seconds",
+                description="Transform stage duration in seconds",
+            ),
+            "load_rows": meter.create_counter(
+                "pipeline.load.rows",
+                description="Total rows loaded",
+            ),
+            "load_errors": meter.create_counter(
+                "pipeline.load.errors",
+                description="Total load errors",
+            ),
+            "load_duration": meter.create_histogram(
+                "pipeline.load.duration_seconds",
+                description="Load stage duration in seconds",
+            ),
+        }
+        return _instruments

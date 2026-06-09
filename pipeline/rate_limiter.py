@@ -11,6 +11,7 @@ Revision history
 ────────────────
 1.0   2026-06-09   Initial release: InMemoryRateLimiter, PersistentRateLimiter.
 1.1   2026-06-09   Added WAL mode to PersistentRateLimiter for concurrent access.
+1.2   2026-06-09   Added close() for connection cleanup.
 """
 
 import logging
@@ -88,6 +89,11 @@ class PersistentRateLimiter:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
         return conn
+
+    def close(self) -> None:
+        with self._lock:
+            if self._conn:
+                self._conn.close()
 
     def allow(self, key: str) -> bool:
         now = time.time()

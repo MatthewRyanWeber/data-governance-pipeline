@@ -10,6 +10,7 @@ Layer 0 — no internal package imports.
 Revision history
 ────────────────
 1.0   2026-06-09   Initial release.
+1.1   2026-06-09   Added unregister() for cleanup, documented lock hierarchy.
 """
 
 import enum
@@ -19,6 +20,8 @@ import time
 
 logger = logging.getLogger(__name__)
 
+# Lock hierarchy: _registry_lock (global) -> self._lock (per-breaker).
+# Always acquire in this order to prevent deadlock.
 _active_breakers: dict[str, "CircuitBreaker"] = {}
 _registry_lock = threading.Lock()
 
@@ -136,6 +139,12 @@ class CircuitBreaker:
                 "recovery_timeout": self._recovery_timeout,
                 "success_threshold": self._success_threshold,
             }
+
+
+def unregister(name: str) -> None:
+    """Remove a breaker from the active registry."""
+    with _registry_lock:
+        _active_breakers.pop(name, None)
 
 
 def get_all_breakers() -> dict[str, dict]:

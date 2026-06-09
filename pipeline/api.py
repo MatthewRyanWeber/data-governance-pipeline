@@ -520,11 +520,16 @@ def create_app(pipeline_fn=None, max_queue_size: int | None = None) -> "Quart":
         """Healthcheck endpoint — no auth required."""
         from pipeline.circuit_breaker import get_all_breakers
         breakers = get_all_breakers()
-        has_open = any(b["state"] == "open" for b in breakers.values())
+        open_count = sum(1 for b in breakers.values() if b["state"] == "open")
+        half_open_count = sum(1 for b in breakers.values() if b["state"] == "half_open")
         return jsonify({
-            "status": "degraded" if has_open else "healthy",
+            "status": "degraded" if open_count else "healthy",
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "circuit_breakers": breakers,
+            "circuit_breakers": {
+                "total": len(breakers),
+                "open": open_count,
+                "half_open": half_open_count,
+            },
         })
 
     @app.route("/metrics", methods=["GET"])

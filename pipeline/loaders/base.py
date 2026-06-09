@@ -181,15 +181,15 @@ class BaseLoader:
 
     def _check_circuit(self) -> None:
         cb = getattr(self, "_circuit_breaker", None)
-        if cb and not cb.allow_request():
+        if cb is not None and not cb.allow_request():
             raise CircuitOpenError(cb.name)
 
     def _record_circuit_success(self) -> None:
         cb = getattr(self, "_circuit_breaker", None)
-        if cb:
+        if cb is not None:
             cb.record_success()
 
     def _record_circuit_failure(self) -> None:
         cb = getattr(self, "_circuit_breaker", None)
-        if cb:
+        if cb is not None:
             cb.record_failure()

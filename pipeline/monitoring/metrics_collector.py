@@ -10,6 +10,7 @@ Revision history
 ────────────────
 1.0   2026-06-07   Initial extraction from monolith.
 1.1   2026-06-09   Emit to OTEL instruments on record_extract/transform/load.
+1.2   2026-06-09   Cache instrument references on instance to avoid repeated lookups.
 """
 
 import logging
@@ -44,31 +45,35 @@ class MetricsCollector:
         self._stage_start: float = 0.0
         self.rows_in: int = 0
         self.rows_out: int = 0
+        self._otel: dict | None = None
+
+    def _instruments(self) -> dict:
+        if self._otel is None:
+            from pipeline.tracing import get_instruments
+            self._otel = get_instruments()
+        return self._otel
 
     def record_extract(self, rows: int, elapsed: float) -> None:
         self.start_stage("extract")
         self._stages["extract"]["rows"] = rows
         self._stages["extract"]["elapsed"] = elapsed
         self.gov.stage_metrics("extract", rows, elapsed)
-        from pipeline.tracing import get_instruments
-        get_instruments()["extract_rows"].add(rows)
+        self._instruments()["extract_rows"].add(rows)
 
     def record_transform(self, rows: int, elapsed: float) -> None:
         self.start_stage("transform")
         self._stages["transform"]["rows"] = rows
         self._stages["transform"]["elapsed"] = elapsed
         self.gov.stage_metrics("transform", rows, elapsed)
-        from pipeline.tracing import get_instruments
-        get_instruments()["transform_duration"].record(elapsed)
+        self._instruments()["transform_duration"].record(elapsed)
 
     def record_load(self, rows: int, elapsed: float) -> None:
         self.start_stage("load")
         self._stages["load"]["rows"] = rows
         self._stages["load"]["elapsed"] = elapsed
         self.gov.stage_metrics("load", rows, elapsed)
-        from pipeline.tracing import get_instruments
-        get_instruments()["load_rows"].add(rows)
-        get_instruments()["load_duration"].record(elapsed)
+        self._instruments()["load_rows"].add(rows)
+        self._instruments()["load_duration"].record(elapsed)
 
     def record_validate(self, rows_total: int, rows_failed: int, elapsed: float) -> None:
         self.start_stage("validate")
