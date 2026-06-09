@@ -12,6 +12,7 @@ Revision history
 1.0   2026-06-09   Initial OpenAPI specification with Swagger UI.
 1.1   2026-06-09   Updated error/status schemas for structured error responses and progress.
 1.2   2026-06-09   Added config validation error example to /run 400 response.
+1.3   2026-06-09   Added /auth/token, /auth/revoke endpoints and JWTAuth scheme.
 """
 
 import logging
@@ -68,6 +69,10 @@ def get_openapi_spec() -> dict:
             {
                 "name": "Observability",
                 "description": "Health checks and execution metrics.",
+            },
+            {
+                "name": "Auth",
+                "description": "JWT token creation and revocation.",
             },
             {
                 "name": "Documentation",
@@ -450,6 +455,98 @@ def get_openapi_spec() -> dict:
                     },
                 },
             },
+            "/auth/token": {
+                "post": {
+                    "tags": ["Auth"],
+                    "summary": "Create a JWT token",
+                    "description": (
+                        "Exchange an existing API key for a short-lived JWT. "
+                        "Requires PIPELINE_JWT_SECRET to be configured on the server."
+                    ),
+                    "operationId": "createAuthToken",
+                    "security": [{"ApiKeyHeader": []}, {"BearerAuth": []}],
+                    "requestBody": {
+                        "required": False,
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "subject": {
+                                            "type": "string",
+                                            "description": "Subject claim for the JWT.",
+                                            "default": "api-client",
+                                        },
+                                        "expiry_seconds": {
+                                            "type": "integer",
+                                            "description": "Token lifetime in seconds (60-86400).",
+                                            "default": 3600,
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                    },
+                    "responses": {
+                        "201": {
+                            "description": "JWT created.",
+                            "content": {
+                                "application/json": {
+                                    "schema": {"$ref": "#/components/schemas/TokenResponse"},
+                                },
+                            },
+                        },
+                        "501": {
+                            "description": "JWT auth not configured on this server.",
+                        },
+                    },
+                },
+            },
+            "/auth/revoke": {
+                "post": {
+                    "tags": ["Auth"],
+                    "summary": "Revoke a JWT token",
+                    "description": "Revoke a previously issued JWT by its jti claim.",
+                    "operationId": "revokeAuthToken",
+                    "security": [{"ApiKeyHeader": []}, {"BearerAuth": []}],
+                    "requestBody": {
+                        "required": True,
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": ["jti"],
+                                    "properties": {
+                                        "jti": {
+                                            "type": "string",
+                                            "description": "The jti claim from the token to revoke.",
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                    },
+                    "responses": {
+                        "200": {
+                            "description": "Token revoked.",
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "jti": {"type": "string"},
+                                            "status": {"type": "string", "enum": ["revoked"]},
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                        "501": {
+                            "description": "JWT auth not configured on this server.",
+                        },
+                    },
+                },
+            },
             "/openapi.json": {
                 "get": {
                     "tags": ["Documentation"],
@@ -514,6 +611,15 @@ def get_openapi_spec() -> dict:
                     "description": (
                         "API key passed as a Bearer token in the Authorization "
                         "header. The same keys accepted by X-API-Key work here."
+                    ),
+                },
+                "JWTAuth": {
+                    "type": "http",
+                    "scheme": "bearer",
+                    "bearerFormat": "JWT",
+                    "description": (
+                        "JWT token obtained from POST /auth/token. "
+                        "Requires PIPELINE_JWT_SECRET to be set on the server."
                     ),
                 },
             },
@@ -703,6 +809,24 @@ def get_openapi_spec() -> dict:
                         },
                     },
                     "required": ["error"],
+                },
+                "TokenResponse": {
+                    "type": "object",
+                    "properties": {
+                        "token": {
+                            "type": "string",
+                            "description": "Signed JWT token.",
+                        },
+                        "expires_at": {
+                            "type": "string",
+                            "format": "date-time",
+                            "description": "ISO 8601 timestamp when the token expires.",
+                        },
+                        "token_type": {
+                            "type": "string",
+                            "enum": ["bearer"],
+                        },
+                    },
                 },
                 "ConflictError": {
                     "type": "object",

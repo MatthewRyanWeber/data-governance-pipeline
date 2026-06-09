@@ -17,6 +17,7 @@ Revision history
 1.4   2026-06-09   Run queue, history (/runs), cancel, webhook notifications.
 1.5   2026-06-09   Replaced inline rate limiter with pluggable rate_limiter module.
 1.6   2026-06-09   Added config validation via validate_loader_config on /run.
+1.7   2026-06-09   JWT auth token rotation: /auth/token, /auth/revoke, bearer JWT support.
 """
 
 import functools
@@ -114,8 +115,10 @@ def create_app(pipeline_fn=None, max_queue_size: int | None = None) -> "Flask":
 
     # ── Authentication ──────────────────────────────────────────────────
 
+    from pipeline.auth import jwt_available, validate_token as _validate_jwt
+
     def require_auth(fn):
-        """Decorator: reject requests without a valid API key."""
+        """Decorator: reject requests without a valid API key or JWT."""
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
             key = (
@@ -131,19 +134,27 @@ def create_app(pipeline_fn=None, max_queue_size: int | None = None) -> "Flask":
                     429,
                 )
 
-            if not api_keys:
+            if not api_keys and not jwt_available():
                 return fn(*args, **kwargs)
 
-            if not key or not any(hmac.compare_digest(key, k) for k in api_keys):
-                logger.warning("[API] Unauthorized request to %s from %s",
-                               request.path, request.remote_addr)
-                return _error_response(
-                    "unauthorized",
-                    "Unauthorized. Provide a valid API key.",
-                    401,
-                )
+            if key and "." in key and jwt_available():
+                try:
+                    _validate_jwt(key)
+                    return fn(*args, **kwargs)
+                except Exception:
+                    pass
 
-            return fn(*args, **kwargs)
+            if api_keys and key and any(hmac.compare_digest(key, k) for k in api_keys):
+                return fn(*args, **kwargs)
+
+            logger.warning("[API] Unauthorized request to %s from %s",
+                           request.path, request.remote_addr)
+            return _error_response(
+                "unauthorized",
+                "Unauthorized. Provide a valid API key.",
+                401,
+            )
+
         return wrapper
 
     # ── Shared state ────────────────────────────────────────────────────
@@ -503,6 +514,56 @@ def create_app(pipeline_fn=None, max_queue_size: int | None = None) -> "Flask":
                 "run_id": _state["run_id"],
                 "metrics": _state["metrics"],
             })
+
+    # ── Auth token endpoints ──────────────────────────────────────────
+
+    @app.route("/auth/token", methods=["POST"])
+    @require_auth
+    def create_auth_token():
+        """Exchange an API key for a short-lived JWT."""
+        if not jwt_available():
+            return _error_response(
+                "jwt_not_configured",
+                "JWT auth is not enabled. Set PIPELINE_JWT_SECRET to enable.",
+                501,
+            )
+        body = request.get_json(silent=True) or {}
+        subject = body.get("subject", "api-client")
+        expiry = body.get("expiry_seconds", 3600)
+
+        if not isinstance(expiry, int) or expiry < 60 or expiry > 86400:
+            return _error_response(
+                "invalid_expiry",
+                "expiry_seconds must be an integer between 60 and 86400.",
+                400,
+            )
+
+        from pipeline.auth import create_token
+        result = create_token(subject, expiry)
+        return jsonify(result), 201
+
+    @app.route("/auth/revoke", methods=["POST"])
+    @require_auth
+    def revoke_auth_token():
+        """Revoke a JWT by its jti claim."""
+        if not jwt_available():
+            return _error_response(
+                "jwt_not_configured",
+                "JWT auth is not enabled. Set PIPELINE_JWT_SECRET to enable.",
+                501,
+            )
+        body = request.get_json(silent=True) or {}
+        jti = body.get("jti")
+        if not jti or not isinstance(jti, str):
+            return _error_response(
+                "missing_jti",
+                "Request body must include a 'jti' string.",
+                400,
+            )
+
+        from pipeline.auth import revoke_token
+        revoke_token(jti)
+        return jsonify({"jti": jti, "status": "revoked"})
 
     # ── Documentation ──────────────────────────────────────────────────
     try:

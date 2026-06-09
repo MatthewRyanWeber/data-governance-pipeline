@@ -184,11 +184,13 @@ grafana = [
 # REST API server
 api = [
     "flask>=3.0.0",
+    "PyJWT>=2.8.0",
 ]
 
 # Development / testing
 dev = [
     "flask>=3.0.0",
+    "PyJWT>=2.8.0",
     "pytest>=7.4.0",
     "pytest-cov>=4.1.0",
     "pyflakes>=3.1.0",
