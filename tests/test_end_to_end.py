@@ -14,6 +14,8 @@ Revision history
 1.0   2026-06-09   Initial release: 8 end-to-end scenarios covering CSV,
                    JSON, dry-run, governance audit, replace/append, upsert,
                    empty-frame, and gzip-compressed extraction.
+1.1   2026-06-09   Added TestFullStackPipeline: MetricsCollector, SLAMonitor,
+                   DataObserver, checkpoint recovery, metrics report.
 """
 
 import gzip
@@ -27,12 +29,16 @@ import unittest
 import pandas as pd
 from sqlalchemy import create_engine
 
-from pipeline.constants import RunContext
+from pipeline.checkpoint import CheckpointManager
+from pipeline.constants import RunContext, CHECKPOINT_FILE
 from pipeline.extract import Extractor
 from pipeline.governance_logger import GovernanceLogger
 from pipeline.helpers import detect_pii
 from pipeline.load_verifier import LoadVerifier
 from pipeline.loaders.sql_loader import SQLLoader
+from pipeline.monitoring.metrics_collector import MetricsCollector
+from pipeline.monitoring.observability import DataObserver
+from pipeline.monitoring.sla_monitor import SLAMonitor
 from pipeline.profiler import DataProfiler
 from pipeline.transform import Transformer
 
@@ -538,6 +544,233 @@ class TestPipelineLoadVerifier(unittest.TestCase):
         self.assertFalse(result["match"])
         self.assertEqual(result["source_rows"], 100)
         self.assertEqual(result["dest_rows"], 7)
+
+
+class TestFullStackPipeline(unittest.TestCase):
+    """Exercise the complete pipeline stack including monitoring, observability,
+    and checkpoint recovery — the stages that simpler E2E tests skip."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="e2e_fullstack_")
+        self._checkpoint_backup = None
+        if CHECKPOINT_FILE.exists():
+            self._checkpoint_backup = CHECKPOINT_FILE.read_text(encoding="utf-8")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+        if self._checkpoint_backup is not None:
+            CHECKPOINT_FILE.write_text(self._checkpoint_backup, encoding="utf-8")
+        elif CHECKPOINT_FILE.exists():
+            CHECKPOINT_FILE.unlink()
+
+    def test_full_stack_csv_all_stages(self):
+        """Extract -> PII -> transform -> profile -> observe -> SLA -> load ->
+        verify -> metrics.  Assert governance ledger has events from ALL stages."""
+        csv_path = os.path.join(self.tmpdir, "fullstack.csv")
+        db_path = os.path.join(self.tmpdir, "output")
+        gov_dir = os.path.join(self.tmpdir, "gov_logs")
+        _write_csv(csv_path)
+
+        run_context = RunContext()
+        gov = GovernanceLogger(
+            source_name="fullstack.csv",
+            log_dir=gov_dir,
+            run_context=run_context,
+        )
+        gov.pipeline_start({"source": csv_path, "destination": "sqlite"})
+
+        metrics = MetricsCollector(gov)
+        sla = SLAMonitor(gov, sla_seconds=600)
+        sla.start()
+
+        # Extract
+        metrics.start_stage("extract")
+        extractor = Extractor(gov)
+        df = extractor.extract(csv_path)
+        metrics.end_stage("extract", rows=len(df))
+        metrics.rows_in = len(df)
+
+        # PII + Transform
+        metrics.start_stage("transform")
+        pii_findings = detect_pii(list(df.columns))
+        transformer = Transformer(gov, run_context=run_context)
+        df = transformer.transform(df, pii_findings, "mask", drop_cols=[])
+        metrics.end_stage("transform", rows=len(df))
+
+        # Profile
+        profiler = DataProfiler(gov)
+        profile_report = profiler.profile(df)
+
+        # Observe
+        observer = DataObserver(gov, history_file=os.path.join(gov_dir, "obs.jsonl"))
+        obs_report = observer.observe(df, dataset="fullstack")
+
+        # SLA mid-check
+        sla.check("after transform")
+
+        # Load
+        metrics.start_stage("load")
+        loader = SQLLoader(gov, db_type="sqlite")
+        loader.load(df, {"db_name": db_path}, "fullstack_out", if_exists="replace")
+        metrics.end_stage("load", rows=len(df))
+        metrics.rows_out = len(df)
+
+        # Verify
+        verifier = LoadVerifier(gov)
+        verify_result = verifier.verify_row_count(
+            df, {"db_type": "sqlite", "connection_string": f"sqlite:///{db_path}.db"},
+            "fullstack_out",
+        )
+
+        # Final SLA + metrics
+        sla.final_check()
+        metrics.write_report()
+        gov.pipeline_end({"rows": len(df)})
+
+        # ── Assertions ──
+
+        # Data landed correctly
+        result = _read_table(db_path, "fullstack_out")
+        self.assertEqual(len(result), 7)
+
+        # Verify row count match
+        self.assertTrue(verify_result["match"])
+
+        # Profile has expected structure
+        self.assertEqual(profile_report["table"]["row_count"], 7)
+        self.assertIn("columns", profile_report)
+
+        # Observability report returned
+        self.assertEqual(obs_report["row_count"], 7)
+        self.assertEqual(obs_report["dataset"], "fullstack")
+
+        # SLA not breached
+        self.assertFalse(sla.breached)
+
+        # Governance ledger covers ALL stages
+        actions = [e["action"] for e in gov.ledger_entries]
+        self.assertIn("PIPELINE_STARTED", actions)
+        self.assertIn("PIPELINE_COMPLETED", actions)
+        self.assertIn("EXTRACT_START", actions)
+        self.assertIn("EXTRACT_COMPLETE", actions)
+        self.assertIn("TRANSFORM_COMPLETE", actions)
+        self.assertIn("LOAD_COMPLETE", actions)
+        self.assertIn("PROFILE_GENERATED", actions)
+
+        # Metrics were recorded
+        metrics_events = [a for a in actions if "METRICS" in a]
+        self.assertGreater(len(metrics_events), 0)
+
+        # PII masking happened
+        pii_actions = [a for a in actions if a.startswith("PII_")]
+        self.assertGreater(len(pii_actions), 0)
+
+        # Ledger integrity
+        self.assertTrue(gov.verify_ledger())
+
+    def test_checkpoint_recovery(self):
+        """Simulate crash after chunk 1: save checkpoint, verify resume skips
+        already-completed chunks."""
+        csv_path = os.path.join(self.tmpdir, "checkpoint_test.csv")
+        _write_csv(csv_path)
+
+        run_context = RunContext()
+        gov = GovernanceLogger(
+            source_name="checkpoint_test.csv",
+            log_dir=os.path.join(self.tmpdir, "gov_logs"),
+            run_context=run_context,
+        )
+
+        source_key = "checkpoint_test.csv"
+        table_key = "ckpt_table"
+
+        ckpt = CheckpointManager(gov)
+
+        # No checkpoint should exist initially
+        last = ckpt.load_checkpoint(source_key, table_key)
+        self.assertEqual(last, -1)
+
+        # Simulate: chunk 0 loaded successfully, then crash
+        ckpt.save_checkpoint(source_key, table_key, chunk_idx=0, rows=100)
+
+        # Simulate: chunk 1 loaded successfully, then crash
+        ckpt.save_checkpoint(source_key, table_key, chunk_idx=1, rows=200)
+
+        # "Restart" — load checkpoint should return 1 (last completed chunk)
+        gov2 = GovernanceLogger(
+            source_name="checkpoint_test.csv",
+            log_dir=os.path.join(self.tmpdir, "gov_logs"),
+            run_context=RunContext(),
+        )
+        ckpt2 = CheckpointManager(gov2)
+        resumed_from = ckpt2.load_checkpoint(source_key, table_key)
+        self.assertEqual(resumed_from, 1)
+
+        # Governance should have checkpoint events
+        actions = [e["action"] for e in gov.ledger_entries]
+        checkpoint_actions = [a for a in actions if "CHECKPOINT" in a]
+        self.assertGreater(len(checkpoint_actions), 0)
+
+        # Clean up
+        ckpt2.clear_checkpoint(source_key, table_key)
+        final = ckpt2.load_checkpoint(source_key, table_key)
+        self.assertEqual(final, -1)
+
+    def test_metrics_report_contents(self):
+        """Verify MetricsCollector report has all expected fields."""
+        csv_path = os.path.join(self.tmpdir, "metrics_test.csv")
+        _write_csv(csv_path)
+
+        run_context = RunContext()
+        gov = GovernanceLogger(
+            source_name="metrics_test.csv",
+            log_dir=os.path.join(self.tmpdir, "gov_logs"),
+            run_context=run_context,
+        )
+
+        mc = MetricsCollector(gov)
+
+        mc.start_stage("extract")
+        mc.end_stage("extract", rows=7)
+        mc.rows_in = 7
+
+        mc.start_stage("transform")
+        mc.end_stage("transform", rows=7)
+
+        mc.start_stage("load")
+        mc.end_stage("load", rows=7)
+        mc.rows_out = 7
+
+        mc.write_report()
+
+        # Find the METRICS_RECORDED event in the ledger
+        metrics_events = [
+            e for e in gov.ledger_entries if e["action"] == "METRICS_RECORDED"
+        ]
+        self.assertEqual(len(metrics_events), 1)
+
+        detail = metrics_events[0]["detail"]
+        self.assertIn("total_duration_sec", detail)
+        self.assertIn("rows_input", detail)
+        self.assertIn("rows_output", detail)
+        self.assertIn("rows_dlq", detail)
+        self.assertIn("error_rate", detail)
+        self.assertIn("overall_rows_per_sec", detail)
+        self.assertIn("stages", detail)
+
+        self.assertEqual(detail["rows_input"], 7)
+        self.assertEqual(detail["rows_output"], 7)
+        self.assertEqual(detail["rows_dlq"], 0)
+
+        stages = detail["stages"]
+        self.assertIn("extract", stages)
+        self.assertIn("transform", stages)
+        self.assertIn("load", stages)
+
+        for stage_name in ("extract", "transform", "load"):
+            self.assertIn("duration_sec", stages[stage_name])
+            self.assertIn("rows", stages[stage_name])
+            self.assertIn("rows_per_sec", stages[stage_name])
 
 
 if __name__ == "__main__":
