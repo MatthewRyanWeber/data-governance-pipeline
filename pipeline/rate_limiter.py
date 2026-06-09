@@ -10,6 +10,7 @@ Layer 0 — no internal package imports.
 Revision history
 ────────────────
 1.0   2026-06-09   Initial release: InMemoryRateLimiter, PersistentRateLimiter.
+1.1   2026-06-09   Added WAL mode to PersistentRateLimiter for concurrent access.
 """
 
 import logging
@@ -84,6 +85,8 @@ class PersistentRateLimiter:
         Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(self._db_path, check_same_thread=False)
         conn.executescript(self._SCHEMA)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
         return conn
 
     def allow(self, key: str) -> bool:
