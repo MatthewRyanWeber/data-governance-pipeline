@@ -10,6 +10,11 @@ from unittest.mock import MagicMock, patch
 
 import pandas as pd
 
+from pipeline.constants import (
+    HAS_CHROMA, HAS_LANCEDB, HAS_MILVUS, HAS_PINECONE, HAS_QDRANT,
+    HAS_WEAVIATE,
+)
+
 
 class TestBaseLoaderDryRun(unittest.TestCase):
     """BaseLoader._dry_run_guard() returns True and logs when dry_run=True."""
@@ -68,6 +73,7 @@ class TestDuckDBLoaderDryRun(unittest.TestCase):
         loader.load(df, cfg, table="test_table")
 
 
+@unittest.skipUnless(HAS_MILVUS, "pymilvus not installed")
 class TestMilvusLoaderDryRun(unittest.TestCase):
     """MilvusLoader.load() short-circuits on dry_run=True."""
 
@@ -84,6 +90,7 @@ class TestMilvusLoaderDryRun(unittest.TestCase):
         self.assertEqual(result, 0)
 
 
+@unittest.skipUnless(HAS_PINECONE, "pinecone not installed")
 class TestPineconeLoaderDryRun(unittest.TestCase):
     """PineconeLoader.load() short-circuits on dry_run=True."""
 
@@ -101,6 +108,7 @@ class TestPineconeLoaderDryRun(unittest.TestCase):
         self.assertEqual(result, 0)
 
 
+@unittest.skipUnless(HAS_QDRANT, "qdrant-client not installed")
 class TestQdrantLoaderDryRun(unittest.TestCase):
     """QdrantLoader.load() short-circuits on dry_run=True."""
 
@@ -118,6 +126,7 @@ class TestQdrantLoaderDryRun(unittest.TestCase):
         self.assertEqual(result, 0)
 
 
+@unittest.skipUnless(HAS_WEAVIATE, "weaviate-client not installed")
 class TestWeaviateLoaderDryRun(unittest.TestCase):
     """WeaviateLoader.load() short-circuits on dry_run=True."""
 
@@ -134,6 +143,7 @@ class TestWeaviateLoaderDryRun(unittest.TestCase):
         self.assertEqual(result, 0)
 
 
+@unittest.skipUnless(HAS_CHROMA, "chromadb not installed")
 class TestChromaLoaderDryRun(unittest.TestCase):
     """ChromaLoader.load() short-circuits on dry_run=True."""
 
@@ -151,6 +161,7 @@ class TestChromaLoaderDryRun(unittest.TestCase):
         self.assertEqual(result, 0)
 
 
+@unittest.skipUnless(HAS_LANCEDB, "lancedb not installed")
 class TestLanceDBLoaderDryRun(unittest.TestCase):
     """LanceDBLoader.load() short-circuits on dry_run=True."""
 

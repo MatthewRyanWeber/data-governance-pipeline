@@ -51,8 +51,6 @@ class MilvusLoader(BaseLoader):
     def load(self, df, cfg, table="", if_exists="append",
              natural_keys=None) -> int:
         """Write df to a Milvus collection."""
-        from pymilvus import MilvusClient
-
         if if_exists not in ("append", "upsert", "overwrite"):
             raise ValueError(
                 f"MilvusLoader: if_exists must be 'append', 'upsert', or "
@@ -68,6 +66,8 @@ class MilvusLoader(BaseLoader):
         if self._dry_run_guard(collection, len(df)):
             return 0
         self._validate_config(cfg, ["uri"])
+
+        from pymilvus import MilvusClient
 
         uri = cfg.get("uri")
 

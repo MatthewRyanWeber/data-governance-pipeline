@@ -19,6 +19,9 @@ from unittest.mock import MagicMock, patch
 
 import pandas as pd
 
+from pipeline.constants import (
+    HAS_CHROMA, HAS_MILVUS, HAS_PINECONE, HAS_QDRANT, HAS_WEAVIATE,
+)
 from pipeline.loaders.vector.chroma_loader import ChromaLoader
 from pipeline.loaders.vector.milvus_loader import MilvusLoader
 from pipeline.loaders.vector.pinecone_loader import PineconeLoader
@@ -37,6 +40,7 @@ def _vec_df():
 
 # ── Chroma ────────────────────────────────────────────────────────────────
 
+@unittest.skipUnless(HAS_CHROMA, "chromadb not installed")
 class TestChromaLoader(unittest.TestCase):
     def setUp(self):
         self.gov = MagicMock()
@@ -98,6 +102,7 @@ class TestChromaLoader(unittest.TestCase):
 
 # ── Milvus ────────────────────────────────────────────────────────────────
 
+@unittest.skipUnless(HAS_MILVUS, "pymilvus not installed")
 class TestMilvusLoader(unittest.TestCase):
     def setUp(self):
         self.gov = MagicMock()
@@ -147,6 +152,7 @@ class TestMilvusLoader(unittest.TestCase):
 
 # ── Pinecone ──────────────────────────────────────────────────────────────
 
+@unittest.skipUnless(HAS_PINECONE, "pinecone not installed")
 class TestPineconeLoader(unittest.TestCase):
     def setUp(self):
         self.gov = MagicMock()
@@ -191,6 +197,7 @@ class TestPineconeLoader(unittest.TestCase):
 
 # ── Qdrant ────────────────────────────────────────────────────────────────
 
+@unittest.skipUnless(HAS_QDRANT, "qdrant-client not installed")
 class TestQdrantLoader(unittest.TestCase):
     def setUp(self):
         self.gov = MagicMock()
@@ -234,6 +241,7 @@ class TestQdrantLoader(unittest.TestCase):
 
 # ── Weaviate ──────────────────────────────────────────────────────────────
 
+@unittest.skipUnless(HAS_WEAVIATE, "weaviate-client not installed")
 class TestWeaviateLoader(unittest.TestCase):
     def setUp(self):
         self.gov = MagicMock()

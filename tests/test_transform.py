@@ -192,9 +192,10 @@ class TestCoerceTypes(unittest.TestCase):
 
     def test_graceful_failure(self):
         df = pd.DataFrame({"amount": ["abc", "def"]})
+        original_dtype = df["amount"].dtype
         result = self.t.coerce_types(df, {"amount": "int64"})
         # should silently keep the original dtype
-        self.assertEqual(result["amount"].dtype, object)
+        self.assertEqual(result["amount"].dtype, original_dtype)
 
     def test_missing_column_skipped(self):
         df = pd.DataFrame({"a": [1]})
@@ -203,8 +204,9 @@ class TestCoerceTypes(unittest.TestCase):
 
     def test_does_not_modify_original(self):
         df = pd.DataFrame({"x": ["1", "2"]})
+        original_dtype = df["x"].dtype
         self.t.coerce_types(df, {"x": "int64"})
-        self.assertEqual(df["x"].dtype, object)
+        self.assertEqual(df["x"].dtype, original_dtype)
 
 
 class TestApplyBusinessRules(unittest.TestCase):

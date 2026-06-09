@@ -68,10 +68,6 @@ class QdrantLoader(BaseLoader):
         if_exists : 'append' (default) or 'overwrite'. Overwrite recreates
                     the collection.
         """
-        from qdrant_client.models import (
-            VectorParams, Distance, PointStruct,
-        )
-
         if if_exists not in ("append", "overwrite"):
             raise ValueError(
                 f"QdrantLoader: if_exists must be 'append' or "
@@ -87,6 +83,10 @@ class QdrantLoader(BaseLoader):
         if self._dry_run_guard(collection_name, len(df)):
             return 0
         self._validate_config(cfg, ["url|path|memory"])
+
+        from qdrant_client.models import (
+            VectorParams, Distance, PointStruct,
+        )
 
         vector_col = cfg.get("vector_column", "embedding")
         embed_cols = cfg.get("embed_columns")

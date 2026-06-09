@@ -26,6 +26,9 @@ import pipeline.loaders.firebolt_loader as fb_mod
 import pipeline.loaders.databricks_loader as db_mod
 import pipeline.loaders.redshift_loader as rs_mod
 import pipeline.loaders.db2_loader as db2_mod
+import pipeline.loaders.hana_loader as hana_mod
+import pipeline.loaders.snowflake_loader as sf_mod
+import pipeline.loaders.synapse_loader as syn_mod
 from pipeline.loaders.clickhouse_loader import ClickHouseLoader
 from pipeline.loaders.hana_loader import HanaLoader
 from pipeline.loaders.firebolt_loader import FireboltLoader
@@ -72,7 +75,8 @@ class TestClickHouseUpsert(unittest.TestCase):
 class TestHanaUpsert(unittest.TestCase):
     def setUp(self):
         self.gov = MagicMock()
-        self.loader = HanaLoader(self.gov)
+        with patch.object(hana_mod, "HAS_HANA", True):
+            self.loader = HanaLoader(self.gov)
         self.conn = MagicMock()
         self.cursor = self.conn.cursor.return_value
         self.cfg = {"host": "h", "user": "u", "password": "p"}
@@ -193,7 +197,8 @@ class TestCockroachUpsert(unittest.TestCase):
 class TestSnowflakeUpsert(unittest.TestCase):
     def setUp(self):
         self.gov = MagicMock()
-        self.loader = SnowflakeLoader(self.gov)
+        with patch.object(sf_mod, "HAS_SNOWFLAKE", True):
+            self.loader = SnowflakeLoader(self.gov)
         self.conn = MagicMock()
         self.cursor = self.conn.cursor.return_value
         self.cfg = {"account": "a", "user": "u", "password": "p",
@@ -214,7 +219,8 @@ class TestSnowflakeUpsert(unittest.TestCase):
 class TestSynapseUpsert(unittest.TestCase):
     def setUp(self):
         self.gov = MagicMock()
-        self.loader = SynapseLoader(self.gov)
+        with patch.object(syn_mod, "HAS_SYNAPSE", True):
+            self.loader = SynapseLoader(self.gov)
         self.conn = MagicMock()
         self.cursor = self.conn.cursor.return_value
         self.cfg = {"host": "h", "database": "d", "user": "u", "password": "p"}

@@ -22,7 +22,9 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install dependencies
-        run: pip install -e ".[dev]" pytest-cov
+        run: |
+          pip install -e ".[dev]" pytest-cov
+          pip install pyarrow duckdb paramiko boto3
 
       - name: Lint with pyflakes
         run: python -m pyflakes pipeline/ tests/

@@ -64,8 +64,6 @@ class PineconeLoader(BaseLoader):
         if_exists : 'upsert' (default) or 'overwrite'. Overwrite deletes
                     all vectors in the namespace before upserting.
         """
-        from pinecone import Pinecone
-
         if if_exists not in ("upsert", "overwrite"):
             raise ValueError(
                 f"PineconeLoader: if_exists must be 'upsert' or "
@@ -81,6 +79,8 @@ class PineconeLoader(BaseLoader):
         if self._dry_run_guard(index_name, len(df)):
             return 0
         self._validate_config(cfg, ["api_key", "index_name"])
+
+        from pinecone import Pinecone
 
         api_key = cfg.get("api_key")
 

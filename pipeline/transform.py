@@ -79,12 +79,13 @@ class Transformer:
     def mask_pii(self, df, columns: list[str]):
         """Hash-mask the listed columns in place (SHA-256, 8 hex chars)."""
         import hashlib
+        import pandas as pd
         df = df.copy()
         for col in columns:
             if col in df.columns:
                 df[col] = df[col].apply(
                     lambda v: hashlib.sha256(str(v).encode()).hexdigest()[:8]
-                    if v is not None else v
+                    if not pd.isna(v) else None
                 )
         return df
 
@@ -92,12 +93,13 @@ class Transformer:
         return df.drop_duplicates(subset=subset).reset_index(drop=True)
 
     def fill_nulls(self, df, fill: dict | None = None):
+        import pandas as pd
         df = df.copy()
         if fill:
             df = df.fillna(fill)
         else:
             for col in df.columns:
-                if df[col].dtype == object:
+                if pd.api.types.is_string_dtype(df[col]):
                     df[col] = df[col].fillna("")
                 else:
                     df[col] = df[col].fillna(0)

@@ -49,8 +49,6 @@ class LanceDBLoader(BaseLoader):
     def load(self, df, cfg, table, if_exists="append",
              natural_keys=None) -> int:
         """Write df to a LanceDB table."""
-        import lancedb
-
         if if_exists not in ("append", "overwrite", "upsert"):
             raise ValueError(
                 f"LanceDBLoader: if_exists must be 'append', 'overwrite', or "
@@ -59,6 +57,8 @@ class LanceDBLoader(BaseLoader):
         if self._dry_run_guard(table, len(df)):
             return 0
         self._validate_config(cfg, ["db_path|uri"])
+
+        import lancedb
 
         uri = cfg.get("uri") or cfg.get("db_path")
         vector_column = cfg.get("vector_column")
