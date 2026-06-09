@@ -8,10 +8,11 @@ on:
 
 jobs:
   test:
+    name: Unit tests (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.10", "3.12"]
+        python-version: ["3.10", "3.12", "3.13"]
 
     steps:
       - uses: actions/checkout@v4
@@ -21,13 +22,37 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install dependencies
-        run: pip install -e ".[dev]"
+        run: pip install -e ".[dev]" pytest-cov
 
       - name: Lint with pyflakes
         run: python -m pyflakes pipeline/ tests/
 
-      - name: Run tests
-        run: python -m pytest tests/ -q --tb=short
+      - name: Run unit tests with coverage
+        # Integration tests run in the dedicated job below; exclude them here.
+        run: >
+          python -m pytest tests/ -q --tb=short
+          --ignore=tests/test_integration_db.py
+          --cov=pipeline --cov-report=term-missing
 
       - name: Type check with mypy
         run: python -m mypy pipeline/ --ignore-missing-imports
+
+  integration:
+    name: Live DB integration (testcontainers)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install -e ".[dev]"
+          pip install "testcontainers[postgres,mysql,mongodb]" pymysql
+
+      - name: Run live DB integration tests
+        # Docker is available on GitHub's Linux runners; testcontainers spins
+        # up real Postgres/MySQL/Mongo. Skips cleanly if Docker is ever absent.
+        run: python -m pytest tests/test_integration_db.py -v

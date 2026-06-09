@@ -1,0 +1,39 @@
+name: Bug report
+description: Report something that doesn't work as expected
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug, including the full error/traceback if any.
+      placeholder: Paste the error verbatim here.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: The command, config, and source/destination that triggers it.
+      placeholder: |
+        1. `python -m pipeline run data.csv postgresql --table t`
+        2. ...
+    validations:
+      required: true
+  - type: input
+    id: loader
+    attributes:
+      label: Destination / loader
+      description: Which destination (e.g. snowflake, duckdb, pgvector)? Leave blank if N/A.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `python -m pipeline --version` and your Python version.
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      placeholder: Windows 11 / Ubuntu 24.04 / macOS 15

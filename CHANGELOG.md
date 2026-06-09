@@ -5,6 +5,44 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [4.25.0] — 2026-06-09
+
+### Fixed — 3 real bugs
+- **`DuckDBLoader` upsert was broken** — `ON CONFLICT (...) DO UPDATE` always
+  raised `BinderException` because the staging table was created with no
+  UNIQUE/PK constraint. Now creates a unique index on the natural keys first,
+  with a `DO NOTHING` fallback when there are no non-key columns. Found by a
+  real round-trip test — a mock would have hidden it.
+- **Run-state swallowed errors** — failed runs recorded a useless `"see logs"`
+  placeholder. `cli.py` now persists the real exception (type + message) in the
+  run-state and logs the full traceback.
+- **Leaked `consent.db` handle** in the governance pre-flight gate — a bare
+  `with sqlite3.connect()` commits but never closes, risking a Windows file
+  lock. Now wrapped in `contextlib.closing`.
+
+### Security
+- `.gitignore` now covers `consent.db`, audit ledgers, `config/run_state/`, and
+  other runtime artifacts — previously a stray `git add .` could have committed
+  a PII-bearing database.
+
+### Added — test hardening (1,128 → 1,350 tests, ~59% → ~70% coverage)
+- **Live DB integration tests** (`test_integration_db.py`) — real PostgreSQL,
+  MySQL, and MongoDB containers via testcontainers; runs the loaders
+  end-to-end and skips cleanly when Docker is unavailable.
+- **Real embedded round-trips** for DuckDB, SQLite, and Parquet loaders.
+- **Deep load-path tests** asserting MERGE/upsert and COPY-staging SQL for 12
+  SQL warehouses (Snowflake, Redshift, BigQuery, Oracle, DB2, Synapse, HANA,
+  Databricks, ClickHouse, Firebolt, Yellowbrick, CockroachDB), 5 vector DBs
+  (Chroma, Qdrant, Milvus, Pinecone, Weaviate), and pgvector.
+- **Cross-loader safety contract** — SQL injection rejected before connect,
+  `dry_run` never connects, optional-driver loaders fail with an install hint.
+- **Extractor coverage** — QuickBooks (→99%) and SAP Datasphere (→89%).
+- **Pure-logic modules** raised to 73–100%: BusinessRuleEngine, data
+  standardiser, enricher, incremental filter, compliance wizard, governance
+  pre-flight, compression, and load verifier.
+
+---
+
 ## [4.24.0] — 2026-03-24
 
 ### Added — 13 new destination loaders (42 total)

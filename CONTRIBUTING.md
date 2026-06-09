@@ -50,7 +50,16 @@ python -m pytest tests/ -q
 python -m pyflakes pipeline/ tests/
 ```
 
-All 1128 tests should pass before you make any changes.
+All 1,350 tests should pass before you make any changes.
+
+**Live integration tests (optional, needs Docker)** spin up real PostgreSQL,
+MySQL, and MongoDB containers via testcontainers. They skip automatically when
+no Docker engine is running, so they never block the unit suite:
+
+```bash
+pip install "testcontainers[postgres,mysql,mongodb]"
+python -m pytest tests/test_integration_db.py -v
+```
 
 ---
 
