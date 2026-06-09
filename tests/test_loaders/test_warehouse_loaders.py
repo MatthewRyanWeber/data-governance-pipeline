@@ -15,6 +15,7 @@ Revision history
                    firebolt, databricks, yellowbrick, redshift, cockroachdb.
 """
 
+import sys
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -24,6 +25,7 @@ import pipeline.loaders.clickhouse_loader as ch_mod
 import pipeline.loaders.firebolt_loader as fb_mod
 import pipeline.loaders.databricks_loader as db_mod
 import pipeline.loaders.redshift_loader as rs_mod
+import pipeline.loaders.db2_loader as db2_mod
 from pipeline.loaders.clickhouse_loader import ClickHouseLoader
 from pipeline.loaders.hana_loader import HanaLoader
 from pipeline.loaders.firebolt_loader import FireboltLoader
@@ -31,6 +33,9 @@ from pipeline.loaders.databricks_loader import DatabricksLoader
 from pipeline.loaders.yellowbrick_loader import YellowbrickLoader
 from pipeline.loaders.redshift_loader import RedshiftLoader
 from pipeline.loaders.cockroachdb_loader import CockroachDBLoader
+from pipeline.loaders.snowflake_loader import SnowflakeLoader
+from pipeline.loaders.synapse_loader import SynapseLoader
+from pipeline.loaders.db2_loader import Db2Loader
 
 _DF = pd.DataFrame({"id": [1, 2], "name": ["a", "b"]})
 
@@ -183,6 +188,66 @@ class TestCockroachUpsert(unittest.TestCase):
              patch("pandas.DataFrame.to_sql") as to_sql:
             self.loader.load(_DF, self.cfg, "t", if_exists="append")
         to_sql.assert_called_once()
+
+
+class TestSnowflakeUpsert(unittest.TestCase):
+    def setUp(self):
+        self.gov = MagicMock()
+        self.loader = SnowflakeLoader(self.gov)
+        self.conn = MagicMock()
+        self.cursor = self.conn.cursor.return_value
+        self.cfg = {"account": "a", "user": "u", "password": "p",
+                    "database": "DB", "warehouse": "WH"}
+
+    def test_merge_sql(self):
+        with patch.object(self.loader, "_connect", return_value=self.conn), \
+             patch.object(self.loader, "_engine", return_value=MagicMock()), \
+             patch("pandas.DataFrame.to_sql"):
+            self.loader.load(_DF, self.cfg, "accounts", natural_keys=["id"])
+        merge = next(s for s in _cursor_sql(self.cursor) if "MERGE INTO" in s)
+        self.assertIn('"DB"."PUBLIC"."ACCOUNTS"', merge)
+        self.assertIn('t."id" = s."id"', merge)
+        self.assertIn('t."name" = s."name"', merge)
+        self.assertIn("WHEN NOT MATCHED THEN", merge)
+
+
+class TestSynapseUpsert(unittest.TestCase):
+    def setUp(self):
+        self.gov = MagicMock()
+        self.loader = SynapseLoader(self.gov)
+        self.conn = MagicMock()
+        self.cursor = self.conn.cursor.return_value
+        self.cfg = {"host": "h", "database": "d", "user": "u", "password": "p"}
+
+    def test_merge_uses_bracket_quoting(self):
+        with patch.object(self.loader, "_engine", return_value=MagicMock()), \
+             patch("pandas.DataFrame.to_sql"), \
+             patch("pyodbc.connect", return_value=self.conn):
+            self.loader.load(_DF, self.cfg, "t", natural_keys=["id"])
+        merge = next(s for s in _cursor_sql(self.cursor) if "MERGE" in s and "USING" in s)
+        self.assertIn("t.[id] = s.[id]", merge)
+        self.assertIn("t.[name] = s.[name]", merge)
+
+
+class TestDb2Upsert(unittest.TestCase):
+    def setUp(self):
+        self.gov = MagicMock()
+        with patch.object(db2_mod, "HAS_DB2", True):
+            self.loader = Db2Loader(self.gov)
+        self.cfg = {"host": "h", "user": "u", "password": "p", "database": "d"}
+
+    def test_merge_sql_via_exec_immediate(self):
+        ibm = MagicMock()
+        ibm.connect.return_value = MagicMock()
+        with patch.dict(sys.modules, {"ibm_db": ibm}), \
+             patch.object(self.loader, "_engine", return_value=MagicMock()), \
+             patch("pandas.DataFrame.to_sql"):
+            self.loader.load(_DF, self.cfg, "accounts", natural_keys=["id"])
+        executed = [str(c[0][1]) for c in ibm.exec_immediate.call_args_list if len(c[0]) > 1]
+        merge = next(s for s in executed if "MERGE INTO" in s)
+        self.assertIn('t."ID" = s."ID"', merge)            # keys upper-cased
+        self.assertIn('t."NAME" = s."NAME"', merge)
+        self.assertIn("WHEN NOT MATCHED THEN INSERT", merge)
 
 
 if __name__ == "__main__":
