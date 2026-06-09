@@ -34,6 +34,9 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 COPY pyproject.toml .
 COPY pipeline/ pipeline/
 
+RUN mkdir -p /app/config/run_state /app/logs \
+    && chown -R appuser:appuser /app/config /app/logs
+
 ENV PIPELINE_CONTAINER=1 PYTHONUNBUFFERED=1
 
 USER appuser

@@ -136,7 +136,7 @@ class TestRunStateMarkComplete(unittest.TestCase):
         self.mgr.save_start(state)
         self.mgr.mark_complete("run-004")
         completed = self.mgr._read("run-004")
-        self.assertEqual(completed.status, "complete")
+        self.assertEqual(completed.status, "completed")
 
 
 class TestRunStateMarkFailed(unittest.TestCase):
@@ -344,7 +344,7 @@ class TestCrashRecoveryResume(unittest.TestCase):
 
         self.assertTrue(result)
         final = self.state_mgr._read("crash-004")
-        self.assertEqual(final.status, "complete")
+        self.assertEqual(final.status, "completed")
 
     @patch("pipeline.cli._run_chunked", side_effect=RuntimeError("DB connection lost"))
     @patch("pipeline.crash_recovery.GovernanceLogger", create=True)

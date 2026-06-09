@@ -16,7 +16,6 @@ import logging
 import sqlite3
 import threading
 import time
-from contextlib import closing
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -54,6 +53,10 @@ class PersistentRateLimiter:
     Persists request timestamps so rate limits survive process restarts.
     Uses ``time.time()`` (wall clock) instead of ``time.monotonic()``
     because monotonic clocks reset across restarts.
+
+    Reuses a single connection (protected by a threading lock) to avoid
+    the overhead of open/close per request.  Prunes only the current key
+    on each ``allow()`` call; use ``prune()`` for a full sweep.
     """
 
     _SCHEMA = """
@@ -75,45 +78,45 @@ class PersistentRateLimiter:
         self._max = max_requests
         self._window = window_seconds
         self._lock = threading.Lock()
-        self._init_db()
+        self._conn = self._init_db()
 
-    def _init_db(self) -> None:
+    def _init_db(self) -> sqlite3.Connection:
         Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
-        with closing(sqlite3.connect(self._db_path)) as conn:
-            conn.executescript(self._SCHEMA)
+        conn = sqlite3.connect(self._db_path, check_same_thread=False)
+        conn.executescript(self._SCHEMA)
+        return conn
 
     def allow(self, key: str) -> bool:
         now = time.time()
         cutoff = now - self._window
         with self._lock:
-            with closing(sqlite3.connect(self._db_path)) as conn:
-                conn.execute(
-                    "DELETE FROM rate_buckets WHERE timestamp < ?", (cutoff,)
-                )
-                row = conn.execute(
-                    "SELECT COUNT(*) FROM rate_buckets WHERE key = ?", (key,)
-                ).fetchone()
-                count = row[0] if row else 0
-                if count >= self._max:
-                    conn.commit()
-                    return False
-                conn.execute(
-                    "INSERT INTO rate_buckets (key, timestamp) VALUES (?, ?)",
-                    (key, now),
-                )
-                conn.commit()
-                return True
+            self._conn.execute(
+                "DELETE FROM rate_buckets WHERE key = ? AND timestamp < ?",
+                (key, cutoff),
+            )
+            row = self._conn.execute(
+                "SELECT COUNT(*) FROM rate_buckets WHERE key = ?", (key,)
+            ).fetchone()
+            count = row[0] if row else 0
+            if count >= self._max:
+                self._conn.commit()
+                return False
+            self._conn.execute(
+                "INSERT INTO rate_buckets (key, timestamp) VALUES (?, ?)",
+                (key, now),
+            )
+            self._conn.commit()
+            return True
 
     def prune(self) -> int:
-        """Remove expired entries. Returns the number of rows deleted."""
+        """Remove all expired entries across all keys. Returns rows deleted."""
         cutoff = time.time() - self._window
         with self._lock:
-            with closing(sqlite3.connect(self._db_path)) as conn:
-                cursor = conn.execute(
-                    "DELETE FROM rate_buckets WHERE timestamp < ?", (cutoff,)
-                )
-                conn.commit()
-                return cursor.rowcount
+            cursor = self._conn.execute(
+                "DELETE FROM rate_buckets WHERE timestamp < ?", (cutoff,)
+            )
+            self._conn.commit()
+            return cursor.rowcount
 
 
 def create_rate_limiter(

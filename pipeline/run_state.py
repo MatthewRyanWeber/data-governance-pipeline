@@ -79,10 +79,11 @@ class RunStateManager:
 
     def _read(self, run_id: str) -> RunState | None:
         path = self._path(run_id)
-        if not path.exists():
-            return None
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
+        with STATE_FILE_LOCK:
+            if not path.exists():
+                return None
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
         return RunState(**data)
 
     def save_start(self, state: RunState) -> None:
@@ -106,7 +107,7 @@ class RunStateManager:
         state = self._read(run_id)
         if state is None:
             return
-        state.status = "complete"
+        state.status = "completed"
         self._write(state)
         logger.info("[RUN_STATE] Run %s marked complete (%d rows).",
                     run_id, state.total_rows_processed)
@@ -131,12 +132,24 @@ class RunStateManager:
         offset: int = 0,
         status_filter: str | None = None,
     ) -> list[RunState]:
-        """Return recent runs sorted by started_at descending."""
+        """Return recent runs sorted by started_at descending.
+
+        Sorts files by modification time (newest first) so the common
+        no-filter case can stop early instead of reading every file.
+        """
         if not self.state_dir.exists():
             return []
 
+        paths = sorted(
+            self.state_dir.glob("*.json"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+
         runs: list[RunState] = []
-        for path in self.state_dir.glob("*.json"):
+        need = offset + limit
+
+        for path in paths:
             try:
                 with open(path, encoding="utf-8") as f:
                     data = json.load(f)
@@ -144,6 +157,8 @@ class RunStateManager:
                 if status_filter and state.status != status_filter:
                     continue
                 runs.append(state)
+                if not status_filter and len(runs) >= need:
+                    break
             except (json.JSONDecodeError, TypeError, KeyError) as exc:
                 logger.warning("[RUN_STATE] Corrupt state file %s: %s", path, exc)
 
@@ -224,7 +239,7 @@ class RunStateManager:
             try:
                 with open(path, encoding="utf-8") as f:
                     data = json.load(f)
-                if data.get("status") in ("complete", "failed"):
+                if data.get("status") in ("completed", "failed"):
                     started = datetime.fromisoformat(data["started_at"]).timestamp()
                     if started < cutoff:
                         path.unlink()
