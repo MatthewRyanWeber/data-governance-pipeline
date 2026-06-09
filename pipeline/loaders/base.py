@@ -10,6 +10,7 @@ Revision history
 1.0   2026-06-07   Initial extraction from pipeline_v3.py.
 1.1   2026-06-08   Added BaseLoader, validate_column_names.
 1.2   2026-06-08   Added _engine_scope context manager.
+1.3   2026-06-09   Added opt-in circuit breaker helpers.
 """
 
 import contextlib
@@ -18,7 +19,7 @@ import re
 import logging
 from typing import TYPE_CHECKING
 
-from pipeline.exceptions import ConfigValidationError
+from pipeline.exceptions import CircuitOpenError, ConfigValidationError
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -160,3 +161,35 @@ class BaseLoader:
             yield engine
         finally:
             engine.dispose()
+
+    # ── Circuit breaker helpers (opt-in) ───────────────────────────────
+
+    def _init_circuit_breaker(
+        self,
+        name: str,
+        failure_threshold: int = 5,
+        recovery_timeout: float = 60.0,
+        success_threshold: int = 3,
+    ) -> None:
+        from pipeline.circuit_breaker import CircuitBreaker
+        self._circuit_breaker = CircuitBreaker(
+            name,
+            failure_threshold=failure_threshold,
+            recovery_timeout=recovery_timeout,
+            success_threshold=success_threshold,
+        )
+
+    def _check_circuit(self) -> None:
+        cb = getattr(self, "_circuit_breaker", None)
+        if cb and not cb.allow_request():
+            raise CircuitOpenError(cb.name)
+
+    def _record_circuit_success(self) -> None:
+        cb = getattr(self, "_circuit_breaker", None)
+        if cb:
+            cb.record_success()
+
+    def _record_circuit_failure(self) -> None:
+        cb = getattr(self, "_circuit_breaker", None)
+        if cb:
+            cb.record_failure()

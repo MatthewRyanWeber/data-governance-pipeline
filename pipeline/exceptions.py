@@ -8,6 +8,7 @@ Revision history
 1.0   2026-06-07   Initial release: ContractViolationError.
 1.1   2026-06-08   Added ConfigValidationError, LoaderError, ExtractionError,
                    ValidationError for structured error handling.
+1.2   2026-06-09   Added CircuitOpenError for circuit breaker pattern.
 """
 
 
@@ -141,3 +142,20 @@ class ContractViolationError(Exception):
             for v in self.violations
         )
         super().__init__(summary + details)
+
+
+class CircuitOpenError(Exception):
+    """
+    Raised when a circuit breaker is open and rejecting requests.
+
+    Attributes
+    ----------
+    breaker_name : str  The name of the open circuit breaker.
+    """
+
+    def __init__(self, breaker_name: str = "") -> None:
+        self.breaker_name = breaker_name
+        super().__init__(
+            f"Circuit breaker '{breaker_name}' is OPEN — requests are being rejected. "
+            "The destination may be unavailable."
+        )

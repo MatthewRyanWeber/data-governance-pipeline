@@ -21,6 +21,8 @@ Revision history
 2.0   2026-06-09   Migrated Flask to Quart (ASGI) for async request handling.
 2.1   2026-06-09   Fixed silent except in get_status, JWT header routing,
                    replaced _state dict with _RunStatus dataclass.
+2.2   2026-06-09   /health includes circuit breaker state, degrades status
+                   when any breaker is open.
 """
 
 import functools
@@ -516,7 +518,14 @@ def create_app(pipeline_fn=None, max_queue_size: int | None = None) -> "Quart":
     @app.route("/health", methods=["GET"])
     async def health():
         """Healthcheck endpoint — no auth required."""
-        return jsonify({"status": "healthy", "timestamp": datetime.now(timezone.utc).isoformat()})
+        from pipeline.circuit_breaker import get_all_breakers
+        breakers = get_all_breakers()
+        has_open = any(b["state"] == "open" for b in breakers.values())
+        return jsonify({
+            "status": "degraded" if has_open else "healthy",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "circuit_breakers": breakers,
+        })
 
     @app.route("/metrics", methods=["GET"])
     @require_auth
