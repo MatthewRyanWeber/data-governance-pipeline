@@ -23,7 +23,7 @@ import pipeline.loaders.snowflake_loader as sf_mod
 import pipeline.loaders.synapse_loader as syn_mod
 
 try:
-    import azure.storage.blob  # noqa: F401
+    __import__("azure.storage.blob")
     _HAS_AZURE = True
 except ImportError:
     _HAS_AZURE = False
