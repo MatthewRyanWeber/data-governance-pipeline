@@ -4,18 +4,31 @@ Tests for JWT auth token creation, validation, revocation, and API integration.
 Revision history
 ────────────────
 1.0   2026-06-09   Initial release.
+1.1   2026-06-09   Migrated API tests to async for Quart.
 """
 
 import os
 import time
 import unittest
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _clean_auth_state():
+    """Reset JWT module state between tests."""
+    yield
+    from pipeline.auth import reset_state
+    reset_state()
+    os.environ.pop("PIPELINE_API_KEYS", None)
+    os.environ.pop("PIPELINE_JWT_SECRET", None)
+
 
 class TestJWTTokenCreation(unittest.TestCase):
     """create_token returns a valid JWT with correct claims."""
 
     def setUp(self):
-        os.environ["PIPELINE_JWT_SECRET"] = "test-secret-key-for-unit-tests"
+        os.environ["PIPELINE_JWT_SECRET"] = "test-secret-key-for-unit-tests-32b"
         from pipeline.auth import reset_state
         reset_state()
 
@@ -54,7 +67,7 @@ class TestJWTTokenExpiry(unittest.TestCase):
     """Expired tokens are rejected."""
 
     def setUp(self):
-        os.environ["PIPELINE_JWT_SECRET"] = "test-secret-key-for-unit-tests"
+        os.environ["PIPELINE_JWT_SECRET"] = "test-secret-key-for-unit-tests-32b"
         from pipeline.auth import reset_state
         reset_state()
 
@@ -83,7 +96,7 @@ class TestJWTTokenRevocation(unittest.TestCase):
     """Revoked tokens are rejected."""
 
     def setUp(self):
-        os.environ["PIPELINE_JWT_SECRET"] = "test-secret-key-for-unit-tests"
+        os.environ["PIPELINE_JWT_SECRET"] = "test-secret-key-for-unit-tests-32b"
         from pipeline.auth import reset_state
         reset_state()
 
@@ -112,44 +125,50 @@ class TestJWTTokenRevocation(unittest.TestCase):
         self.assertFalse(is_revoked("old-jti"))
 
 
-class TestAPIWithJWT(unittest.TestCase):
+# ── API integration tests (async for Quart) ───────────────────────────────
+
+class TestAPIWithJWT:
     """API endpoints work with JWT authentication."""
 
-    def setUp(self):
+    def setup_method(self):
         os.environ["PIPELINE_API_KEYS"] = "static-key-1"
-        os.environ["PIPELINE_JWT_SECRET"] = "test-secret-key-for-unit-tests"
+        os.environ["PIPELINE_JWT_SECRET"] = "test-secret-key-for-unit-tests-32b"
         from pipeline.auth import reset_state
         reset_state()
         from pipeline.api import create_app
         self.app = create_app(pipeline_fn=lambda s, d, c: None)
-        self.client = self.app.test_client()
 
-    def tearDown(self):
+    def teardown_method(self):
         os.environ.pop("PIPELINE_API_KEYS", None)
         os.environ.pop("PIPELINE_JWT_SECRET", None)
         from pipeline.auth import reset_state
         reset_state()
 
-    def test_exchange_api_key_for_jwt(self):
-        resp = self.client.post("/auth/token",
-                                headers={"X-API-Key": "static-key-1"},
-                                json={"subject": "test-client"})
-        self.assertEqual(resp.status_code, 201)
-        body = resp.get_json()
-        self.assertIn("token", body)
-        self.assertEqual(body["token_type"], "bearer")
+    @pytest.mark.asyncio
+    async def test_exchange_api_key_for_jwt(self):
+        async with self.app.test_client() as client:
+            resp = await client.post("/auth/token",
+                                     headers={"X-API-Key": "static-key-1"},
+                                     json={"subject": "test-client"})
+            assert resp.status_code == 201
+            body = await resp.get_json()
+            assert "token" in body
+            assert body["token_type"] == "bearer"
 
-    def test_jwt_authenticates_status_endpoint(self):
-        resp = self.client.post("/auth/token",
-                                headers={"X-API-Key": "static-key-1"},
-                                json={"subject": "test-client"})
-        token = resp.get_json()["token"]
+    @pytest.mark.asyncio
+    async def test_jwt_authenticates_status_endpoint(self):
+        async with self.app.test_client() as client:
+            resp = await client.post("/auth/token",
+                                     headers={"X-API-Key": "static-key-1"},
+                                     json={"subject": "test-client"})
+            token = (await resp.get_json())["token"]
 
-        resp = self.client.get("/status",
-                               headers={"Authorization": f"Bearer {token}"})
-        self.assertEqual(resp.status_code, 200)
+            resp = await client.get("/status",
+                                    headers={"Authorization": f"Bearer {token}"})
+            assert resp.status_code == 200
 
-    def test_expired_jwt_returns_401(self):
+    @pytest.mark.asyncio
+    async def test_expired_jwt_returns_401(self):
         import jwt as pyjwt
         secret = os.environ["PIPELINE_JWT_SECRET"]
         expired_token = pyjwt.encode({
@@ -158,68 +177,74 @@ class TestAPIWithJWT(unittest.TestCase):
             "jti": "expired", "iss": "data-governance-pipeline",
         }, secret, algorithm="HS256")
 
-        resp = self.client.get("/status",
-                               headers={"Authorization": f"Bearer {expired_token}"})
-        self.assertEqual(resp.status_code, 401)
+        async with self.app.test_client() as client:
+            resp = await client.get("/status",
+                                    headers={"Authorization": f"Bearer {expired_token}"})
+            assert resp.status_code == 401
 
-    def test_revoked_jwt_returns_401(self):
-        resp = self.client.post("/auth/token",
-                                headers={"X-API-Key": "static-key-1"},
-                                json={"subject": "test-client"})
-        token = resp.get_json()["token"]
+    @pytest.mark.asyncio
+    async def test_revoked_jwt_returns_401(self):
+        async with self.app.test_client() as client:
+            resp = await client.post("/auth/token",
+                                     headers={"X-API-Key": "static-key-1"},
+                                     json={"subject": "test-client"})
+            token = (await resp.get_json())["token"]
 
-        from pipeline.auth import validate_token
-        claims = validate_token(token)
-        jti = claims["jti"]
+            from pipeline.auth import validate_token
+            claims = validate_token(token)
+            jti = claims["jti"]
 
-        resp = self.client.post("/auth/revoke",
-                                headers={"X-API-Key": "static-key-1"},
-                                json={"jti": jti})
-        self.assertEqual(resp.status_code, 200)
+            resp = await client.post("/auth/revoke",
+                                     headers={"X-API-Key": "static-key-1"},
+                                     json={"jti": jti})
+            assert resp.status_code == 200
 
-        resp = self.client.get("/status",
-                               headers={"Authorization": f"Bearer {token}"})
-        self.assertEqual(resp.status_code, 401)
+            resp = await client.get("/status",
+                                    headers={"Authorization": f"Bearer {token}"})
+            assert resp.status_code == 401
 
-    def test_static_key_still_works_alongside_jwt(self):
-        resp = self.client.get("/status",
-                               headers={"X-API-Key": "static-key-1"})
-        self.assertEqual(resp.status_code, 200)
+    @pytest.mark.asyncio
+    async def test_static_key_still_works_alongside_jwt(self):
+        async with self.app.test_client() as client:
+            resp = await client.get("/status",
+                                    headers={"X-API-Key": "static-key-1"})
+            assert resp.status_code == 200
 
 
-class TestAPIWithoutJWT(unittest.TestCase):
+class TestAPIWithoutJWT:
     """When PIPELINE_JWT_SECRET is not set, static keys work unchanged."""
 
-    def setUp(self):
+    def setup_method(self):
         os.environ["PIPELINE_API_KEYS"] = "static-key-only"
         os.environ.pop("PIPELINE_JWT_SECRET", None)
         from pipeline.auth import reset_state
         reset_state()
         from pipeline.api import create_app
         self.app = create_app(pipeline_fn=lambda s, d, c: None)
-        self.client = self.app.test_client()
 
-    def tearDown(self):
+    def teardown_method(self):
         os.environ.pop("PIPELINE_API_KEYS", None)
         from pipeline.auth import reset_state
         reset_state()
 
-    def test_static_key_works(self):
-        resp = self.client.get("/status",
-                               headers={"X-API-Key": "static-key-only"})
-        self.assertEqual(resp.status_code, 200)
+    @pytest.mark.asyncio
+    async def test_static_key_works(self):
+        async with self.app.test_client() as client:
+            resp = await client.get("/status",
+                                    headers={"X-API-Key": "static-key-only"})
+            assert resp.status_code == 200
 
-    def test_auth_token_endpoint_returns_501(self):
-        resp = self.client.post("/auth/token",
-                                headers={"X-API-Key": "static-key-only"})
-        self.assertEqual(resp.status_code, 501)
+    @pytest.mark.asyncio
+    async def test_auth_token_endpoint_returns_501(self):
+        async with self.app.test_client() as client:
+            resp = await client.post("/auth/token",
+                                     headers={"X-API-Key": "static-key-only"})
+            assert resp.status_code == 501
 
-    def test_auth_revoke_endpoint_returns_501(self):
-        resp = self.client.post("/auth/revoke",
-                                headers={"X-API-Key": "static-key-only"},
-                                json={"jti": "some-jti"})
-        self.assertEqual(resp.status_code, 501)
-
-
-if __name__ == "__main__":
-    unittest.main()
+    @pytest.mark.asyncio
+    async def test_auth_revoke_endpoint_returns_501(self):
+        async with self.app.test_client() as client:
+            resp = await client.post("/auth/revoke",
+                                     headers={"X-API-Key": "static-key-only"},
+                                     json={"jti": "some-jti"})
+            assert resp.status_code == 501

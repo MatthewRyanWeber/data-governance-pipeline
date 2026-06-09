@@ -13,6 +13,7 @@ Revision history
 1.1   2026-06-09   Updated error/status schemas for structured error responses and progress.
 1.2   2026-06-09   Added config validation error example to /run 400 response.
 1.3   2026-06-09   Added /auth/token, /auth/revoke endpoints and JWTAuth scheme.
+1.4   2026-06-09   Migrated Flask imports to Quart.
 """
 
 import logging
@@ -901,24 +902,24 @@ _SWAGGER_HTML = """\
 
 def register_docs_routes(app) -> None:
     """
-    Add /docs and /openapi.json routes to a Flask application.
+    Add /docs and /openapi.json routes to a Quart application.
 
     Parameters
     ----------
-    app : Flask
-        The Flask application instance returned by ``create_app()``.
+    app : Quart
+        The Quart application instance returned by ``create_app()``.
     """
-    from flask import jsonify as _jsonify, Response
+    from quart import jsonify as _jsonify, Response
 
     spec = get_openapi_spec()
 
     @app.route("/openapi.json", methods=["GET"])
-    def openapi_json():
+    async def openapi_json():
         """Return the OpenAPI 3.0 spec as JSON."""
-        return _jsonify(spec)
+        return await _jsonify(spec)
 
     @app.route("/docs", methods=["GET"])
-    def swagger_ui():
+    async def swagger_ui():
         """Serve the Swagger UI HTML page."""
         return Response(_SWAGGER_HTML, mimetype="text/html")
 

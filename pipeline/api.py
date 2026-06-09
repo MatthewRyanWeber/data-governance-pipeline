@@ -1,5 +1,5 @@
 """
-Flask REST API for the data-governance pipeline.
+Quart (async) REST API for the data-governance pipeline.
 
 Exposes HTTP endpoints to trigger runs, check status, health, and metrics.
 Pipeline execution happens in a background thread so the API stays responsive.
@@ -8,7 +8,7 @@ Layer 6 — imports from Layer 0 (constants), Layer 1 (governance_logger),
           Layer 2+ (extract, transform), loaders, monitoring.
 
 Revision history
-----------------
+────────────────
 1.0   2026-06-07   Initial extraction from monolith.
 1.1   2026-06-08   Added API key authentication, rate limiting, input validation.
 1.2   2026-06-09   Added OpenAPI/Swagger documentation routes (/docs, /openapi.json).
@@ -18,6 +18,7 @@ Revision history
 1.5   2026-06-09   Replaced inline rate limiter with pluggable rate_limiter module.
 1.6   2026-06-09   Added config validation via validate_loader_config on /run.
 1.7   2026-06-09   JWT auth token rotation: /auth/token, /auth/revoke, bearer JWT support.
+2.0   2026-06-09   Migrated Flask to Quart (ASGI) for async request handling.
 """
 
 import functools
@@ -34,10 +35,10 @@ from datetime import datetime, timezone
 logger = logging.getLogger(__name__)
 
 try:
-    from flask import Flask, jsonify, request
-    HAS_FLASK = True
+    from quart import Quart, jsonify, request
+    HAS_QUART = True
 except ImportError:
-    HAS_FLASK = False
+    HAS_QUART = False
 
 
 def _load_api_keys() -> set[str]:
@@ -69,9 +70,9 @@ def _fire_webhook(url: str, payload: dict) -> None:
         logger.warning("[API] Webhook to %s failed: %s", url, exc)
 
 
-def create_app(pipeline_fn=None, max_queue_size: int | None = None) -> "Flask":
+def create_app(pipeline_fn=None, max_queue_size: int | None = None) -> "Quart":
     """
-    Create and configure the Flask application.
+    Create and configure the Quart application.
 
     Parameters
     ----------
@@ -85,23 +86,23 @@ def create_app(pipeline_fn=None, max_queue_size: int | None = None) -> "Flask":
 
     Returns
     -------
-    Flask
-        Configured Flask app instance.
+    Quart
+        Configured Quart app instance.
 
     Raises
     ------
     RuntimeError
-        If Flask is not installed.
+        If Quart is not installed.
     """
-    if not HAS_FLASK:
+    if not HAS_QUART:
         raise RuntimeError(
-            "Flask is required for the pipeline API. "
-            "Install it with: pip install flask"
+            "Quart is required for the pipeline API. "
+            "Install it with: pip install quart"
         )
 
     from pipeline.rate_limiter import create_rate_limiter
 
-    app = Flask(__name__)
+    app = Quart(__name__)
     api_keys = _load_api_keys()
     rate_limiter = create_rate_limiter(
         db_path=os.environ.get("PIPELINE_RATE_LIMIT_DB"),
@@ -120,7 +121,7 @@ def create_app(pipeline_fn=None, max_queue_size: int | None = None) -> "Flask":
     def require_auth(fn):
         """Decorator: reject requests without a valid API key or JWT."""
         @functools.wraps(fn)
-        def wrapper(*args, **kwargs):
+        async def wrapper(*args, **kwargs):
             key = (
                 request.headers.get("X-API-Key")
                 or request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
@@ -135,17 +136,17 @@ def create_app(pipeline_fn=None, max_queue_size: int | None = None) -> "Flask":
                 )
 
             if not api_keys and not jwt_available():
-                return fn(*args, **kwargs)
+                return await fn(*args, **kwargs)
 
             if key and "." in key and jwt_available():
                 try:
                     _validate_jwt(key)
-                    return fn(*args, **kwargs)
+                    return await fn(*args, **kwargs)
                 except Exception:
                     pass
 
             if api_keys and key and any(hmac.compare_digest(key, k) for k in api_keys):
-                return fn(*args, **kwargs)
+                return await fn(*args, **kwargs)
 
             logger.warning("[API] Unauthorized request to %s from %s",
                            request.path, request.remote_addr)
@@ -302,7 +303,7 @@ def create_app(pipeline_fn=None, max_queue_size: int | None = None) -> "Flask":
 
     @app.route("/run", methods=["POST"])
     @require_auth
-    def run_pipeline():
+    async def run_pipeline():
         """Trigger a pipeline run.  Expects JSON: {source, destination, config?, webhook_url?}."""
         if pipeline_fn is None:
             return _error_response(
@@ -311,7 +312,7 @@ def create_app(pipeline_fn=None, max_queue_size: int | None = None) -> "Flask":
                 501,
             )
 
-        body = request.get_json(silent=True) or {}
+        body = await request.get_json(silent=True) or {}
         source = body.get("source")
         destination = body.get("destination")
         config = body.get("config", {})
@@ -412,7 +413,7 @@ def create_app(pipeline_fn=None, max_queue_size: int | None = None) -> "Flask":
 
     @app.route("/status", methods=["GET"])
     @require_auth
-    def get_status():
+    async def get_status():
         """Return the current pipeline run status with optional chunk progress."""
         with _state_lock:
             result = {
@@ -439,7 +440,7 @@ def create_app(pipeline_fn=None, max_queue_size: int | None = None) -> "Flask":
 
     @app.route("/runs", methods=["GET"])
     @require_auth
-    def list_runs():
+    async def list_runs():
         """List past pipeline runs with pagination."""
         limit = request.args.get("limit", 20, type=int)
         offset = request.args.get("offset", 0, type=int)
@@ -463,7 +464,7 @@ def create_app(pipeline_fn=None, max_queue_size: int | None = None) -> "Flask":
 
     @app.route("/runs/<run_id>", methods=["GET"])
     @require_auth
-    def get_run(run_id: str):
+    async def get_run(run_id: str):
         """Get details of a specific run by ID."""
         try:
             rsm = _get_rsm()
@@ -477,7 +478,7 @@ def create_app(pipeline_fn=None, max_queue_size: int | None = None) -> "Flask":
 
     @app.route("/runs/<run_id>/cancel", methods=["POST"])
     @require_auth
-    def cancel_run(run_id: str):
+    async def cancel_run(run_id: str):
         """Cancel a queued or running pipeline run."""
         with _state_lock:
             for i, item in enumerate(_queue):
@@ -501,13 +502,13 @@ def create_app(pipeline_fn=None, max_queue_size: int | None = None) -> "Flask":
         )
 
     @app.route("/health", methods=["GET"])
-    def health():
+    async def health():
         """Healthcheck endpoint — no auth required."""
         return jsonify({"status": "healthy", "timestamp": datetime.now(timezone.utc).isoformat()})
 
     @app.route("/metrics", methods=["GET"])
     @require_auth
-    def get_metrics():
+    async def get_metrics():
         """Return the latest pipeline run metrics."""
         with _state_lock:
             return jsonify({
@@ -519,7 +520,7 @@ def create_app(pipeline_fn=None, max_queue_size: int | None = None) -> "Flask":
 
     @app.route("/auth/token", methods=["POST"])
     @require_auth
-    def create_auth_token():
+    async def create_auth_token():
         """Exchange an API key for a short-lived JWT."""
         if not jwt_available():
             return _error_response(
@@ -527,7 +528,7 @@ def create_app(pipeline_fn=None, max_queue_size: int | None = None) -> "Flask":
                 "JWT auth is not enabled. Set PIPELINE_JWT_SECRET to enable.",
                 501,
             )
-        body = request.get_json(silent=True) or {}
+        body = await request.get_json(silent=True) or {}
         subject = body.get("subject", "api-client")
         expiry = body.get("expiry_seconds", 3600)
 
@@ -544,7 +545,7 @@ def create_app(pipeline_fn=None, max_queue_size: int | None = None) -> "Flask":
 
     @app.route("/auth/revoke", methods=["POST"])
     @require_auth
-    def revoke_auth_token():
+    async def revoke_auth_token():
         """Revoke a JWT by its jti claim."""
         if not jwt_available():
             return _error_response(
@@ -552,7 +553,7 @@ def create_app(pipeline_fn=None, max_queue_size: int | None = None) -> "Flask":
                 "JWT auth is not enabled. Set PIPELINE_JWT_SECRET to enable.",
                 501,
             )
-        body = request.get_json(silent=True) or {}
+        body = await request.get_json(silent=True) or {}
         jti = body.get("jti")
         if not jti or not isinstance(jti, str):
             return _error_response(
@@ -572,21 +573,26 @@ def create_app(pipeline_fn=None, max_queue_size: int | None = None) -> "Flask":
     except ImportError as exc:
         logger.warning("Could not register OpenAPI docs routes: %s", exc)
 
-    logger.info("Pipeline Flask API created.")
+    logger.info("Pipeline Quart API created.")
     return app
 
 
 if __name__ == "__main__":
-    import signal
+    import asyncio
 
     from pipeline.logging_setup import auto_configure_logging
     auto_configure_logging()
 
-    def _shutdown(signum, frame):
-        logger.info("Received signal %s — shutting down.", signum)
-        raise SystemExit(0)
-
-    signal.signal(signal.SIGTERM, _shutdown)
-
     app = create_app()
-    app.run(host="0.0.0.0", port=5000)
+
+    try:
+        from hypercorn.asyncio import serve
+        from hypercorn.config import Config as HypercornConfig
+
+        config = HypercornConfig()
+        config.bind = ["0.0.0.0:5000"]
+        config.graceful_timeout = 10
+        asyncio.run(serve(app, config))
+    except ImportError:
+        logger.warning("Hypercorn not installed — falling back to Quart dev server.")
+        app.run(host="0.0.0.0", port=5000)

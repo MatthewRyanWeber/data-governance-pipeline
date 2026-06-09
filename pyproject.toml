@@ -183,14 +183,16 @@ grafana = [
 
 # REST API server
 api = [
-    "flask>=3.0.0",
+    "quart>=0.19.0",
+    "hypercorn>=0.17.0",
     "PyJWT>=2.8.0",
 ]
 
 # Development / testing
 dev = [
-    "flask>=3.0.0",
+    "quart>=0.19.0",
     "PyJWT>=2.8.0",
+    "pytest-asyncio>=0.23.0",
     "pytest>=7.4.0",
     "pytest-cov>=4.1.0",
     "pyflakes>=3.1.0",
@@ -228,6 +230,7 @@ python_files  = ["test_*.py"]
 python_classes= ["Test*"]
 python_functions = ["test_*"]
 addopts       = "-v --tb=short"
+asyncio_mode  = "auto"
 
 [tool.ruff]
 line-length = 100
