@@ -12,6 +12,7 @@ Revision history
 4.0   2026-06-07   Stable release with 30+ event types and 7 report writers.
 4.1   2026-06-08   Extracted report writers into pipeline.reporting.ReportWriter;
                    GovernanceLogger delegates to ReportWriter for backward compat.
+4.2   2026-06-09   Audit ledger writes via AppendOnlyWriter (seek/truncate blocked).
 """
 
 import getpass
@@ -100,6 +101,7 @@ class GovernanceLogger:
         log_dir: str | None = None,
         run_context: RunContext | None = None,
         dry_run: bool = False,
+        verify_integrity: bool = False,
     ) -> None:
         self.run_context = run_context or default_run_context()
         self.dry_run = dry_run
@@ -141,6 +143,8 @@ class GovernanceLogger:
         self.dlq_rows_total: int = 0
         self._prev_hash: str = "GENESIS"
         self._event_lock = threading.RLock()
+        self._verify_integrity = verify_integrity
+        self._writer = None
 
     # ── Core event writer with chained hash ──────────────────────────────
     # Performance: each _event() call serialises JSON + computes SHA-256 +
@@ -176,8 +180,14 @@ class GovernanceLogger:
             final_json = json.dumps(base_entry, sort_keys=True)
 
             if not self.dry_run:
-                with open(self.ledger_file, "a", encoding="utf-8") as f:
-                    f.write(final_json + "\n")
+                if self._writer is None:
+                    from pipeline.append_only_writer import AppendOnlyWriter
+                    self._writer = AppendOnlyWriter(
+                        self.ledger_file,
+                        verify_integrity=self._verify_integrity,
+                    )
+                    self._writer.open()
+                self._writer.write(final_json + "\n")
 
             self.ledger_entries.append(base_entry)
 
