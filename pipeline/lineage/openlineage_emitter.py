@@ -13,6 +13,7 @@ Revision history
 1.0   2026-06-08   Initial release.
 1.1   2026-06-08   Add dry_run, thread lock, quality_threshold ctor param,
                    ImportError guard in _post_event, extract _persist_event.
+1.2   2026-06-09   Multi-tenancy: tenant_id in constructor and event facets.
 """
 
 import json
@@ -54,6 +55,7 @@ class OpenLineageEmitter:
         http_endpoint: str | None = None,
         quality_threshold: float = 70.0,
         dry_run: bool = False,
+        tenant_id: str = "default",
     ) -> None:
         self.gov = gov
         self.namespace = namespace
@@ -64,6 +66,7 @@ class OpenLineageEmitter:
         self.http_endpoint = http_endpoint
         self.quality_threshold = quality_threshold
         self.dry_run = dry_run
+        self.tenant_id = tenant_id
         self._lock = threading.Lock()
         self._run_id = str(uuid.uuid4())
 
@@ -162,7 +165,14 @@ class OpenLineageEmitter:
             "eventTime": datetime.now(timezone.utc).isoformat(),
             "run": {
                 "runId": self._run_id,
-                "facets": facets or {},
+                "facets": {
+                    **(facets or {}),
+                    "tenant": {
+                        "_producer": _PRODUCER,
+                        "_schemaURL": _OL_SCHEMA,
+                        "tenant_id": self.tenant_id,
+                    },
+                },
             },
             "job": {
                 "namespace": self.namespace,

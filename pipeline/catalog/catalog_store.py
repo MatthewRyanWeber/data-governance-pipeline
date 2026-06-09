@@ -11,6 +11,8 @@ Revision history
 1.0   2026-06-08   Initial release.
 1.1   2026-06-08   Hoist hashlib import, log FTS rebuild failures.
 1.2   2026-06-08   Taste fixes: dry_run, per-instance lock, guard clauses, naming.
+1.3   2026-06-09   Multi-tenancy: tenant_id column on datasets/columns/dataset_tags,
+                   tenant-scoped dataset_id, filtered queries.
 """
 
 import hashlib
@@ -76,6 +78,13 @@ CREATE VIRTUAL TABLE IF NOT EXISTS catalog_fts USING fts5(
 """
 
 
+_MIGRATION_TENANT_ID = [
+    "ALTER TABLE datasets ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'",
+    "ALTER TABLE columns ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'",
+    "ALTER TABLE dataset_tags ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'",
+]
+
+
 class CatalogStore:
     """
     SQLite-backed data catalog for dataset and column metadata.
@@ -93,10 +102,12 @@ class CatalogStore:
         gov: "GovernanceLogger",
         db_path: str | Path | None = None,
         dry_run: bool = False,
+        tenant_id: str = "default",
     ) -> None:
         self.gov = gov
         self.db_path = Path(db_path) if db_path else CATALOG_DB
         self.dry_run = dry_run
+        self.tenant_id = tenant_id
         self._lock = threading.Lock()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
@@ -106,6 +117,11 @@ class CatalogStore:
             conn = sqlite3.connect(str(self.db_path))
             try:
                 conn.executescript(_SCHEMA_SQL)
+                for stmt in _MIGRATION_TENANT_ID:
+                    try:
+                        conn.execute(stmt)
+                    except sqlite3.OperationalError:
+                        pass
                 conn.commit()
             finally:
                 conn.close()
@@ -114,6 +130,9 @@ class CatalogStore:
         conn = sqlite3.connect(str(self.db_path))
         conn.row_factory = sqlite3.Row
         return conn
+
+    def _dataset_id(self, name: str) -> str:
+        return hashlib.sha256(f"{self.tenant_id}:{name}".encode()).hexdigest()[:16]
 
     def register_dataset(
         self,
@@ -131,7 +150,7 @@ class CatalogStore:
         if not name or not name.strip():
             raise ValueError("Dataset name must not be empty")
 
-        dataset_id = hashlib.sha256(name.encode()).hexdigest()[:16]
+        dataset_id = self._dataset_id(name)
         row_count = len(df)
         column_count = len(df.columns)
 
@@ -150,8 +169,9 @@ class CatalogStore:
                     INSERT INTO datasets
                         (dataset_id, name, description, owner, domain,
                          source_type, source_path, row_count, col_count,
-                         tags, quality_score, last_updated, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         tags, quality_score, last_updated, created_at,
+                         tenant_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(dataset_id) DO UPDATE SET
                         description=excluded.description,
                         owner=excluded.owner, domain=excluded.domain,
@@ -166,28 +186,33 @@ class CatalogStore:
                     dataset_id, name, description, owner, domain,
                     source_type, source_path, row_count, column_count,
                     json.dumps(tag_list), quality_score, now, now,
+                    self.tenant_id,
                 ))
 
                 conn.execute(
-                    "DELETE FROM columns WHERE dataset_id = ?", (dataset_id,)
+                    "DELETE FROM columns WHERE dataset_id = ? AND tenant_id = ?",
+                    (dataset_id, self.tenant_id),
                 )
                 for col_name in df.columns:
                     col_id = f"{dataset_id}_{col_name}"
                     conn.execute("""
                         INSERT OR REPLACE INTO columns
-                            (column_id, dataset_id, name, dtype, nullable)
-                        VALUES (?, ?, ?, ?, ?)
+                            (column_id, dataset_id, name, dtype, nullable,
+                             tenant_id)
+                        VALUES (?, ?, ?, ?, ?, ?)
                     """, (
                         col_id, dataset_id, col_name,
                         str(df[col_name].dtype),
                         int(df[col_name].isna().any()),
+                        self.tenant_id,
                     ))
 
                 for tag in tag_list:
                     conn.execute("""
-                        INSERT OR IGNORE INTO dataset_tags (dataset_id, tag)
-                        VALUES (?, ?)
-                    """, (dataset_id, tag))
+                        INSERT OR IGNORE INTO dataset_tags
+                            (dataset_id, tag, tenant_id)
+                        VALUES (?, ?, ?)
+                    """, (dataset_id, tag, self.tenant_id))
 
                 try:
                     conn.execute(
@@ -210,19 +235,21 @@ class CatalogStore:
         return dataset_id
 
     def get_dataset(self, name: str) -> dict | None:
-        """Look up a dataset by name."""
-        dataset_id = hashlib.sha256(name.encode()).hexdigest()[:16]
+        """Look up a dataset by name within the current tenant."""
+        dataset_id = self._dataset_id(name)
         conn = self._conn()
         try:
             row = conn.execute(
-                "SELECT * FROM datasets WHERE dataset_id = ?", (dataset_id,)
+                "SELECT * FROM datasets WHERE dataset_id = ? AND tenant_id = ?",
+                (dataset_id, self.tenant_id),
             ).fetchone()
             if not row:
                 return None
             result = dict(row)
             result["tags"] = json.loads(result["tags"])
             cols = conn.execute(
-                "SELECT * FROM columns WHERE dataset_id = ?", (dataset_id,)
+                "SELECT * FROM columns WHERE dataset_id = ? AND tenant_id = ?",
+                (dataset_id, self.tenant_id),
             ).fetchall()
             result["columns"] = [dict(c) for c in cols]
             return result
@@ -230,17 +257,18 @@ class CatalogStore:
             conn.close()
 
     def list_datasets(self, domain: str | None = None) -> list[dict]:
-        """List all datasets, optionally filtered by domain."""
+        """List all datasets for the current tenant, optionally filtered by domain."""
         conn = self._conn()
         try:
             if domain:
                 rows = conn.execute(
-                    "SELECT * FROM datasets WHERE domain = ? ORDER BY name",
-                    (domain,),
+                    "SELECT * FROM datasets WHERE tenant_id = ? AND domain = ? ORDER BY name",
+                    (self.tenant_id, domain),
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    "SELECT * FROM datasets ORDER BY name"
+                    "SELECT * FROM datasets WHERE tenant_id = ? ORDER BY name",
+                    (self.tenant_id,),
                 ).fetchall()
             results = []
             for row in rows:
@@ -262,7 +290,7 @@ class CatalogStore:
                         dataset_name, column_name)
             return
 
-        dataset_id = hashlib.sha256(dataset_name.encode()).hexdigest()[:16]
+        dataset_id = self._dataset_id(dataset_name)
         col_id = f"{dataset_id}_{column_name}"
         with self._lock:
             conn = self._conn()
@@ -271,10 +299,10 @@ class CatalogStore:
                     UPDATE columns SET
                         pii = ?, description = ?,
                         glossary_term = ?, tags = ?
-                    WHERE column_id = ?
+                    WHERE column_id = ? AND tenant_id = ?
                 """, (
                     int(pii), description, glossary_term,
-                    json.dumps(tags or []), col_id,
+                    json.dumps(tags or []), col_id, self.tenant_id,
                 ))
                 if cur.rowcount == 0:
                     logger.warning("[CATALOG] Column '%s' not found in dataset '%s'",
@@ -290,15 +318,15 @@ class CatalogStore:
                         dataset_name, score)
             return
 
-        dataset_id = hashlib.sha256(dataset_name.encode()).hexdigest()[:16]
+        dataset_id = self._dataset_id(dataset_name)
         now = datetime.now(timezone.utc).isoformat()
         with self._lock:
             conn = self._conn()
             try:
                 cur = conn.execute(
                     "UPDATE datasets SET quality_score = ?, last_updated = ? "
-                    "WHERE dataset_id = ?",
-                    (score, now, dataset_id),
+                    "WHERE dataset_id = ? AND tenant_id = ?",
+                    (score, now, dataset_id, self.tenant_id),
                 )
                 if cur.rowcount == 0:
                     logger.warning("[CATALOG] Dataset '%s' not found for quality update",
@@ -313,13 +341,16 @@ class CatalogStore:
             logger.info("[DRY RUN] Would delete dataset '%s'", name)
             return False
 
-        dataset_id = hashlib.sha256(name.encode()).hexdigest()[:16]
+        dataset_id = self._dataset_id(name)
         with self._lock:
             conn = self._conn()
             try:
-                conn.execute("DELETE FROM columns WHERE dataset_id = ?", (dataset_id,))
-                conn.execute("DELETE FROM dataset_tags WHERE dataset_id = ?", (dataset_id,))
-                cur = conn.execute("DELETE FROM datasets WHERE dataset_id = ?", (dataset_id,))
+                conn.execute("DELETE FROM columns WHERE dataset_id = ? AND tenant_id = ?",
+                             (dataset_id, self.tenant_id))
+                conn.execute("DELETE FROM dataset_tags WHERE dataset_id = ? AND tenant_id = ?",
+                             (dataset_id, self.tenant_id))
+                cur = conn.execute("DELETE FROM datasets WHERE dataset_id = ? AND tenant_id = ?",
+                                   (dataset_id, self.tenant_id))
                 conn.commit()
                 deleted = cur.rowcount > 0
             finally:
