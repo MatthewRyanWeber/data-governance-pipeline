@@ -8,11 +8,13 @@ Revision history
 ────────────────
 1.0   2026-06-07   Initial extraction from pipeline_v3.py.
 1.1   2026-06-08   Added validate_loader_config() for parse-time config checks.
+1.2   2026-06-09   Upgraded validate_loader_config to raise ConfigValidationError.
 """
 
 import importlib
 import logging
 
+from pipeline.exceptions import ConfigValidationError
 from pipeline.loaders.base import validate_sql_identifier
 
 logger = logging.getLogger(__name__)
@@ -158,24 +160,21 @@ def validate_loader_config(db_type: str, cfg: dict, table: str = "") -> None:
             validate_sql_identifier(table, "table")
 
     # ── Required config keys ────────────────────────────────────────────
+    missing: list[str] = []
     for type_set, required in _REQUIRED_KEYS:
         if key not in type_set:
             continue
         for req in required:
             if "|" in req:
-                # At least one of the alternatives must be present
                 alternatives = req.split("|")
                 if not any(cfg.get(alt) for alt in alternatives):
-                    raise ValueError(
-                        f"Loader config for '{db_type}' requires at least "
-                        f"one of: {', '.join(alternatives)}"
-                    )
+                    missing.append("|".join(alternatives))
             else:
                 if not cfg.get(req):
-                    raise ValueError(
-                        f"Loader config for '{db_type}' is missing required "
-                        f"key: '{req}'"
-                    )
+                    missing.append(req)
+
+    if missing:
+        raise ConfigValidationError(db_type=db_type, missing_keys=missing)
 
     logger.debug(
         "Loader config validated for db_type='%s', table='%s'.",

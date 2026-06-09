@@ -16,6 +16,7 @@ Revision history
                    progress tracking on /status, graceful SIGTERM shutdown.
 1.4   2026-06-09   Run queue, history (/runs), cancel, webhook notifications.
 1.5   2026-06-09   Replaced inline rate limiter with pluggable rate_limiter module.
+1.6   2026-06-09   Added config validation via validate_loader_config on /run.
 """
 
 import functools
@@ -326,7 +327,9 @@ def create_app(pipeline_fn=None, max_queue_size: int | None = None) -> "Flask":
                 400,
             )
 
-        from pipeline.loaders import supported_db_types
+        from pipeline.loaders import supported_db_types, validate_loader_config
+        from pipeline.exceptions import ConfigValidationError
+
         known_destinations = supported_db_types()
         if destination.lower() not in known_destinations:
             return _error_response(
@@ -334,6 +337,17 @@ def create_app(pipeline_fn=None, max_queue_size: int | None = None) -> "Flask":
                 f"Unknown destination '{destination}'.",
                 400,
                 valid_destinations=sorted(known_destinations),
+            )
+
+        try:
+            validate_loader_config(destination, config, table=config.get("table", ""))
+        except ConfigValidationError as exc:
+            return _error_response(
+                "invalid_config",
+                str(exc),
+                400,
+                db_type=exc.db_type,
+                missing_keys=exc.missing_keys,
             )
 
         run_id = str(uuid.uuid4())

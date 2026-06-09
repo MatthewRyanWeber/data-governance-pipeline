@@ -8,6 +8,7 @@ Revision history
 1.1   2026-06-09   Updated for structured error responses, fixed flaky concurrent test.
 1.2   2026-06-09   Added tests for run queue, history, cancel, webhook.
 1.3   2026-06-09   Added TestAPIWithRealPipeline: real CSV-to-SQLite through API.
+1.4   2026-06-09   Added config validation tests for destination-specific required keys.
 """
 
 import os
@@ -39,7 +40,8 @@ class TestAPIAuth(unittest.TestCase):
         self.assertEqual(resp.get_json()["status"], "healthy")
 
     def test_run_requires_auth(self):
-        resp = self.client.post("/run", json={"source": "x", "destination": "sqlite"})
+        resp = self.client.post("/run", json={"source": "x", "destination": "sqlite",
+                                              "config": {"db_name": "test"}})
         self.assertEqual(resp.status_code, 401)
         body = resp.get_json()["error"]
         self.assertEqual(body["code"], "unauthorized")
@@ -80,7 +82,10 @@ class TestAPINoAuth(unittest.TestCase):
         self.client = self.app.test_client()
 
     def test_run_works_without_keys_configured(self):
-        resp = self.client.post("/run", json={"source": "x.csv", "destination": "sqlite"})
+        resp = self.client.post("/run", json={
+            "source": "x.csv", "destination": "sqlite",
+            "config": {"db_name": "test"},
+        })
         self.assertEqual(resp.status_code, 202)
 
     def test_status_works_without_keys_configured(self):
@@ -133,7 +138,8 @@ class TestAPIValidation(unittest.TestCase):
 
     def test_valid_run_returns_202(self):
         resp = self.client.post("/run", json={
-            "source": "data.csv", "destination": "sqlite"
+            "source": "data.csv", "destination": "sqlite",
+            "config": {"db_name": "test"},
         })
         self.assertEqual(resp.status_code, 202)
         body = resp.get_json()
@@ -151,11 +157,39 @@ class TestAPIValidation(unittest.TestCase):
         app = create_app(pipeline_fn=slow_pipeline)
         client = app.test_client()
 
-        client.post("/run", json={"source": "data.csv", "destination": "sqlite"})
+        client.post("/run", json={"source": "data.csv", "destination": "sqlite",
+                                  "config": {"db_name": "test"}})
         started.wait(timeout=5)
-        resp = client.post("/run", json={"source": "data2.csv", "destination": "sqlite"})
+        resp = client.post("/run", json={"source": "data2.csv", "destination": "sqlite",
+                                         "config": {"db_name": "test"}})
         self.assertEqual(resp.status_code, 409)
         self.assertEqual(resp.get_json()["error"]["code"], "already_running")
+
+    def test_config_validation_missing_host_for_postgresql(self):
+        resp = self.client.post("/run", json={
+            "source": "data.csv", "destination": "postgresql", "config": {},
+        })
+        self.assertEqual(resp.status_code, 400)
+        body = resp.get_json()["error"]
+        self.assertEqual(body["code"], "invalid_config")
+        self.assertIn("host", body["missing_keys"])
+        self.assertEqual(body["db_type"], "postgresql")
+
+    def test_config_validation_sqlite_missing_db_name(self):
+        resp = self.client.post("/run", json={
+            "source": "data.csv", "destination": "sqlite", "config": {},
+        })
+        self.assertEqual(resp.status_code, 400)
+        body = resp.get_json()["error"]
+        self.assertEqual(body["code"], "invalid_config")
+        self.assertIn("db_name", body["missing_keys"])
+
+    def test_config_validation_valid_sqlite_passes(self):
+        resp = self.client.post("/run", json={
+            "source": "data.csv", "destination": "sqlite",
+            "config": {"db_name": "test_db"},
+        })
+        self.assertEqual(resp.status_code, 202)
 
     def test_no_pipeline_fn_returns_501(self):
         from pipeline.api import create_app
@@ -205,13 +239,16 @@ class TestAPIQueue(unittest.TestCase):
         app = create_app(pipeline_fn=slow_pipeline, max_queue_size=5)
         client = app.test_client()
 
-        resp1 = client.post("/run", json={"source": "a.csv", "destination": "sqlite"})
+        cfg = {"db_name": "test"}
+        resp1 = client.post("/run", json={"source": "a.csv", "destination": "sqlite",
+                                          "config": cfg})
         self.assertEqual(resp1.status_code, 202)
         self.assertEqual(resp1.get_json()["status"], "started")
 
         started.wait(timeout=5)
 
-        resp2 = client.post("/run", json={"source": "b.csv", "destination": "sqlite"})
+        resp2 = client.post("/run", json={"source": "b.csv", "destination": "sqlite",
+                                          "config": cfg})
         self.assertEqual(resp2.status_code, 202)
         self.assertEqual(resp2.get_json()["status"], "queued")
         self.assertEqual(resp2.get_json()["position"], 1)
@@ -230,10 +267,12 @@ class TestAPIQueue(unittest.TestCase):
         app = create_app(pipeline_fn=slow_pipeline, max_queue_size=1)
         client = app.test_client()
 
-        client.post("/run", json={"source": "a.csv", "destination": "sqlite"})
+        cfg = {"db_name": "test"}
+        client.post("/run", json={"source": "a.csv", "destination": "sqlite", "config": cfg})
         started.wait(timeout=5)
-        client.post("/run", json={"source": "b.csv", "destination": "sqlite"})
-        resp = client.post("/run", json={"source": "c.csv", "destination": "sqlite"})
+        client.post("/run", json={"source": "b.csv", "destination": "sqlite", "config": cfg})
+        resp = client.post("/run", json={"source": "c.csv", "destination": "sqlite",
+                                         "config": cfg})
         self.assertEqual(resp.status_code, 429)
         self.assertEqual(resp.get_json()["error"]["code"], "queue_full")
         release.set()
@@ -257,9 +296,11 @@ class TestAPICancel(unittest.TestCase):
         app = create_app(pipeline_fn=slow_pipeline, max_queue_size=5)
         client = app.test_client()
 
-        client.post("/run", json={"source": "a.csv", "destination": "sqlite"})
+        cfg = {"db_name": "test"}
+        client.post("/run", json={"source": "a.csv", "destination": "sqlite", "config": cfg})
         started.wait(timeout=5)
-        resp2 = client.post("/run", json={"source": "b.csv", "destination": "sqlite"})
+        resp2 = client.post("/run", json={"source": "b.csv", "destination": "sqlite",
+                                          "config": cfg})
         queued_id = resp2.get_json()["run_id"]
 
         resp = client.post(f"/runs/{queued_id}/cancel")
@@ -279,7 +320,9 @@ class TestAPICancel(unittest.TestCase):
         app = create_app(pipeline_fn=slow_pipeline)
         client = app.test_client()
 
-        resp1 = client.post("/run", json={"source": "a.csv", "destination": "sqlite"})
+        cfg = {"db_name": "test"}
+        resp1 = client.post("/run", json={"source": "a.csv", "destination": "sqlite",
+                                          "config": cfg})
         run_id = resp1.get_json()["run_id"]
         started.wait(timeout=5)
 
@@ -326,7 +369,8 @@ class TestAPIHistory(unittest.TestCase):
         app = create_app(pipeline_fn=fast_pipeline)
         client = app.test_client()
 
-        resp = client.post("/run", json={"source": "x.csv", "destination": "sqlite"})
+        resp = client.post("/run", json={"source": "x.csv", "destination": "sqlite",
+                                         "config": {"db_name": "test"}})
         run_id = resp.get_json()["run_id"]
         done.wait(timeout=5)
 
@@ -358,6 +402,7 @@ class TestAPIWebhook(unittest.TestCase):
 
         resp = client.post("/run", json={
             "source": "x.csv", "destination": "sqlite",
+            "config": {"db_name": "test"},
             "webhook_url": "https://example.com/hook",
         })
         self.assertEqual(resp.status_code, 202)
@@ -458,6 +503,7 @@ class TestAPIWithRealPipeline(unittest.TestCase):
         resp = self.client.post("/run", json={
             "source": os.path.join(self.tmpdir, "DOES_NOT_EXIST.csv"),
             "destination": "sqlite",
+            "config": {"db_name": "test"},
         })
         self.assertEqual(resp.status_code, 202)
 

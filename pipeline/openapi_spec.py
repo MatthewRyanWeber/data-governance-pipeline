@@ -11,6 +11,7 @@ Revision history
 ────────────────
 1.0   2026-06-09   Initial OpenAPI specification with Swagger UI.
 1.1   2026-06-09   Updated error/status schemas for structured error responses and progress.
+1.2   2026-06-09   Added config validation error example to /run 400 response.
 """
 
 import logging
@@ -164,6 +165,18 @@ def get_openapi_spec() -> dict:
                                                         "bigquery", "clickhouse", "mongodb",
                                                         "postgresql", "sqlite", "snowflake",
                                                     ],
+                                                },
+                                            },
+                                        },
+                                        "invalid_config": {
+                                            "summary": "Missing required config keys",
+                                            "value": {
+                                                "error": {
+                                                    "code": "invalid_config",
+                                                    "message": "Invalid config for 'postgresql': missing required key(s): host",
+                                                    "request_id": "req_b2c3d4e5f6a1",
+                                                    "db_type": "postgresql",
+                                                    "missing_keys": ["host"],
                                                 },
                                             },
                                         },
