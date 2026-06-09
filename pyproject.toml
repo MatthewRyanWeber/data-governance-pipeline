@@ -9,11 +9,16 @@ description = "Production-grade Python ETL pipeline with built-in GDPR, CCPA, HI
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
+authors = [
+    { name = "Matthew Weber", email = "matt@nyss.nyc" },
+]
 
 keywords = [
     "etl", "data-pipeline", "data-governance", "gdpr", "ccpa", "hipaa",
-    "pii", "compliance", "audit", "healthcare", "epic-ehr", "omop",
-    "data-engineering", "python",
+    "pii", "pii-detection", "compliance", "audit", "healthcare", "epic-ehr",
+    "omop", "data-engineering", "data-quality", "data-lineage", "data-catalog",
+    "schema-validation", "data-profiling", "vector-database", "snowflake",
+    "bigquery", "redshift", "python",
 ]
 
 classifiers = [
@@ -27,10 +32,13 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Database",
     "Topic :: Office/Business",
+    "Topic :: Scientific/Engineering :: Information Analysis",
     "Topic :: Scientific/Engineering :: Medical Science Apps.",
     "Topic :: Security",
+    "Topic :: Software Development :: Libraries",
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 
@@ -140,15 +148,13 @@ sftp = [
     "paramiko>=3.0.0",
 ]
 
-# Data lake formats
+# Deprecated alias — use "datalake" instead
 lakeformats = [
-    "duckdb>=0.9.0",
-    "deltalake>=0.15.0",
-    "pyiceberg>=0.5.0",
+    "duckdb>=1.0.0",
+    "deltalake>=0.18.0",
+    "pyiceberg>=0.7.0",
     "pyarrow>=14.0.0",
 ]
-
-# Object storage destinations
 
 # DuckDB embedded analytics + MotherDuck
 duckdb_dest = [
@@ -182,14 +188,15 @@ dev = [
 
 # Everything
 all = [
-    "data-governance-pipeline[cloud,streaming,scheduler,healthcare,sap,catalogs,quickbooks,lancedb,vector,lakeformats,objectstorage,cockroachdb,grafana]",
+    "data-governance-pipeline[cloud,streaming,scheduler,healthcare,sap,catalogs,quickbooks,lancedb,vector,datalake,objectstorage,sftp,duckdb_dest,cockroachdb,grafana]",
 ]
 
 [project.urls]
-Homepage      = "https://github.com/matthewryanweber/data-governance-pipeline"
-Repository    = "https://github.com/matthewryanweber/data-governance-pipeline"
-Issues        = "https://github.com/matthewryanweber/data-governance-pipeline/issues"
-Changelog     = "https://github.com/matthewryanweber/data-governance-pipeline/blob/main/CHANGELOG.md"
+Homepage      = "https://github.com/MatthewRyanWeber/data-governance-pipeline"
+Documentation = "https://github.com/MatthewRyanWeber/data-governance-pipeline#readme"
+Repository    = "https://github.com/MatthewRyanWeber/data-governance-pipeline"
+Issues        = "https://github.com/MatthewRyanWeber/data-governance-pipeline/issues"
+Changelog     = "https://github.com/MatthewRyanWeber/data-governance-pipeline/blob/main/CHANGELOG.md"
 
 [project.scripts]
 # Run the full interactive pipeline wizard
@@ -223,4 +230,4 @@ ignore_missing_imports = true
 
 [tool.black]
 line-length    = 100
-target-version = ["py310", "py311", "py312"]
+target-version = ["py310", "py311", "py312", "py313"]

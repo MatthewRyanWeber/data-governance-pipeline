@@ -72,39 +72,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
-## [4.24.0] — 2026-03-24
-
-### Added — 13 new destination loaders (#30-42)
-- **`DuckDBLoader`** (destinations #30 / #31 `motherduck`) — embedded
-  analytical SQL; in-memory, persistent file, and MotherDuck cloud modes;
-  append, replace, ON CONFLICT upsert.
-- **`ParquetLoader`** (destination #32) — columnar Parquet files to local
-  disk, S3, GCS, or Azure Blob via pyarrow; partitioned datasets; configurable
-  compression.
-- **`DeltaLakeLoader`** (destination #33) — Delta Lake open table format;
-  ACID transactions, time travel, MERGE upsert; local and cloud (S3, Azure,
-  GCS) storage; schema_mode merge/overwrite.
-- **`IcebergLoader`** (destination #34) — Apache Iceberg open table format;
-  REST, AWS Glue, Hive, SQL (SQLite/PostgreSQL), and in-memory catalog
-  backends; append and overwrite modes.
-- **`S3Loader`** (destinations #35 `s3` / #36 `gcs` / #37 `azure_blob`) —
-  write CSV, JSON, JSONL, or Parquet to any major object store; one class
-  handles all three providers via s3fs / gcsfs / adlfs.
-- **`AthenaLoader`** (destination #38) — serverless SQL over S3; writes
-  Parquet to the data directory then runs MSCK REPAIR TABLE to register
-  the data with Athena; configurable workgroup.
-- **`SFTPLoader`** (destination #39) — upload CSV, JSON, JSONL, or Parquet
-  to remote SFTP servers; password or private key (with passphrase) auth.
-- **`MicrosoftFabricLoader`** (destination #40) — write Parquet or Delta
-  Lake tables to Microsoft Fabric Lakehouses via the OneLake ADLS Gen2
-  API; Azure AD bearer token auth.
-- **`PostGISLoader`** (destination #41) — PostgreSQL with the PostGIS
-  geospatial extension; WKT geometry strings converted via ST_GeomFromText();
-  configurable SRID (default WGS 84 / 4326).
-- 58 new tests in `test_loader_dispatch.py` (214 total, 493 across all suites).
-
----
-
 ## [4.23.0] — 2026-03-24
 
 ### Fixed
@@ -258,62 +225,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [4.16.0] — 2026-03-24
 
-### Fixed (bug scan session 4)
-- **ComplianceMonitor._check_vendor_risk() — KeyError on missing key**: direct
-  `rec["next_review_date"]` access raised `KeyError` if a vendor registry entry
-  was missing that field (e.g. manually edited file or partial write). The
-  entire compliance check crashed instead of returning a warning. Fixed: uses
-  `rec.get("next_review_date", "")` with a try/except around fromisoformat,
-  returning WARN with a descriptive message for missing or malformed dates.
-- 2 regression tests added to `test_compliance_extensions.py` (58 total).
-
-### Confirmed clean (not bugs)
-- `OMOPTransformer.to_visit_occurrence()` — scanner false positive; both
-  `to_datetime()` calls already have `errors='coerce'`.
-- `PurposeLimitationEnforcer` — thread safety scanner false positive; class
-  has `threading.Lock()` correctly.
-- All 21 loader `load()` signatures correct.
-- `PHIKAnonymityChecker` multi-key suppress works correctly end-to-end.
-- `MetricsSink` negative `rows_failed` correctly clamped to 0.
-- Dashboard SQL is hardcoded — no injection risk.
-- The two `except: pass` in `pipeline_v3.py` are intentional archive-peeking
-  fallbacks, not bugs.
-
----
-
-## [4.16.0] — 2026-03-24
-
-### Fixed (full project bug scan)
-- **ComplianceMonitor._check_vendor_risk() — KeyError on missing key**: direct
-  access to `rec["next_review_date"]` raised `KeyError` if a vendor record was
-  missing that key (manually edited registry or partial write). Fixed: uses
-  `.get()` with empty-string fallback, guards against missing or malformed date
-  strings, appends vendor to overdue list with a clear message instead of
-  crashing.
-- **OMOPTransformer.to_visit_occurrence() — to_datetime without errors='coerce'**:
-  `HOSP_ADMSN_TIME` and `HOSP_DISCH_TIME` columns often contain `'N/A'`,
-  empty strings, or `None`-as-string for outpatient encounters. Missing
-  `errors='coerce'` caused the entire domain mapping to crash on a single
-  bad value. Fixed: both calls use `errors='coerce'`.
-- **test_refresh_window_blocked — time-dependent flaky test**: used
-  `refresh_window_end=23` which excluded hour 23 (11 PM local), causing the
-  test to fail if run late at night. Fixed: mock `datetime.now()` to a
-  controlled hour inside the window.
-- 2 new tests added (346 total).
-
-### Verified clean (scan confirmed not bugs)
-- RetentionEnforcer SQL: table/column names validated via SQLAlchemy inspector
-- ClarityExtractor ZC_ table injection: all names validated via table_exists()
-- PHIKAnonymityChecker multi-key suppress: correct behavior confirmed by live test
-- MetricsSink negative rows_failed: correctly clamped to 0
-- All 21 loader load() signatures: correct
-- Dashboard SQL: all hardcoded, no injection risk
-- PurposeLimitationEnforcer: has threading.Lock — scanner false positive
-
----
-
-## [4.16.0] — 2026-03-24
-
 ### Added
 - **`PineconeLoader`** (destination #21) — managed cloud vector database;
   upsert by ID with configurable batch size, namespace support, metadata
@@ -330,6 +241,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Fixed duplicate `lancedb` entry in `_LOADER_DISPATCH`.
 - Fixed `QdrantLoader.search()` to use `query_points()` API (qdrant-client
   v1.9+ removed the legacy `search()` method).
+
+### Fixed
+- **ComplianceMonitor._check_vendor_risk() — KeyError on missing key**: direct
+  `rec["next_review_date"]` access raised `KeyError` if a vendor registry entry
+  was missing that field. Fixed: uses `rec.get("next_review_date", "")` with a
+  try/except around fromisoformat, returning WARN with a descriptive message.
+- 2 regression tests added to `test_compliance_extensions.py` (58 total).
 
 ---
 

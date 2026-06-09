@@ -11,6 +11,7 @@ Revision history
 ----------------
 1.0   2026-06-07   Initial extraction from monolith.
 1.1   2026-06-08   Added API key authentication, rate limiting, input validation.
+1.2   2026-06-09   Added OpenAPI/Swagger documentation routes (/docs, /openapi.json).
 """
 
 import functools
@@ -231,6 +232,13 @@ def create_app(pipeline_fn=None) -> "Flask":
                 "run_id": _state["run_id"],
                 "metrics": _state["metrics"],
             })
+
+    # ── Documentation ──────────────────────────────────────────────────
+    try:
+        from pipeline.openapi_spec import register_docs_routes
+        register_docs_routes(app)
+    except Exception as exc:
+        logger.warning("Could not register OpenAPI docs routes: %s", exc)
 
     logger.info("Pipeline Flask API created.")
     return app
