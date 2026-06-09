@@ -13,6 +13,8 @@ Revision history
 1.2   2026-06-08   Add db:/api: source routing, --transform-config, --verify.
 1.3   2026-06-08   Chunked processing with checkpoints, crash recovery, resume
                    subcommand, service/watchdog integration.
+1.4   2026-06-09   Capture the real exception in run-state on failure instead of
+                   the "see logs" placeholder; log full traceback.
 """
 
 import argparse
@@ -382,8 +384,11 @@ def _run_single_file(source, args, config, gov, metrics) -> None:
             state_manager=state_manager,
         )
         state_manager.mark_complete(run_state.run_id)
-    except Exception:
-        state_manager.mark_failed(run_state.run_id, "see logs")
+    except Exception as exc:
+        # Persist the real exception so `resume`/status reporting is actionable —
+        # the prior "see logs" placeholder was useless when logs had rotated away.
+        logger.error("Run %s failed: %s", run_state.run_id, exc, exc_info=True)
+        state_manager.mark_failed(run_state.run_id, f"{type(exc).__name__}: {exc}")
         raise
 
 

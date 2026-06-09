@@ -11,6 +11,24 @@ build/
 
 # Logs
 logs/
+*LOGS/
+*.log
+
+# Runtime state — checkpoints, watchdog restarts, audit ledgers
+config/run_state/
+config/watchdog_restarts.jsonl
+audit_ledger_*.jsonl
+
+# Databases (may contain consent/PII records — never commit)
+*.db
+*.sqlite
+*.sqlite3
+
+# Test / coverage artifacts
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
 
 # IDE
 .vscode/
