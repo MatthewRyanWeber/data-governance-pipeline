@@ -19,6 +19,8 @@ Revision history
 1.6   2026-06-09   Added config validation via validate_loader_config on /run.
 1.7   2026-06-09   JWT auth token rotation: /auth/token, /auth/revoke, bearer JWT support.
 2.0   2026-06-09   Migrated Flask to Quart (ASGI) for async request handling.
+2.1   2026-06-09   Fixed silent except in get_status, JWT header routing,
+                   replaced _state dict with _RunStatus dataclass.
 """
 
 import functools
@@ -433,8 +435,8 @@ def create_app(pipeline_fn=None, max_queue_size: int | None = None) -> "Quart":
                         "last_chunk_completed": run_state.last_chunk_completed,
                         "total_rows_processed": run_state.total_rows_processed,
                     }
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("[API] Could not load run progress: %s", exc)
 
         return jsonify(result)
 

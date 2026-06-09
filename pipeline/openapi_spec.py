@@ -3,7 +3,7 @@ OpenAPI 3.0 specification and Swagger UI for the Data Governance Pipeline API.
 
 Provides:
   - ``get_openapi_spec()`` — returns the full OpenAPI 3.0 dict
-  - ``register_docs_routes(app)`` — adds ``/docs`` and ``/openapi.json`` to Flask
+  - ``register_docs_routes(app)`` — adds ``/docs`` and ``/openapi.json`` to Quart
 
 Layer 6 — no pipeline logic, only metadata.
 
@@ -14,6 +14,7 @@ Revision history
 1.2   2026-06-09   Added config validation error example to /run 400 response.
 1.3   2026-06-09   Added /auth/token, /auth/revoke endpoints and JWTAuth scheme.
 1.4   2026-06-09   Migrated Flask imports to Quart.
+1.5   2026-06-09   Fixed docstring: Flask → Quart.
 """
 
 import logging
