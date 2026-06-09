@@ -71,10 +71,10 @@ pip install -e ".[all]"          # Everything
 Point it at a data source, tell it where to send the data, and it handles everything in between: cleaning, validating, masking PII, auditing every action to a tamper-evident ledger, and loading into your chosen destination. A full interactive wizard walks you through GDPR/CCPA compliance questions before anything runs.
 
 ```bash
-python pipeline_v3.py
+pipeline run <source> <destination>
 ```
 
-For healthcare data from Epic EHR systems, `epic_extensions.py` adds a complete HIPAA compliance layer on top.
+For healthcare data from Epic EHR systems, `pipeline.extensions.epic_extensions` adds a complete HIPAA compliance layer on top.
 
 ---
 

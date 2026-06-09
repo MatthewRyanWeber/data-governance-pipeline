@@ -12,6 +12,7 @@ Revision history
 ────────────────
 1.0   2026-06-07   Initial release.
 1.1   2026-06-08   Refactored if/elif dispatch into _FORMAT_REGISTRY.
+1.2   2026-06-09   Consolidated chunks() via _CHUNK_READERS dict.
 """
 
 import io
@@ -413,47 +414,38 @@ class Extractor:
     def _read_stream(self, stream: io.IOBase, ext: str):
         return self._dispatch(ext, stream, is_stream=True)
 
+    _CHUNK_READERS: dict[str, Callable] = {
+        ".csv": lambda p, sz: __import__("pandas").read_csv(p, chunksize=sz, encoding="utf-8"),
+        ".tsv": lambda p, sz: __import__("pandas").read_csv(p, sep="\t", chunksize=sz, encoding="utf-8"),
+        ".jsonl": lambda p, sz: __import__("pandas").read_json(p, lines=True, chunksize=sz),
+        ".ndjson": lambda p, sz: __import__("pandas").read_json(p, lines=True, chunksize=sz),
+    }
+
     def chunks(self, path: str, chunk_size: int = DEFAULT_CHUNK_SIZE) -> Iterator:
         """Yield the source file in row-count chunks."""
-        import pandas as pd
-
         real_ext = self._compressor.inner_extension(path)
+        is_compressed = self._compressor.is_compressed(path)
         self.gov.extract_event("CHUNKED_EXTRACT_START", {
             "source": path, "chunk_size": chunk_size,
         })
 
-        if real_ext == ".csv" and not self._compressor.is_compressed(path):
-            for i, chunk in enumerate(pd.read_csv(path, chunksize=chunk_size, encoding="utf-8")):
+        reader_factory = self._CHUNK_READERS.get(real_ext) if not is_compressed else None
+        if reader_factory is not None:
+            for i, chunk in enumerate(reader_factory(path, chunk_size)):
                 self.gov.extract_event("CHUNK_EXTRACTED", {
                     "chunk_index": i, "rows": len(chunk),
                 })
                 yield chunk
 
-        elif real_ext == ".tsv" and not self._compressor.is_compressed(path):
-            for i, chunk in enumerate(pd.read_csv(path, sep="\t", chunksize=chunk_size, encoding="utf-8")):
-                self.gov.extract_event("CHUNK_EXTRACTED", {
-                    "chunk_index": i, "rows": len(chunk),
-                })
-                yield chunk
-
-        elif real_ext in (".jsonl", ".ndjson") and not self._compressor.is_compressed(path):
-            for i, chunk in enumerate(pd.read_json(path, lines=True, chunksize=chunk_size)):
-                self.gov.extract_event("CHUNK_EXTRACTED", {
-                    "chunk_index": i, "rows": len(chunk),
-                })
-                yield chunk
-
-        elif real_ext == ".parquet" and not self._compressor.is_compressed(path) and HAS_PYARROW:
+        elif real_ext == ".parquet" and not is_compressed and HAS_PYARROW:
             import pyarrow.parquet as pq
             pf = pq.ParquetFile(path)
-            i = 0
-            for batch in pf.iter_batches(batch_size=chunk_size):
+            for i, batch in enumerate(pf.iter_batches(batch_size=chunk_size)):
                 chunk = batch.to_pandas()
                 self.gov.extract_event("CHUNK_EXTRACTED", {
                     "chunk_index": i, "rows": len(chunk),
                 })
                 yield chunk
-                i += 1
 
         else:
             df = self.extract(path)

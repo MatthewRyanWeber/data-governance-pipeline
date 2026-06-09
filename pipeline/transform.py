@@ -24,6 +24,12 @@ logger = logging.getLogger(__name__)
 _COL_SANITISE = re.compile(r"[^a-z0-9_]")
 
 
+def sanitise_column_name(name: str) -> str:
+    """Normalise a column name: lowercase, replace non-alphanumeric with underscore, strip edges."""
+    result = _COL_SANITISE.sub("_", name.lower())
+    return result.strip("_")
+
+
 class Transformer:
     """
     Applies all transformation steps to a DataFrame.
@@ -107,7 +113,7 @@ class Transformer:
 
     def standardise_names(self, df):
         df = df.copy()
-        df.columns = [_COL_SANITISE.sub("", c.lower().replace(" ", "_")) for c in df.columns]
+        df.columns = [sanitise_column_name(c) for c in df.columns]
         return df
 
     def flatten_nested(self, df, sep: str = "_", max_level: int = 3):
@@ -200,13 +206,7 @@ class Transformer:
             "duplicates_removed": rows_before - len(df),
         })
 
-        def _sanitise_col(c: str) -> str:
-            sanitised = re.sub(r"[^a-zA-Z0-9_]", "_", c)
-            if c.startswith("_"):
-                return sanitised.rstrip("_")
-            return sanitised.strip("_")
-
-        df.columns = [_sanitise_col(c) for c in df.columns]
+        df.columns = [sanitise_column_name(c) for c in df.columns]
         self.gov.transformation_applied("COLUMN_SANITIZATION", {
             "final_columns": list(df.columns),
         })

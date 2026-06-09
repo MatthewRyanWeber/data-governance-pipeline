@@ -14,6 +14,7 @@ Revision history
 ────────────────
 1.0   2026-06-08   Initial release.
 1.1   2026-06-08   Merged CheckpointManager into RunStateManager.
+1.2   2026-06-09   Added public get_state() method for API progress tracking.
 """
 
 import json
@@ -118,6 +119,10 @@ class RunStateManager:
         state.error_message = error
         self._write(state)
         logger.warning("[RUN_STATE] Run %s marked failed: %s", run_id, error)
+
+    def get_state(self, run_id: str) -> RunState | None:
+        """Return the persisted state for a given run, or None if not found."""
+        return self._read(run_id)
 
     def get_incomplete_runs(self) -> list[RunState]:
         """Find all runs in 'running' state — these are crash candidates."""

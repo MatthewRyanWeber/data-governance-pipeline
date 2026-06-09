@@ -12,6 +12,8 @@ Revision history
 1.0   2026-06-07   Initial extraction from monolith.
 1.1   2026-06-08   Added API key authentication, rate limiting, input validation.
 1.2   2026-06-09   Added OpenAPI/Swagger documentation routes (/docs, /openapi.json).
+1.3   2026-06-09   Structured error responses (code, message, request_id),
+                   progress tracking on /status, graceful SIGTERM shutdown.
 """
 
 import functools
@@ -37,6 +39,19 @@ def _load_api_keys() -> set[str]:
     """Load allowed API keys from PIPELINE_API_KEYS env var (comma-separated)."""
     raw = os.environ.get("PIPELINE_API_KEYS", "")
     return {k.strip() for k in raw.split(",") if k.strip()}
+
+
+def _error_response(code: str, message: str, status_code: int, **extra):
+    """Build a structured error JSON response with a unique request ID."""
+    body: dict = {
+        "error": {
+            "code": code,
+            "message": message,
+            "request_id": f"req_{uuid.uuid4().hex[:12]}",
+        }
+    }
+    body["error"].update(extra)
+    return jsonify(body), status_code
 
 
 class _RateLimiter:
@@ -106,7 +121,11 @@ def create_app(pipeline_fn=None) -> "Flask":
 
             rate_limit_id = key or request.remote_addr
             if not rate_limiter.allow(rate_limit_id):
-                return jsonify({"error": "Rate limit exceeded. Try again later."}), 429
+                return _error_response(
+                    "rate_limit_exceeded",
+                    "Rate limit exceeded. Try again later.",
+                    429,
+                )
 
             if not api_keys:
                 return fn(*args, **kwargs)
@@ -114,7 +133,11 @@ def create_app(pipeline_fn=None) -> "Flask":
             if not key or not any(hmac.compare_digest(key, k) for k in api_keys):
                 logger.warning("[API] Unauthorized request to %s from %s",
                                request.path, request.remote_addr)
-                return jsonify({"error": "Unauthorized. Provide a valid API key."}), 401
+                return _error_response(
+                    "unauthorized",
+                    "Unauthorized. Provide a valid API key.",
+                    401,
+                )
 
             return fn(*args, **kwargs)
         return wrapper
@@ -150,17 +173,27 @@ def create_app(pipeline_fn=None) -> "Flask":
             logger.info("Pipeline run %s completed in %.2fs.", run_id, elapsed)
         except Exception as exc:
             elapsed = round(time.perf_counter() - start, 2)
+            error_detail: dict = {"message": str(exc), "type": type(exc).__name__}
+            if hasattr(exc, "db_type"):
+                error_detail["db_type"] = exc.db_type  # type: ignore[union-attr]
+            if hasattr(exc, "table"):
+                error_detail["table"] = exc.table  # type: ignore[union-attr]
+            if hasattr(exc, "missing_keys"):
+                error_detail["missing_keys"] = exc.missing_keys  # type: ignore[union-attr]
             with _state_lock:
                 _state["status"] = "failed"
                 _state["finished_at"] = datetime.now(timezone.utc).isoformat()
-                _state["error"] = str(exc)
+                _state["error"] = error_detail
                 _state["metrics"] = {"duration_s": elapsed}
             logger.error("Pipeline run %s failed after %.2fs: %s", run_id, elapsed, exc)
         finally:
             with _state_lock:
                 if _state["status"] == "running":
                     _state["status"] = "failed"
-                    _state["error"] = "Pipeline thread terminated unexpectedly"
+                    _state["error"] = {
+                        "message": "Pipeline thread terminated unexpectedly",
+                        "type": "unexpected_termination",
+                    }
                     _state["finished_at"] = datetime.now(timezone.utc).isoformat()
 
     # ── Endpoints ───────────────────────────────────────────────────────
@@ -170,7 +203,11 @@ def create_app(pipeline_fn=None) -> "Flask":
     def run_pipeline():
         """Trigger a pipeline run.  Expects JSON: {source, destination, config?}."""
         if pipeline_fn is None:
-            return jsonify({"error": "No pipeline function configured."}), 501
+            return _error_response(
+                "not_configured",
+                "No pipeline function configured.",
+                501,
+            )
 
         body = request.get_json(silent=True) or {}
         source = body.get("source")
@@ -178,30 +215,46 @@ def create_app(pipeline_fn=None) -> "Flask":
         config = body.get("config", {})
 
         if not source or not destination:
-            return jsonify({"error": "Both 'source' and 'destination' are required."}), 400
+            return _error_response(
+                "missing_fields",
+                "Both 'source' and 'destination' are required.",
+                400,
+            )
 
         if not isinstance(source, str) or not isinstance(destination, str):
-            return jsonify({"error": "'source' and 'destination' must be strings."}), 400
+            return _error_response(
+                "invalid_type",
+                "'source' and 'destination' must be strings.",
+                400,
+            )
 
         if not isinstance(config, dict):
-            return jsonify({"error": "'config' must be a JSON object."}), 400
+            return _error_response(
+                "invalid_config",
+                "'config' must be a JSON object.",
+                400,
+            )
 
         from pipeline.loaders import supported_db_types
         known_destinations = supported_db_types()
         if destination.lower() not in known_destinations:
-            return jsonify({
-                "error": f"Unknown destination '{destination}'.",
-                "valid_destinations": sorted(known_destinations),
-            }), 400
+            return _error_response(
+                "unknown_destination",
+                f"Unknown destination '{destination}'.",
+                400,
+                valid_destinations=sorted(known_destinations),
+            )
 
         run_id = str(uuid.uuid4())
 
         with _state_lock:
             if _state["status"] == "running":
-                return jsonify({
-                    "error": "A pipeline run is already in progress.",
-                    "run_id": _state["run_id"],
-                }), 409
+                return _error_response(
+                    "already_running",
+                    "A pipeline run is already in progress.",
+                    409,
+                    active_run_id=_state["run_id"],
+                )
             _state["status"] = "running"
             _state["run_id"] = run_id
             _state["started_at"] = datetime.now(timezone.utc).isoformat()
@@ -221,15 +274,30 @@ def create_app(pipeline_fn=None) -> "Flask":
     @app.route("/status", methods=["GET"])
     @require_auth
     def get_status():
-        """Return the current pipeline run status."""
+        """Return the current pipeline run status with optional chunk progress."""
         with _state_lock:
-            return jsonify({
+            result = {
                 "run_id": _state["run_id"],
                 "status": _state["status"],
                 "started_at": _state["started_at"],
                 "finished_at": _state["finished_at"],
                 "error": _state["error"],
-            })
+            }
+
+        if result["run_id"] and result["status"] == "running":
+            try:
+                from pipeline.run_state import RunStateManager
+                rsm = RunStateManager()
+                run_state = rsm.get_state(str(result["run_id"]))
+                if run_state and run_state.last_chunk_completed >= 0:
+                    result["progress"] = {
+                        "last_chunk_completed": run_state.last_chunk_completed,
+                        "total_rows_processed": run_state.total_rows_processed,
+                    }
+            except Exception:
+                pass
+
+        return jsonify(result)
 
     @app.route("/health", methods=["GET"])
     def health():
@@ -258,5 +326,13 @@ def create_app(pipeline_fn=None) -> "Flask":
 
 
 if __name__ == "__main__":
+    import signal
+
+    def _shutdown(signum, frame):
+        logger.info("Received signal %s — shutting down.", signum)
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, _shutdown)
+
     app = create_app()
     app.run(host="0.0.0.0", port=5000)

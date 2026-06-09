@@ -10,6 +10,7 @@ Layer 6 — no pipeline logic, only metadata.
 Revision history
 ────────────────
 1.0   2026-06-09   Initial OpenAPI specification with Swagger UI.
+1.1   2026-06-09   Updated error/status schemas for structured error responses and progress.
 """
 
 import logging
@@ -135,29 +136,35 @@ def get_openapi_spec() -> dict:
                                         "missing_fields": {
                                             "summary": "Missing required fields",
                                             "value": {
-                                                "error": "Both 'source' and 'destination' are required.",
+                                                "error": {
+                                                    "code": "missing_fields",
+                                                    "message": "Both 'source' and 'destination' are required.",
+                                                    "request_id": "req_8f3a1b2c4d5e",
+                                                },
                                             },
                                         },
                                         "bad_type": {
                                             "summary": "Wrong parameter type",
                                             "value": {
-                                                "error": "'source' and 'destination' must be strings.",
-                                            },
-                                        },
-                                        "bad_config": {
-                                            "summary": "Config is not an object",
-                                            "value": {
-                                                "error": "'config' must be a JSON object.",
+                                                "error": {
+                                                    "code": "invalid_type",
+                                                    "message": "'source' and 'destination' must be strings.",
+                                                    "request_id": "req_a1b2c3d4e5f6",
+                                                },
                                             },
                                         },
                                         "unknown_destination": {
                                             "summary": "Unsupported destination",
                                             "value": {
-                                                "error": "Unknown destination 'nosql'.",
-                                                "valid_destinations": [
-                                                    "bigquery", "clickhouse", "mongodb",
-                                                    "postgresql", "sqlite", "snowflake",
-                                                ],
+                                                "error": {
+                                                    "code": "unknown_destination",
+                                                    "message": "Unknown destination 'nosql'.",
+                                                    "request_id": "req_f6e5d4c3b2a1",
+                                                    "valid_destinations": [
+                                                        "bigquery", "clickhouse", "mongodb",
+                                                        "postgresql", "sqlite", "snowflake",
+                                                    ],
+                                                },
                                             },
                                         },
                                     },
@@ -170,7 +177,11 @@ def get_openapi_spec() -> dict:
                                 "application/json": {
                                     "schema": {"$ref": "#/components/schemas/Error"},
                                     "example": {
-                                        "error": "Unauthorized. Provide a valid API key.",
+                                        "error": {
+                                            "code": "unauthorized",
+                                            "message": "Unauthorized. Provide a valid API key.",
+                                            "request_id": "req_a1b2c3d4e5f6",
+                                        },
                                     },
                                 },
                             },
@@ -189,7 +200,11 @@ def get_openapi_spec() -> dict:
                                 "application/json": {
                                     "schema": {"$ref": "#/components/schemas/Error"},
                                     "example": {
-                                        "error": "Rate limit exceeded. Try again later.",
+                                        "error": {
+                                            "code": "rate_limit_exceeded",
+                                            "message": "Rate limit exceeded. Try again later.",
+                                            "request_id": "req_c3d4e5f6a1b2",
+                                        },
                                     },
                                 },
                             },
@@ -200,7 +215,11 @@ def get_openapi_spec() -> dict:
                                 "application/json": {
                                     "schema": {"$ref": "#/components/schemas/Error"},
                                     "example": {
-                                        "error": "No pipeline function configured.",
+                                        "error": {
+                                            "code": "not_configured",
+                                            "message": "No pipeline function configured.",
+                                            "request_id": "req_d4e5f6a1b2c3",
+                                        },
                                     },
                                 },
                             },
@@ -237,13 +256,17 @@ def get_openapi_spec() -> dict:
                                             },
                                         },
                                         "running": {
-                                            "summary": "Pipeline is executing",
+                                            "summary": "Pipeline is executing with progress",
                                             "value": {
                                                 "run_id": "550e8400-e29b-41d4-a716-446655440000",
                                                 "status": "running",
                                                 "started_at": "2026-06-09T12:00:00+00:00",
                                                 "finished_at": None,
                                                 "error": None,
+                                                "progress": {
+                                                    "last_chunk_completed": 47,
+                                                    "total_rows_processed": 2350000,
+                                                },
                                             },
                                         },
                                         "completed": {
@@ -263,7 +286,10 @@ def get_openapi_spec() -> dict:
                                                 "status": "failed",
                                                 "started_at": "2026-06-09T12:00:00+00:00",
                                                 "finished_at": "2026-06-09T12:02:15+00:00",
-                                                "error": "Connection refused: postgresql://host:5432/db",
+                                                "error": {
+                                                    "message": "Connection refused: postgresql://host:5432/db",
+                                                    "type": "LoaderError",
+                                                },
                                             },
                                         },
                                     },
@@ -276,7 +302,11 @@ def get_openapi_spec() -> dict:
                                 "application/json": {
                                     "schema": {"$ref": "#/components/schemas/Error"},
                                     "example": {
-                                        "error": "Unauthorized. Provide a valid API key.",
+                                        "error": {
+                                            "code": "unauthorized",
+                                            "message": "Unauthorized. Provide a valid API key.",
+                                            "request_id": "req_a1b2c3d4e5f6",
+                                        },
                                     },
                                 },
                             },
@@ -287,7 +317,11 @@ def get_openapi_spec() -> dict:
                                 "application/json": {
                                     "schema": {"$ref": "#/components/schemas/Error"},
                                     "example": {
-                                        "error": "Rate limit exceeded. Try again later.",
+                                        "error": {
+                                            "code": "rate_limit_exceeded",
+                                            "message": "Rate limit exceeded. Try again later.",
+                                            "request_id": "req_c3d4e5f6a1b2",
+                                        },
                                     },
                                 },
                             },
@@ -376,7 +410,11 @@ def get_openapi_spec() -> dict:
                                 "application/json": {
                                     "schema": {"$ref": "#/components/schemas/Error"},
                                     "example": {
-                                        "error": "Unauthorized. Provide a valid API key.",
+                                        "error": {
+                                            "code": "unauthorized",
+                                            "message": "Unauthorized. Provide a valid API key.",
+                                            "request_id": "req_a1b2c3d4e5f6",
+                                        },
                                     },
                                 },
                             },
@@ -387,7 +425,11 @@ def get_openapi_spec() -> dict:
                                 "application/json": {
                                     "schema": {"$ref": "#/components/schemas/Error"},
                                     "example": {
-                                        "error": "Rate limit exceeded. Try again later.",
+                                        "error": {
+                                            "code": "rate_limit_exceeded",
+                                            "message": "Rate limit exceeded. Try again later.",
+                                            "request_id": "req_c3d4e5f6a1b2",
+                                        },
                                     },
                                 },
                             },
@@ -553,9 +595,28 @@ def get_openapi_spec() -> dict:
                             "description": "ISO 8601 timestamp when the run finished. Null while running.",
                         },
                         "error": {
-                            "type": "string",
+                            "type": "object",
                             "nullable": True,
-                            "description": "Error message if the run failed. Null otherwise.",
+                            "description": "Structured error details if the run failed. Null otherwise.",
+                            "properties": {
+                                "message": {"type": "string"},
+                                "type": {"type": "string"},
+                            },
+                        },
+                        "progress": {
+                            "type": "object",
+                            "nullable": True,
+                            "description": "Chunk-level progress. Present only while running and when checkpoint data exists.",
+                            "properties": {
+                                "last_chunk_completed": {
+                                    "type": "integer",
+                                    "description": "Index of the last successfully processed chunk.",
+                                },
+                                "total_rows_processed": {
+                                    "type": "integer",
+                                    "description": "Cumulative row count processed so far.",
+                                },
+                            },
                         },
                     },
                 },
@@ -606,8 +667,26 @@ def get_openapi_spec() -> dict:
                     "type": "object",
                     "properties": {
                         "error": {
-                            "type": "string",
-                            "description": "Human-readable error message.",
+                            "type": "object",
+                            "required": ["code", "message", "request_id"],
+                            "properties": {
+                                "code": {
+                                    "type": "string",
+                                    "description": "Machine-readable error code.",
+                                    "example": "missing_fields",
+                                },
+                                "message": {
+                                    "type": "string",
+                                    "description": "Human-readable error message.",
+                                    "example": "Both 'source' and 'destination' are required.",
+                                },
+                                "request_id": {
+                                    "type": "string",
+                                    "description": "Unique request identifier for tracing.",
+                                    "example": "req_8f3a1b2c4d5e",
+                                },
+                            },
+                            "additionalProperties": True,
                         },
                     },
                     "required": ["error"],
@@ -617,17 +696,30 @@ def get_openapi_spec() -> dict:
                     "description": "Returned when a pipeline run is already in progress.",
                     "properties": {
                         "error": {
-                            "type": "string",
-                            "description": "Human-readable conflict message.",
-                            "example": "A pipeline run is already in progress.",
-                        },
-                        "run_id": {
-                            "type": "string",
-                            "format": "uuid",
-                            "description": "UUID of the currently-running pipeline.",
+                            "type": "object",
+                            "required": ["code", "message", "request_id"],
+                            "properties": {
+                                "code": {
+                                    "type": "string",
+                                    "example": "already_running",
+                                },
+                                "message": {
+                                    "type": "string",
+                                    "example": "A pipeline run is already in progress.",
+                                },
+                                "request_id": {
+                                    "type": "string",
+                                    "example": "req_8f3a1b2c4d5e",
+                                },
+                                "active_run_id": {
+                                    "type": "string",
+                                    "format": "uuid",
+                                    "description": "UUID of the currently-running pipeline.",
+                                },
+                            },
                         },
                     },
-                    "required": ["error", "run_id"],
+                    "required": ["error"],
                 },
             },
         },

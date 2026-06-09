@@ -4,9 +4,11 @@ Tests for the Flask REST API: authentication, validation, rate limiting.
 Revision history
 ────────────────
 1.0   2026-06-08   Initial release.
+1.1   2026-06-09   Updated for structured error responses, fixed flaky concurrent test.
 """
 
 import os
+import threading
 import unittest
 
 
@@ -30,6 +32,9 @@ class TestAPIAuth(unittest.TestCase):
     def test_run_requires_auth(self):
         resp = self.client.post("/run", json={"source": "x", "destination": "sqlite"})
         self.assertEqual(resp.status_code, 401)
+        body = resp.get_json()["error"]
+        self.assertEqual(body["code"], "unauthorized")
+        self.assertIn("request_id", body)
 
     def test_status_requires_auth(self):
         resp = self.client.get("/status")
@@ -67,7 +72,7 @@ class TestAPINoAuth(unittest.TestCase):
 
     def test_run_works_without_keys_configured(self):
         resp = self.client.post("/run", json={"source": "x.csv", "destination": "sqlite"})
-        self.assertIn(resp.status_code, (202, 400))
+        self.assertEqual(resp.status_code, 202)
 
     def test_status_works_without_keys_configured(self):
         resp = self.client.get("/status")
@@ -86,28 +91,36 @@ class TestAPIValidation(unittest.TestCase):
     def test_missing_source(self):
         resp = self.client.post("/run", json={"destination": "sqlite"})
         self.assertEqual(resp.status_code, 400)
-        self.assertIn("source", resp.get_json()["error"].lower())
+        body = resp.get_json()["error"]
+        self.assertEqual(body["code"], "missing_fields")
+        self.assertIn("source", body["message"].lower())
+        self.assertIn("request_id", body)
 
     def test_missing_destination(self):
         resp = self.client.post("/run", json={"source": "data.csv"})
         self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.get_json()["error"]["code"], "missing_fields")
 
     def test_non_string_source(self):
         resp = self.client.post("/run", json={"source": 123, "destination": "sqlite"})
         self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.get_json()["error"]["code"], "invalid_type")
 
     def test_invalid_config_type(self):
         resp = self.client.post("/run", json={
             "source": "data.csv", "destination": "sqlite", "config": "not-a-dict"
         })
         self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.get_json()["error"]["code"], "invalid_config")
 
     def test_unknown_destination(self):
         resp = self.client.post("/run", json={
             "source": "data.csv", "destination": "nonexistent_db"
         })
         self.assertEqual(resp.status_code, 400)
-        self.assertIn("Unknown destination", resp.get_json()["error"])
+        body = resp.get_json()["error"]
+        self.assertEqual(body["code"], "unknown_destination")
+        self.assertIn("Unknown destination", body["message"])
 
     def test_valid_run_returns_202(self):
         resp = self.client.post("/run", json={
@@ -119,22 +132,21 @@ class TestAPIValidation(unittest.TestCase):
         self.assertEqual(body["status"], "started")
 
     def test_concurrent_run_returns_409(self):
-        import threading
-        block = threading.Event()
+        started = threading.Event()
 
         def slow_pipeline(s, d, c):
-            block.wait(timeout=5)
+            started.set()
+            threading.Event().wait(timeout=5)
 
         from pipeline.api import create_app
         app = create_app(pipeline_fn=slow_pipeline)
         client = app.test_client()
 
         client.post("/run", json={"source": "data.csv", "destination": "sqlite"})
-        import time
-        time.sleep(0.05)
+        started.wait(timeout=5)
         resp = client.post("/run", json={"source": "data2.csv", "destination": "sqlite"})
-        block.set()
         self.assertEqual(resp.status_code, 409)
+        self.assertEqual(resp.get_json()["error"]["code"], "already_running")
 
     def test_no_pipeline_fn_returns_501(self):
         from pipeline.api import create_app
@@ -142,6 +154,7 @@ class TestAPIValidation(unittest.TestCase):
         client = app.test_client()
         resp = client.post("/run", json={"source": "x", "destination": "sqlite"})
         self.assertEqual(resp.status_code, 501)
+        self.assertEqual(resp.get_json()["error"]["code"], "not_configured")
 
 
 class TestAPIRateLimiting(unittest.TestCase):
@@ -162,6 +175,7 @@ class TestAPIRateLimiting(unittest.TestCase):
             self.client.get("/status", headers=headers)
         resp = self.client.get("/status", headers=headers)
         self.assertEqual(resp.status_code, 429)
+        self.assertEqual(resp.get_json()["error"]["code"], "rate_limit_exceeded")
 
 
 if __name__ == "__main__":
