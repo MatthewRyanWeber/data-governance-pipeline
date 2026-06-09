@@ -15,6 +15,7 @@ Revision history
 1.3   2026-06-09   Structured error responses (code, message, request_id),
                    progress tracking on /status, graceful SIGTERM shutdown.
 1.4   2026-06-09   Run queue, history (/runs), cancel, webhook notifications.
+1.5   2026-06-09   Replaced inline rate limiter with pluggable rate_limiter module.
 """
 
 import functools
@@ -24,7 +25,7 @@ import os
 import threading
 import time
 import uuid
-from collections import defaultdict, deque
+from collections import deque
 from dataclasses import asdict
 from datetime import datetime, timezone
 
@@ -54,26 +55,6 @@ def _error_response(code: str, message: str, status_code: int, **extra):
     }
     body["error"].update(extra)
     return jsonify(body), status_code
-
-
-class _RateLimiter:
-    """Simple in-memory token-bucket rate limiter keyed by API key."""
-
-    def __init__(self, max_requests: int = 100, window_seconds: int = 60) -> None:
-        self._max = max_requests
-        self._window = window_seconds
-        self._lock = threading.Lock()
-        self._buckets: dict[str, list[float]] = defaultdict(list)
-
-    def allow(self, key: str) -> bool:
-        now = time.monotonic()
-        with self._lock:
-            bucket = self._buckets[key]
-            self._buckets[key] = [t for t in bucket if now - t < self._window]
-            if len(self._buckets[key]) >= self._max:
-                return False
-            self._buckets[key].append(now)
-            return True
 
 
 def _fire_webhook(url: str, payload: dict) -> None:
@@ -116,9 +97,13 @@ def create_app(pipeline_fn=None, max_queue_size: int | None = None) -> "Flask":
             "Install it with: pip install flask"
         )
 
+    from pipeline.rate_limiter import create_rate_limiter
+
     app = Flask(__name__)
     api_keys = _load_api_keys()
-    rate_limiter = _RateLimiter()
+    rate_limiter = create_rate_limiter(
+        db_path=os.environ.get("PIPELINE_RATE_LIMIT_DB"),
+    )
 
     if max_queue_size is None:
         max_queue_size = int(os.environ.get("PIPELINE_MAX_QUEUE_SIZE", "0"))
