@@ -224,3 +224,6 @@ HAS_PINECONE    = _has("pinecone")
 HAS_WEAVIATE    = _has("weaviate")
 HAS_QDRANT      = _has("qdrant_client")
 HAS_LANCEDB     = _has("lancedb")
+
+# OpenTelemetry (optional tracing)
+HAS_OTEL = _has("opentelemetry")

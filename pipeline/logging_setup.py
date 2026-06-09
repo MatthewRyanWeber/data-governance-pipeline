@@ -106,6 +106,13 @@ class JsonFormatter(logging.Formatter):
         }
         if record.exc_info and record.exc_info[1]:
             log_entry["exception"] = self.formatException(record.exc_info)
+        try:
+            from pipeline.tracing import get_current_trace_ids
+            trace_ids = get_current_trace_ids()
+            if trace_ids:
+                log_entry.update(trace_ids)
+        except ImportError:
+            pass
         return json.dumps(log_entry, default=str)
 
 

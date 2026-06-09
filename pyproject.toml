@@ -169,6 +169,13 @@ cockroachdb = [
     "psycopg2-binary>=2.9.0",
 ]
 
+# OpenTelemetry distributed tracing
+otel = [
+    "opentelemetry-api>=1.20.0",
+    "opentelemetry-sdk>=1.20.0",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.20.0",
+]
+
 # Grafana observability integration
 grafana = [
     "prometheus_client>=0.19.0",   # optional — stdlib fallback included
@@ -195,7 +202,7 @@ dev = [
 
 # Everything
 all = [
-    "data-governance-pipeline[cloud,streaming,scheduler,healthcare,sap,catalogs,quickbooks,lancedb,vector,datalake,objectstorage,sftp,duckdb_dest,cockroachdb,grafana,api]",
+    "data-governance-pipeline[cloud,streaming,scheduler,healthcare,sap,catalogs,quickbooks,lancedb,vector,datalake,objectstorage,sftp,duckdb_dest,cockroachdb,grafana,otel,api]",
 ]
 
 [project.urls]
