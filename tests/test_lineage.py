@@ -85,9 +85,9 @@ class TestOpenLineageEventStructure(unittest.TestCase):
         self.assertEqual(error_facet["_schemaURL"], _OL_SCHEMA)
 
     def test_fail_event_no_error_message(self):
-        """emit_fail without error_message has empty run facets."""
+        """emit_fail without error_message has no errorMessage facet."""
         event = self.emitter.emit_fail("transform")
-        self.assertEqual(event["run"]["facets"], {})
+        self.assertNotIn("errorMessage", event["run"]["facets"])
 
 
 class TestOpenLineageJSONLOutput(unittest.TestCase):

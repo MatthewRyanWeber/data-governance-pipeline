@@ -24,6 +24,7 @@ Revision history
 2.2   2026-06-09   /health includes circuit breaker state, degrades status
                    when any breaker is open.
 2.3   2026-06-09   Added /metrics/prometheus endpoint for Prometheus text scraping.
+2.4   2026-06-09   Added /dashboard route serving self-contained HTML dashboard.
 """
 
 import functools
@@ -605,6 +606,49 @@ def create_app(pipeline_fn=None, max_queue_size: int | None = None, prometheus_e
         from pipeline.auth import revoke_token
         revoke_token(jti)
         return jsonify({"jti": jti, "status": "revoked"})
+
+    # ── Dashboard ──────────────────────────────────────────────────────
+
+    @app.route("/dashboard", methods=["GET"])
+    async def dashboard():
+        """Serve a self-contained HTML dashboard — no auth required."""
+        from pipeline.circuit_breaker import get_all_breakers
+        from pipeline.dashboard import render_dashboard_html
+        from quart import Response
+
+        with _status_lock:
+            status = {
+                "run_id": _status.run_id,
+                "status": _status.status,
+                "started_at": _status.started_at,
+            }
+            metrics = _status.metrics.copy()
+
+        try:
+            rsm = _get_rsm()
+            runs = rsm.list_runs(limit=10)
+            recent_runs = [
+                {
+                    "run_id": r.run_id,
+                    "source": r.source,
+                    "destination": r.destination,
+                    "status": r.status,
+                    "duration": r.duration,
+                }
+                for r in runs
+            ]
+        except Exception:
+            recent_runs = []
+
+        breakers = get_all_breakers()
+
+        html = render_dashboard_html(
+            status=status,
+            recent_runs=recent_runs,
+            circuit_breakers=breakers,
+            metrics=metrics,
+        )
+        return Response(html, content_type="text/html; charset=utf-8")
 
     # ── Documentation ──────────────────────────────────────────────────
     try:
