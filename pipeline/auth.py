@@ -10,6 +10,7 @@ Layer 0 — no internal package imports.
 Revision history
 ────────────────
 1.0   2026-06-09   Initial release: create, validate, revoke JWT tokens.
+1.1   2026-06-09   Removed stale env var caching, auto-prune on validate.
 """
 
 import logging
@@ -26,7 +27,6 @@ try:
 except ImportError:
     HAS_JWT = False
 
-_JWT_SECRET: str | None = None
 _JWT_ALGORITHM = "HS256"
 _JWT_ISSUER = "data-governance-pipeline"
 _DEFAULT_EXPIRY_SECONDS = 3600
@@ -35,16 +35,9 @@ _revoked_lock = threading.Lock()
 _revoked_tokens: dict[str, float] = {}
 
 
-def _get_secret() -> str:
-    global _JWT_SECRET
-    if _JWT_SECRET is None:
-        _JWT_SECRET = os.environ.get("PIPELINE_JWT_SECRET", "")
-    return _JWT_SECRET
-
-
 def jwt_available() -> bool:
     """Return True if PyJWT is installed and a secret is configured."""
-    return HAS_JWT and bool(_get_secret())
+    return HAS_JWT and bool(os.environ.get("PIPELINE_JWT_SECRET", ""))
 
 
 def create_token(subject: str, expiry_seconds: int | None = None) -> dict:
@@ -56,7 +49,7 @@ def create_token(subject: str, expiry_seconds: int | None = None) -> dict:
     """
     if not HAS_JWT:
         raise RuntimeError("PyJWT is not installed.")
-    secret = _get_secret()
+    secret = os.environ.get("PIPELINE_JWT_SECRET", "")
     if not secret:
         raise RuntimeError("PIPELINE_JWT_SECRET is not set.")
 
@@ -96,9 +89,11 @@ def validate_token(token: str) -> dict:
     """
     if not HAS_JWT:
         raise RuntimeError("PyJWT is not installed.")
-    secret = _get_secret()
+    secret = os.environ.get("PIPELINE_JWT_SECRET", "")
     if not secret:
         raise RuntimeError("PIPELINE_JWT_SECRET is not set.")
+
+    prune_revoked()
 
     claims = jwt.decode(
         token, secret,
@@ -140,7 +135,5 @@ def prune_revoked() -> int:
 
 def reset_state() -> None:
     """Clear all module-level state. For testing only."""
-    global _JWT_SECRET
-    _JWT_SECRET = None
     with _revoked_lock:
         _revoked_tokens.clear()

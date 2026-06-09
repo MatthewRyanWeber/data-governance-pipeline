@@ -116,6 +116,14 @@ class TestJWTTokenRevocation(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_token(result["token"])
 
+    def test_validate_prunes_expired_revocations(self):
+        from pipeline.auth import create_token, validate_token, revoke_token, is_revoked
+        revoke_token("old-jti", expires_at=time.time() - 10)
+        self.assertTrue(is_revoked("old-jti"))
+        result = create_token("pruner", 3600)
+        validate_token(result["token"])
+        self.assertFalse(is_revoked("old-jti"))
+
     def test_prune_removes_expired_revocations(self):
         from pipeline.auth import revoke_token, is_revoked, prune_revoked
         revoke_token("old-jti", expires_at=time.time() - 10)
