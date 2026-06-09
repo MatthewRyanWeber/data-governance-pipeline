@@ -13,6 +13,7 @@ Run just these with:  pytest tests/test_integration_db.py -v
 Revision history
 ────────────────
 1.0   2026-06-09   Initial release: Postgres/MySQL SQLLoader + Mongo round-trips.
+1.1   2026-06-09   Added pytest.mark.integration markers and expanded test coverage.
 """
 
 import os
@@ -20,6 +21,7 @@ import unittest
 from unittest.mock import MagicMock
 
 import pandas as pd
+import pytest
 
 # Ryuk (the testcontainers reaper) needs a registry pull/handshake; disable it
 # since images are pre-pulled and we stop containers explicitly in tearDown.
@@ -46,6 +48,7 @@ def _df():
     return pd.DataFrame({"id": [1, 2, 3], "name": ["a", "b", "c"]})
 
 
+@pytest.mark.integration
 @unittest.skipUnless(DOCKER, "Docker engine not available")
 class TestPostgresIntegration(unittest.TestCase):
     @classmethod
@@ -99,7 +102,17 @@ class TestPostgresIntegration(unittest.TestCase):
         self.assertTrue(result["match"])
         self.assertEqual(result["dest_rows"], 3)
 
+    def test_large_batch_10k_rows(self):
+        large_df = pd.DataFrame({
+            "id": range(10_000),
+            "name": [f"row_{i}" for i in range(10_000)],
+        })
+        self.loader.load(large_df, self.cfg, "t_10k", if_exists="replace")
+        result = self._read("t_10k")
+        self.assertEqual(len(result), 10_000)
 
+
+@pytest.mark.integration
 @unittest.skipUnless(DOCKER, "Docker engine not available")
 class TestMySQLIntegration(unittest.TestCase):
     @classmethod
@@ -137,7 +150,17 @@ class TestMySQLIntegration(unittest.TestCase):
         self.assertIn(7, list(out["id"]))
         self.assertEqual(len(out), 4)
 
+    def test_replace_clears_existing(self):
+        self.loader.load(_df(), self.cfg, "t_repl", if_exists="replace")
+        self.assertEqual(len(self._read("t_repl")), 3)
+        replacement = pd.DataFrame({"id": [99], "name": ["only"]})
+        self.loader.load(replacement, self.cfg, "t_repl", if_exists="replace")
+        out = self._read("t_repl")
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out.iloc[0]["name"], "only")
 
+
+@pytest.mark.integration
 @unittest.skipUnless(DOCKER, "Docker engine not available")
 class TestMongoIntegration(unittest.TestCase):
     @classmethod
@@ -160,6 +183,14 @@ class TestMongoIntegration(unittest.TestCase):
         with MongoClient(self.uri) as client:
             count = client["appdb"]["users"].count_documents({})
         self.assertEqual(count, 3)
+
+    def test_verify_row_count(self):
+        self.loader.load(_df(), {"uri": self.uri, "db_name": "appdb"}, "verify_col")
+        verifier = LoadVerifier(MagicMock())
+        cfg = {"db_type": "mongodb", "connection_string": self.uri, "db_name": "appdb"}
+        result = verifier.verify_row_count(_df(), cfg, "verify_col")
+        self.assertTrue(result["match"])
+        self.assertEqual(result["dest_rows"], 3)
 
 
 if __name__ == "__main__":

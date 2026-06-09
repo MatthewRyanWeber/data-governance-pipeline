@@ -231,6 +231,10 @@ python_classes= ["Test*"]
 python_functions = ["test_*"]
 addopts       = "-v --tb=short"
 asyncio_mode  = "auto"
+markers = [
+    "integration: tests requiring Docker and real databases",
+    "slow: long-running benchmarks and load tests",
+]
 
 [tool.ruff]
 line-length = 100
