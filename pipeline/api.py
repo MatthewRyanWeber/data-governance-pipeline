@@ -124,12 +124,16 @@ def create_app(pipeline_fn=None, max_queue_size: int | None = None) -> "Quart":
         """Decorator: reject requests without a valid API key or JWT."""
         @functools.wraps(fn)
         async def wrapper(*args, **kwargs):
-            key = (
-                request.headers.get("X-API-Key")
-                or request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+            api_key = (request.headers.get("X-API-Key") or "").strip()
+            bearer = (
+                request.headers.get("Authorization", "")
+                .removeprefix("Bearer ")
+                .strip()
             )
+            credential = api_key or bearer
+            is_bearer = bool(not api_key and bearer)
 
-            rate_limit_id = key or request.remote_addr
+            rate_limit_id = credential or request.remote_addr
             if not rate_limiter.allow(rate_limit_id):
                 return _error_response(
                     "rate_limit_exceeded",
@@ -140,14 +144,16 @@ def create_app(pipeline_fn=None, max_queue_size: int | None = None) -> "Quart":
             if not api_keys and not jwt_available():
                 return await fn(*args, **kwargs)
 
-            if key and "." in key and jwt_available():
+            if credential and is_bearer and jwt_available():
                 try:
-                    _validate_jwt(key)
+                    _validate_jwt(credential)
                     return await fn(*args, **kwargs)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("[API] JWT validation failed, trying static key: %s", exc)
 
-            if api_keys and key and any(hmac.compare_digest(key, k) for k in api_keys):
+            if api_keys and credential and any(
+                hmac.compare_digest(credential, k) for k in api_keys
+            ):
                 return await fn(*args, **kwargs)
 
             logger.warning("[API] Unauthorized request to %s from %s",
