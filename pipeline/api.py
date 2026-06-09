@@ -31,7 +31,7 @@ import threading
 import time
 import uuid
 from collections import deque
-from dataclasses import asdict
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
@@ -41,6 +41,17 @@ try:
     HAS_QUART = True
 except ImportError:
     HAS_QUART = False
+
+
+@dataclass
+class _RunStatus:
+    """In-memory status of the current/last pipeline run."""
+    run_id: str | None = None
+    status: str = "idle"
+    started_at: str | None = None
+    finished_at: str | None = None
+    error: dict | None = None
+    metrics: dict = field(default_factory=dict)
 
 
 def _load_api_keys() -> set[str]:
@@ -167,15 +178,8 @@ def create_app(pipeline_fn=None, max_queue_size: int | None = None) -> "Quart":
         return wrapper
 
     # ── Shared state ────────────────────────────────────────────────────
-    _state: dict[str, object] = {
-        "run_id": None,
-        "status": "idle",
-        "started_at": None,
-        "finished_at": None,
-        "error": None,
-        "metrics": {},
-    }
-    _state_lock = threading.Lock()
+    _status = _RunStatus()
+    _status_lock = threading.Lock()
     _queue: deque = deque()
     _cancel_events: dict[str, threading.Event] = {}
 
@@ -213,7 +217,7 @@ def create_app(pipeline_fn=None, max_queue_size: int | None = None) -> "Quart":
 
     def _run_pipeline(run_id: str, source: str, destination: str,
                       config: dict, webhook_url: str | None = None) -> None:
-        """Execute pipeline_fn in a background thread and update _state."""
+        """Execute pipeline_fn in a background thread and update _status."""
         logger.info("Pipeline run %s started — source=%s, dest=%s", run_id, source, destination)
         start = time.perf_counter()
         cancel_event = _cancel_events.get(run_id)
@@ -225,17 +229,17 @@ def create_app(pipeline_fn=None, max_queue_size: int | None = None) -> "Quart":
             elapsed = round(time.perf_counter() - start, 2)
 
             if cancel_event and cancel_event.is_set():
-                with _state_lock:
-                    _state["status"] = "cancelled"
-                    _state["finished_at"] = datetime.now(timezone.utc).isoformat()
-                    _state["metrics"] = {"duration_s": elapsed}
+                with _status_lock:
+                    _status.status = "cancelled"
+                    _status.finished_at = datetime.now(timezone.utc).isoformat()
+                    _status.metrics = {"duration_s": elapsed}
                 _persist_failed(run_id, "Cancelled by user")
                 logger.info("Pipeline run %s cancelled after %.2fs.", run_id, elapsed)
             else:
-                with _state_lock:
-                    _state["status"] = "completed"
-                    _state["finished_at"] = datetime.now(timezone.utc).isoformat()
-                    _state["metrics"] = {
+                with _status_lock:
+                    _status.status = "completed"
+                    _status.finished_at = datetime.now(timezone.utc).isoformat()
+                    _status.metrics = {
                         "duration_s": elapsed,
                         "result": str(result) if result else None,
                     }
@@ -251,34 +255,34 @@ def create_app(pipeline_fn=None, max_queue_size: int | None = None) -> "Quart":
                 error_detail["table"] = exc.table  # type: ignore[union-attr]
             if hasattr(exc, "missing_keys"):
                 error_detail["missing_keys"] = exc.missing_keys  # type: ignore[union-attr]
-            with _state_lock:
-                _state["status"] = "failed"
-                _state["finished_at"] = datetime.now(timezone.utc).isoformat()
-                _state["error"] = error_detail
-                _state["metrics"] = {"duration_s": elapsed}
+            with _status_lock:
+                _status.status = "failed"
+                _status.finished_at = datetime.now(timezone.utc).isoformat()
+                _status.error = error_detail
+                _status.metrics = {"duration_s": elapsed}
             _persist_failed(run_id, str(exc))
             logger.error("Pipeline run %s failed after %.2fs: %s", run_id, elapsed, exc)
 
         finally:
-            with _state_lock:
-                if _state["status"] == "running":
-                    _state["status"] = "failed"
-                    _state["error"] = {
+            with _status_lock:
+                if _status.status == "running":
+                    _status.status = "failed"
+                    _status.error = {
                         "message": "Pipeline thread terminated unexpectedly",
                         "type": "unexpected_termination",
                     }
-                    _state["finished_at"] = datetime.now(timezone.utc).isoformat()
+                    _status.finished_at = datetime.now(timezone.utc).isoformat()
                     _persist_failed(run_id, "Pipeline thread terminated unexpectedly")
 
             _cancel_events.pop(run_id, None)
 
             if webhook_url:
-                with _state_lock:
+                with _status_lock:
                     payload = {
                         "run_id": run_id,
-                        "status": _state["status"],
-                        "metrics": _state["metrics"],
-                        "error": _state["error"],
+                        "status": _status.status,
+                        "metrics": _status.metrics,
+                        "error": _status.error,
                     }
                 _fire_webhook(webhook_url, payload)
 
@@ -286,16 +290,16 @@ def create_app(pipeline_fn=None, max_queue_size: int | None = None) -> "Quart":
 
     def _start_next_queued() -> None:
         """Pop the next queued run and start it, if any."""
-        with _state_lock:
+        with _status_lock:
             if not _queue:
                 return
             item = _queue.popleft()
-            _state["status"] = "running"
-            _state["run_id"] = item["run_id"]
-            _state["started_at"] = datetime.now(timezone.utc).isoformat()
-            _state["finished_at"] = None
-            _state["error"] = None
-            _state["metrics"] = {}
+            _status.status = "running"
+            _status.run_id = item["run_id"]
+            _status.started_at = datetime.now(timezone.utc).isoformat()
+            _status.finished_at = None
+            _status.error = None
+            _status.metrics = {}
 
         _persist_start(item["run_id"], item["source"], item["destination"])
 
@@ -374,15 +378,15 @@ def create_app(pipeline_fn=None, max_queue_size: int | None = None) -> "Quart":
         cancel_event = threading.Event()
         _cancel_events[run_id] = cancel_event
 
-        with _state_lock:
-            if _state["status"] == "running":
+        with _status_lock:
+            if _status.status == "running":
                 if max_queue_size <= 0:
                     _cancel_events.pop(run_id, None)
                     return _error_response(
                         "already_running",
                         "A pipeline run is already in progress.",
                         409,
-                        active_run_id=_state["run_id"],
+                        active_run_id=_status.run_id,
                     )
                 if len(_queue) >= max_queue_size:
                     _cancel_events.pop(run_id, None)
@@ -401,12 +405,12 @@ def create_app(pipeline_fn=None, max_queue_size: int | None = None) -> "Quart":
                 return jsonify({"run_id": run_id, "status": "queued",
                                 "position": len(_queue)}), 202
 
-            _state["status"] = "running"
-            _state["run_id"] = run_id
-            _state["started_at"] = datetime.now(timezone.utc).isoformat()
-            _state["finished_at"] = None
-            _state["error"] = None
-            _state["metrics"] = {}
+            _status.status = "running"
+            _status.run_id = run_id
+            _status.started_at = datetime.now(timezone.utc).isoformat()
+            _status.finished_at = None
+            _status.error = None
+            _status.metrics = {}
 
         _persist_start(run_id, source, destination)
 
@@ -423,13 +427,13 @@ def create_app(pipeline_fn=None, max_queue_size: int | None = None) -> "Quart":
     @require_auth
     async def get_status():
         """Return the current pipeline run status with optional chunk progress."""
-        with _state_lock:
+        with _status_lock:
             result = {
-                "run_id": _state["run_id"],
-                "status": _state["status"],
-                "started_at": _state["started_at"],
-                "finished_at": _state["finished_at"],
-                "error": _state["error"],
+                "run_id": _status.run_id,
+                "status": _status.status,
+                "started_at": _status.started_at,
+                "finished_at": _status.finished_at,
+                "error": _status.error,
             }
 
         if result["run_id"] and result["status"] == "running":
@@ -488,7 +492,7 @@ def create_app(pipeline_fn=None, max_queue_size: int | None = None) -> "Quart":
     @require_auth
     async def cancel_run(run_id: str):
         """Cancel a queued or running pipeline run."""
-        with _state_lock:
+        with _status_lock:
             for i, item in enumerate(_queue):
                 if item["run_id"] == run_id:
                     _queue.remove(item)
@@ -518,10 +522,10 @@ def create_app(pipeline_fn=None, max_queue_size: int | None = None) -> "Quart":
     @require_auth
     async def get_metrics():
         """Return the latest pipeline run metrics."""
-        with _state_lock:
+        with _status_lock:
             return jsonify({
-                "run_id": _state["run_id"],
-                "metrics": _state["metrics"],
+                "run_id": _status.run_id,
+                "metrics": _status.metrics,
             })
 
     # ── Auth token endpoints ──────────────────────────────────────────
