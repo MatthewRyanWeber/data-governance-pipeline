@@ -169,7 +169,10 @@ class TestCatalogStore(unittest.TestCase):
         cat.register_dataset(df, "typed")
         result = cat.get_dataset("typed")
         dtypes = {c["name"]: c["dtype"] for c in result["columns"]}
-        self.assertIn("object", dtypes["name"])
+        self.assertTrue(
+            "object" in dtypes["name"] or "str" in dtypes["name"],
+            f"Expected 'object' or 'str' dtype, got {dtypes['name']}",
+        )
         self.assertIn("float", dtypes["score"])
 
     def test_register_detects_nullable_columns(self):

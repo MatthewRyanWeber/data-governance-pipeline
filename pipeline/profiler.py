@@ -67,7 +67,7 @@ class DataProfiler:
                         ("std", "std"), ("p25", "25%"), ("p50", "50%"), ("p75", "75%"),
                     ]
                 })
-            elif s.dtype == object:
+            elif s.dtype == object or pd.api.types.is_string_dtype(s):
                 ls = s.dropna().astype(str).str.len()
                 cp.update({
                     "min_length": int(ls.min()) if len(ls) else 0,
