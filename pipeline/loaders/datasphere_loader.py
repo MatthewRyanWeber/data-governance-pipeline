@@ -37,7 +37,7 @@ class DatasphereLoader(BaseLoader):
     def _get_token(self, cfg: dict) -> str:
         """Fetch an OAuth2 client-credentials bearer token."""
         if cfg.get("token"):
-            return cfg["token"]
+            return str(cfg["token"])
         import requests
         resp = requests.post(
             cfg["token_url"],
@@ -49,7 +49,7 @@ class DatasphereLoader(BaseLoader):
             timeout=cfg.get("timeout", 30),
         )
         resp.raise_for_status()
-        return resp.json()["access_token"]
+        return str(resp.json()["access_token"])
 
     def _endpoint(self, cfg: dict) -> str:
         base = cfg["tenant_url"].rstrip("/")
@@ -57,7 +57,7 @@ class DatasphereLoader(BaseLoader):
             space=cfg["space"],
             table=cfg.get("table", ""),
         )
-        return base + path
+        return str(base + path)
 
     def _headers(self, token: str) -> dict:
         return {

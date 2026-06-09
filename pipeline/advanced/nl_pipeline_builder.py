@@ -242,7 +242,7 @@ class NLPipelineBuilder:
 
         response = requests.post(
             "https://api.openai.com/v1/chat/completions",
-            json=payload,
+            json=payload,  # type: ignore[arg-type]
             headers=headers,
             timeout=30,
         )

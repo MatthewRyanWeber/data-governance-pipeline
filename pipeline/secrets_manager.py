@@ -39,7 +39,7 @@ class SecretsManager:
         if explicit is not None:
             return explicit
         if key in self._env:
-            return self._env[key]
+            return self._env[key]  # type: ignore[no-any-return]
         if key in os.environ:
             return os.environ[key]
         return interactive_prompt(prompt_msg or key, default)
@@ -49,7 +49,7 @@ class SecretsManager:
         if explicit is not None:
             return explicit
         if key in self._env:
-            return self._env[key]
+            return self._env[key]  # type: ignore[no-any-return]
         if key in os.environ:
             return os.environ[key]
         return getpass.getpass(f"{prompt_msg}: ")

@@ -63,7 +63,7 @@ class BusinessGlossary:
             return {}
         try:
             data = json.loads(self.glossary_file.read_text(encoding="utf-8"))
-            return data.get("terms", {})
+            return data.get("terms", {})  # type: ignore[no-any-return]
         except (json.JSONDecodeError, OSError) as exc:
             logger.warning("Could not load glossary: %s", exc)
             return {}

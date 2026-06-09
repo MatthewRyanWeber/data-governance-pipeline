@@ -119,7 +119,7 @@ class ProcessWatchdog:
             self._process = self._spawn()
 
             try:
-                for line in self._process.stdout:
+                for line in self._process.stdout:  # type: ignore[union-attr]
                     sys.stdout.write(line)
                     sys.stdout.flush()
             except Exception as exc:

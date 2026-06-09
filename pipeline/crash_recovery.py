@@ -88,7 +88,7 @@ class CrashRecoveryManager:
             )
 
             config_path = args.config_path
-            config = {}
+            config: dict[str, object] = {}
             if config_path:
                 from pathlib import Path
                 path = Path(config_path)

@@ -164,6 +164,7 @@ class QdrantLoader(BaseLoader):
 
                     if id_col and id_col in df.columns:
                         raw_id = rec[id_col]
+                        point_id: int | str
                         try:
                             point_id = int(raw_id)
                         except (ValueError, TypeError):
@@ -245,7 +246,7 @@ class QdrantLoader(BaseLoader):
             "Qdrant search on %s returned %d results.",
             collection_name, len(results),
         )
-        return results
+        return list(results)
 
     def collection_info(self, cfg, table="") -> dict:
         """Return collection metadata (point count, config, etc.)."""

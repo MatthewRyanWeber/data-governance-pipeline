@@ -73,7 +73,7 @@ class QuickBooksExtractor:
         token_data = resp.json()
         if "refresh_token" in token_data:
             cfg["refresh_token"] = token_data["refresh_token"]
-        return token_data["access_token"]
+        return str(token_data["access_token"])
 
     def _headers(self, access_token: str) -> dict:
         return {

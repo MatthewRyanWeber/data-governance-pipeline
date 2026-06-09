@@ -219,7 +219,7 @@ def run_governance_preflight(
             if source_purposes:
                 print("\n  [3/7] COLUMN PURPOSES (informational)")
                 print("  " + "-" * 40)
-                categorized = {}
+                categorized: dict[str, list[str]] = {}
                 for col, purpose in source_purposes.items():
                     categorized.setdefault(purpose, []).append(col)
                 for purpose, cols in sorted(categorized.items()):

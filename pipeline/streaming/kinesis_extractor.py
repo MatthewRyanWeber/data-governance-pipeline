@@ -67,9 +67,10 @@ class KinesisStreamExtractor:
 
     def _get_shard_ids(self) -> list[str]:
         """Retrieve all shard IDs, paginating through NextToken if needed."""
-        shard_ids = []
+        shard_ids: list[str] = []
         kwargs = {"StreamName": self.stream_name}
         while True:
+            assert self._client is not None
             response = self._client.list_shards(**kwargs)
             shard_ids.extend(
                 shard["ShardId"] for shard in response.get("Shards", [])
@@ -90,6 +91,7 @@ class KinesisStreamExtractor:
         shard_ids = self._get_shard_ids()
 
         for shard_id in shard_ids:
+            assert self._client is not None
             iterator_response = self._client.get_shard_iterator(
                 StreamName=self.stream_name,
                 ShardId=shard_id,

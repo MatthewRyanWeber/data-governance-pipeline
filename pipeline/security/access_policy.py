@@ -70,7 +70,7 @@ class AccessPolicy:
         if not self.policy_file.exists():
             return {"roles": {}, "user_roles": {}, "dataset_policies": {}}
         try:
-            return json.loads(self.policy_file.read_text(encoding="utf-8"))
+            return json.loads(self.policy_file.read_text(encoding="utf-8"))  # type: ignore[no-any-return]
         except (json.JSONDecodeError, OSError) as exc:
             logger.warning("Could not load access policies: %s", exc)
             return {"roles": {}, "user_roles": {}, "dataset_policies": {}}

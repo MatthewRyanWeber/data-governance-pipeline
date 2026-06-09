@@ -70,7 +70,7 @@ class BusinessRuleEngine:
         with open(rules_file, encoding="utf-8") as f:
             rules = json.load(f)
         logger.info("[RULES] Loaded %d rule(s) from %s", len(rules), rules_file)
-        return rules
+        return rules  # type: ignore[no-any-return]
 
     def apply(self, df: "pd.DataFrame", rules: list[dict]) -> "pd.DataFrame":
         """Apply a list of rules to the DataFrame in order."""

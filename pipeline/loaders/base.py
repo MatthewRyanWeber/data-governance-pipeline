@@ -154,7 +154,7 @@ class BaseLoader:
             with self._engine_scope(cfg) as engine:
                 df.to_sql(table, engine, ...)
         """
-        engine = self._engine(cfg)
+        engine = self._engine(cfg)  # type: ignore[attr-defined]
         try:
             yield engine
         finally:

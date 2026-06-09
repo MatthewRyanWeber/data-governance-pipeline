@@ -212,7 +212,7 @@ class LoadVerifier:
         try:
             with engine.connect() as conn:
                 result = conn.execute(text(f"SELECT COUNT(*) FROM {safe_table}"))
-                return result.scalar()
+                return result.scalar()  # type: ignore[return-value]
         finally:
             engine.dispose()
 
@@ -223,7 +223,7 @@ class LoadVerifier:
         uri = cfg.get("connection_string") or cfg.get("host", "localhost")
         db_name = cfg.get("db_name", "pipeline")
 
-        with MongoClient(uri) as client:
+        with MongoClient(uri) as client:  # type: ignore[var-annotated]
             db = client[db_name]
             return db[table].count_documents({})
 

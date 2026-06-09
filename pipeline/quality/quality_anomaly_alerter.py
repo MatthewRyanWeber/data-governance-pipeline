@@ -343,7 +343,7 @@ class QualityAnomalyAlerter:
         try:
             import urllib.request as _req  # pylint: disable=import-outside-toplevel
             data = json.dumps(payload).encode("utf-8")
-            req  = _req.Request(self.slack_webhook, data=data,
+            req  = _req.Request(self.slack_webhook, data=data,  # type: ignore[arg-type]
                                 headers={"Content-Type": "application/json"})
             with _req.urlopen(req, timeout=5):
                 pass
@@ -394,7 +394,7 @@ class QualityAnomalyAlerter:
         try:
             import urllib.request as _req  # pylint: disable=import-outside-toplevel
             data = json.dumps(payload, default=str).encode("utf-8")
-            req  = _req.Request(self.webhook_url, data=data,
+            req  = _req.Request(self.webhook_url, data=data,  # type: ignore[arg-type]
                                 headers={"Content-Type": "application/json"})
             with _req.urlopen(req, timeout=5):
                 pass

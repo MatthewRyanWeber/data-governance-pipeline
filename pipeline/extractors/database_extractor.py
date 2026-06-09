@@ -54,7 +54,7 @@ class DatabaseExtractor:
     def _build_url(self, cfg: dict) -> str:
         """Build a SQLAlchemy connection URL from config dict."""
         if cfg.get("connection_string"):
-            return cfg["connection_string"]
+            return cfg["connection_string"]  # type: ignore[no-any-return]
 
         db_type = cfg.get("db_type", "postgresql").lower()
         driver = self._DRIVER_MAP.get(db_type)
@@ -128,9 +128,9 @@ class DatabaseExtractor:
             if query:
                 df = pd.read_sql(text(query), engine)
             else:
-                safe_table = self._validate_identifier(table)
+                safe_table = self._validate_identifier(table)  # type: ignore[arg-type]
                 col_list = ", ".join(self._validate_identifier(c) for c in columns) if columns else "*"
-                schema_prefix = f"{self._validate_identifier(schema)}." if schema else ""
+                schema_prefix = f"{self._validate_identifier(schema)}." if schema else ""  # type: ignore[arg-type]
                 sql = f"SELECT {col_list} FROM {schema_prefix}{safe_table}"
                 if where:
                     sql += f" WHERE {where}"
@@ -182,8 +182,8 @@ class DatabaseExtractor:
             if query:
                 base_sql = query
             else:
-                safe_table = self._validate_identifier(table)
-                schema_prefix = f"{self._validate_identifier(schema)}." if schema else ""
+                safe_table = self._validate_identifier(table)  # type: ignore[arg-type]
+                schema_prefix = f"{self._validate_identifier(schema)}." if schema else ""  # type: ignore[arg-type]
                 base_sql = f"SELECT * FROM {schema_prefix}{safe_table}"
 
             offset = 0

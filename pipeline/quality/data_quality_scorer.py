@@ -79,12 +79,12 @@ class DataQualityScorer:
         total = df.size
         if total == 0:
             return 100.0
-        return round((1 - df.isna().sum().sum() / total) * 100, 2)
+        return round((1 - df.isna().sum().sum() / total) * 100, 2)  # type: ignore[no-any-return]
 
     def _uniqueness(self, df: "pd.DataFrame") -> float:
         if len(df) == 0:
             return 100.0
-        return round((1 - df.duplicated().sum() / len(df)) * 100, 2)
+        return round((1 - df.duplicated().sum() / len(df)) * 100, 2)  # type: ignore[no-any-return]
 
     def _validity(self, validation_report: dict | None) -> float:
         if not validation_report:
@@ -93,7 +93,7 @@ class DataQualityScorer:
         total  = validation_report.get("expectations_total",  0)
         if total == 0:
             return 100.0
-        return round(passed / total * 100, 2)
+        return round(passed / total * 100, 2)  # type: ignore[no-any-return]
 
     def _consistency(self, df: "pd.DataFrame") -> float:
         num_cols = df.select_dtypes(include="number")

@@ -168,7 +168,7 @@ class HTMLReportGenerator:
       {_row("Source",      run_meta.get("source","—"))}
       {_row("Destination", run_meta.get("destination","—"))}
       {_row("Rows loaded", f"{len(df):,}")}
-      {_row("Columns",     len(df.columns))}
+      {_row("Columns",     str(len(df.columns)))}
       {_row("Duration",    f"{run_meta.get('duration_s','—')}s")}
       {_row("Status",      '<span class="badge success">Success</span>')}
     </table>

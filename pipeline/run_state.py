@@ -121,7 +121,7 @@ class RunStateManager:
 
     def get_incomplete_runs(self) -> list[RunState]:
         """Find all runs in 'running' state — these are crash candidates."""
-        incomplete = []
+        incomplete: list[RunState] = []
         if not self.state_dir.exists():
             return incomplete
 
@@ -153,7 +153,7 @@ class RunStateManager:
                 "[CHECKPOINT] Resuming from chunk %d (skipping %d already-completed chunks)",
                 last + 1, last + 1,
             )
-        return last
+        return last  # type: ignore[no-any-return]
 
     def save_checkpoint(self, gov: "GovernanceLogger", source: str, table: str,
                         chunk_idx: int, rows: int) -> None:

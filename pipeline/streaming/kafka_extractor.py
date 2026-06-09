@@ -90,6 +90,7 @@ class KafkaStreamExtractor:
         max_empty_polls = 3
 
         while True:
+            assert self._consumer is not None
             message = self._consumer.poll(timeout=self.timeout_ms / 1000.0)
 
             if message is None:

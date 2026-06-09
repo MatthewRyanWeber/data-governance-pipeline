@@ -60,7 +60,7 @@ def _load_service_config() -> dict:
             "auto_resume": True,
         }
     with open(_CONFIG_FILE, encoding="utf-8") as f:
-        return json.load(f)
+        return json.load(f)  # type: ignore[no-any-return]
 
 
 def save_service_config(config: dict) -> None:

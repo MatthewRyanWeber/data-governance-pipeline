@@ -129,7 +129,7 @@ class ErasureHandler:
             "[ERASURE] %s — %d row(s) erased from '%s' (Art. 17)",
             mode.upper(), rows_affected, table,
         )
-        return rows_affected
+        return rows_affected  # type: ignore[no-any-return]
 
     def _build_engine(self, db_type: str, db_cfg: dict):
         """Build a SQLAlchemy engine for the given database type."""

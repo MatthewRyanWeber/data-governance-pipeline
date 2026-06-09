@@ -168,7 +168,7 @@ class NLPPIIDetector:
         entity_counts: dict[str, int] = defaultdict(int)
         text_batch = sample.astype(str).tolist()
 
-        for doc in nlp.pipe(text_batch, batch_size=64, disable=["tagger", "parser", "lemmatizer"]):
+        for doc in nlp.pipe(text_batch, batch_size=64, disable=["tagger", "parser", "lemmatizer"]):  # type: ignore[attr-defined]
             for ent in doc.ents:
                 pii_type = _ENTITY_PII_MAP.get(ent.label_)
                 if pii_type:

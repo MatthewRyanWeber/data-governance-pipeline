@@ -133,8 +133,8 @@ class SyntheticDataGenerator:
         profile = {"dtype": dtype}
 
         if dtype in ("int64", "Int64", "float64", "float32"):
-            profile["min"] = float(series.min()) if not series.isna().all() else 0
-            profile["max"] = float(series.max()) if not series.isna().all() else 100
+            profile["min"] = float(series.min()) if not series.isna().all() else 0  # type: ignore[assignment]
+            profile["max"] = float(series.max()) if not series.isna().all() else 100  # type: ignore[assignment]
 
         elif "datetime" in dtype:
             profile["min"] = series.min().isoformat() if not series.isna().all() else "-2y"

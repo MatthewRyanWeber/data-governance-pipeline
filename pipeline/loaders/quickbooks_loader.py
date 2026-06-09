@@ -70,7 +70,7 @@ class QuickBooksLoader(BaseLoader):
         token_data = resp.json()
         if "refresh_token" in token_data:
             cfg["refresh_token"] = token_data["refresh_token"]
-        return token_data["access_token"]
+        return str(token_data["access_token"])
 
     def _headers(self, access_token: str) -> dict:
         return {
@@ -122,7 +122,7 @@ class QuickBooksLoader(BaseLoader):
                 f"QuickBooks POST {entity} failed {resp.status_code}: "
                 f"{resp.text[:400]}"
             )
-        return resp.json()
+        return dict(resp.json())
 
     def load(self, df, cfg, table=None, if_exists="append", natural_keys=None):
         """Write df rows to QuickBooks Online as the specified entity type."""

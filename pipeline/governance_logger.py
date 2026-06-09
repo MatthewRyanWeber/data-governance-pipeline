@@ -467,7 +467,7 @@ class GovernanceLogger:
     def report_writer(self) -> "ReportWriter":
         """Return a ReportWriter bound to this logger, created on first access."""
         try:
-            return self._report_writer
+            return self._report_writer  # type: ignore[no-any-return, has-type]
         except AttributeError:
             from pipeline.reporting.report_writer import ReportWriter
             self._report_writer = ReportWriter(self)

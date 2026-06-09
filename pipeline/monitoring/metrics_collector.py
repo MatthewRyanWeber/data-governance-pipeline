@@ -93,7 +93,7 @@ class MetricsCollector:
         stage["rows"] = rows
         stage["rows_per_sec"] = round(rows / duration, 1) if duration > 0 else 0
         self._current = None
-        return duration
+        return duration  # type: ignore[no-any-return]
 
     def write_report(self, dlq_rows: int = 0) -> None:
         total_duration = time.monotonic() - self._run_start

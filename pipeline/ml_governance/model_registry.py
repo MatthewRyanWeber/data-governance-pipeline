@@ -63,7 +63,7 @@ class ModelRegistry:
         if not self.registry_file.exists():
             return {"models": {}}
         try:
-            return json.loads(self.registry_file.read_text(encoding="utf-8"))
+            return json.loads(self.registry_file.read_text(encoding="utf-8"))  # type: ignore[no-any-return]
         except (json.JSONDecodeError, OSError) as exc:
             logger.warning("Could not load model registry: %s", exc)
             return {"models": {}}
@@ -97,7 +97,7 @@ class ModelRegistry:
         """
         if self.dry_run:
             logger.info("[ML] [DRY RUN] Would register model '%s'", model_name)
-            return self._registry["models"].get(model_name, {})
+            return self._registry["models"].get(model_name, {})  # type: ignore[no-any-return]
 
         now = datetime.now(timezone.utc).isoformat()
 

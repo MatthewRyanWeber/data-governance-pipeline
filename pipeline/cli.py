@@ -49,7 +49,7 @@ def _load_config(config_path: str | None) -> dict:
             sys.exit(1)
         return yaml.safe_load(text) or {}
 
-    return json.loads(text)
+    return json.loads(text)  # type: ignore[no-any-return]
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -150,7 +150,7 @@ def _cmd_run(args: argparse.Namespace) -> None:
             def _single_file_pipeline(file_path):
                 _run_single_file(file_path, args, config, gov, metrics)
 
-            results = run_parallel(files, _single_file_pipeline)
+            results = run_parallel(files, _single_file_pipeline)  # type: ignore[arg-type]
             succeeded = sum(1 for r in results if r["success"])
             failed = len(results) - succeeded
             logger.info("Parallel run done — %d succeeded, %d failed.", succeeded, failed)

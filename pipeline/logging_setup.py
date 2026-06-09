@@ -143,7 +143,7 @@ def configure_logging(
     if json_format:
         formatter = JsonFormatter(datefmt="%Y-%m-%d %H:%M:%S")
     else:
-        formatter = logging.Formatter(
+        formatter = logging.Formatter(  # type: ignore[assignment]
             "%(asctime)s [%(levelname)s] %(name)s — %(message)s",
             datefmt="%Y-%m-%d %H:%M:%S",
         )

@@ -82,11 +82,11 @@ class S3Loader(BaseLoader):
                            buf, compression=cfg.get("compression", "snappy"))
             return buf.getvalue()
         if fmt == "csv":
-            return df.to_csv(index=False).encode("utf-8")
+            return bytes(df.to_csv(index=False).encode("utf-8"))
         if fmt == "json":
-            return df.to_json(orient="records", indent=2).encode("utf-8")
+            return bytes(df.to_json(orient="records", indent=2).encode("utf-8"))
         if fmt == "jsonl":
-            return df.to_json(orient="records", lines=True).encode("utf-8")
+            return bytes(df.to_json(orient="records", lines=True).encode("utf-8"))
         raise ValueError(f"S3Loader: unknown format '{fmt}'")
 
     @staticmethod

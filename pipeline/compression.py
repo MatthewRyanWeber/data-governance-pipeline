@@ -120,7 +120,7 @@ class CompressionHandler:
         limit = MAX_DECOMPRESSED_SIZE
 
         if ext == ".gz":
-            stream = gzip.open(path, "rb")
+            stream: io.IOBase = gzip.open(path, "rb")
             return SizeLimitedReader(stream, limit)
 
         if ext == ".bz2":
@@ -135,7 +135,7 @@ class CompressionHandler:
                     raise ValueError(f"ZIP archive is empty: {path}")
                 _validate_archive_member(members[0])
                 inner = zf.open(members[0])
-                return SizeLimitedReader(inner, limit, owner=zf)
+                return SizeLimitedReader(inner, limit, owner=zf)  # type: ignore[arg-type]
             except Exception:
                 zf.close()
                 raise
@@ -164,14 +164,15 @@ class CompressionHandler:
             import tarfile
             tf = tarfile.open(path, "r:gz")
             try:
-                members = [m for m in tf.getmembers() if m.isfile()]
-                if not members:
+                tar_members = [m for m in tf.getmembers() if m.isfile()]
+                if not tar_members:
                     raise ValueError(f"TGZ archive is empty: {path}")
-                _validate_archive_member(members[0].name)
-                inner = tf.extractfile(members[0])
+                _validate_archive_member(tar_members[0].name)
+                inner = tf.extractfile(tar_members[0])
                 if inner is None:
                     raise ValueError(f"Could not extract member from TGZ: {path}")
-                return SizeLimitedReader(inner, limit, owner=tf)
+                assert inner is not None
+                return SizeLimitedReader(inner, limit, owner=tf)  # type: ignore[arg-type]
             except Exception:
                 tf.close()
                 raise
@@ -193,10 +194,10 @@ class CompressionHandler:
             import tarfile
             try:
                 with tarfile.open(path, "r:gz") as tf:
-                    members = [m for m in tf.getmembers() if m.isfile()]
-                    if members:
-                        _validate_archive_member(members[0].name)
-                        return Path(members[0].name).suffix.lower()
+                    tar_members = [m for m in tf.getmembers() if m.isfile()]
+                    if tar_members:
+                        _validate_archive_member(tar_members[0].name)
+                        return Path(tar_members[0].name).suffix.lower()
             except Exception as exc:
                 logger.warning("Could not inspect archive %s: %s — defaulting to .csv", path, exc)
             return ".csv"

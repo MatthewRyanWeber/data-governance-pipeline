@@ -165,7 +165,7 @@ class LanceDBLoader(BaseLoader):
             raise ValueError("LanceDBLoader: cfg must contain 'uri'.")
 
         db = lancedb.connect(uri)
-        return db.table_names()
+        return list(db.table_names())
 
     def _write_append(self, db, table, df, vector_column) -> int:
         data = self._to_records(df, vector_column)
@@ -210,7 +210,7 @@ class LanceDBLoader(BaseLoader):
             out[vector_column] = out[vector_column].apply(
                 lambda v: v.tolist() if isinstance(v, np.ndarray) else v
             )
-        return out.to_dict(orient="records")
+        return list(out.to_dict(orient="records"))
 
     @staticmethod
     def _chunks(records, size=5_000):

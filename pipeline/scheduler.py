@@ -49,7 +49,7 @@ class PipelineScheduler:
             self._tz = zoneinfo.ZoneInfo(self.timezone_name)
         except (KeyError, zoneinfo.ZoneInfoNotFoundError):
             logger.warning("Unknown timezone %r — falling back to UTC", self.timezone_name)
-            self._tz = timezone.utc
+            self._tz = timezone.utc  # type: ignore[assignment]
         self._cron_parts = self._parse_cron(self.cron_expr)
         logger.info("PipelineScheduler initialised — cron=%s, tz=%s", self.cron_expr, self.timezone_name)
 

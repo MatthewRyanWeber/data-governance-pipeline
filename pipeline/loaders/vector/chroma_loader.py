@@ -152,7 +152,7 @@ class ChromaLoader(BaseLoader):
             "Chroma query on %s returned results for %d queries.",
             collection, len(query_embeddings),
         )
-        return results
+        return dict(results)
 
     @staticmethod
     def _build_client(cfg):

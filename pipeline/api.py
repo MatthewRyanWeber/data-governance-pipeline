@@ -113,7 +113,7 @@ def create_app(pipeline_fn=None) -> "Flask":
         return wrapper
 
     # ── Shared state ────────────────────────────────────────────────────
-    _state = {
+    _state: dict[str, object] = {
         "run_id": None,
         "status": "idle",
         "started_at": None,

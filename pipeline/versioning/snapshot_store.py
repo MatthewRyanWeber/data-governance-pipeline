@@ -74,7 +74,7 @@ class SnapshotStore:
         path = self._manifest_path(dataset)
         if not path.exists():
             return {"dataset": dataset, "versions": []}
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(path.read_text(encoding="utf-8"))  # type: ignore[no-any-return]
 
     def _save_manifest(self, dataset: str, manifest: dict) -> None:
         path = self._manifest_path(dataset)
@@ -107,7 +107,7 @@ class SnapshotStore:
                 if last["content_hash"] == content_hash:
                     logger.info("[SNAPSHOT] '%s' v%d skipped — identical to v%d",
                                 dataset, version, last["version"])
-                    return last["version"]
+                    return last["version"]  # type: ignore[no-any-return]
 
             if self.dry_run:
                 logger.info("[DRY RUN] Would snapshot '%s' v%d — %d rows, hash=%s",
@@ -224,7 +224,7 @@ class SnapshotStore:
     def list_versions(self, dataset: str) -> list[dict]:
         """List all versions for a dataset."""
         manifest = self._load_manifest(dataset)
-        return manifest["versions"]
+        return manifest["versions"]  # type: ignore[no-any-return]
 
     def list_datasets(self) -> list[str]:
         """List all datasets that have snapshots."""

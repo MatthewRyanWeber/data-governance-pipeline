@@ -195,7 +195,7 @@ class PineconeLoader(BaseLoader):
             "Pinecone search on %s returned %d matches.",
             index_name, len(results.get("matches", [])),
         )
-        return results
+        return dict(results)
 
     def describe_index(self, cfg, table="") -> dict:
         """Return index statistics (dimension, count, etc.)."""
@@ -211,7 +211,7 @@ class PineconeLoader(BaseLoader):
 
         pc = Pinecone(api_key=api_key)
         index = pc.Index(index_name)
-        return index.describe_index_stats()
+        return dict(index.describe_index_stats())
 
     @staticmethod
     def _embed(df, embed_cols, model_name):

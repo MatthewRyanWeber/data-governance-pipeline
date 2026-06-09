@@ -79,7 +79,7 @@ class PubSubStreamExtractor:
         Stops when a pull returns zero messages.
         """
         while True:
-            response = self._subscriber.pull(
+            response = self._subscriber.pull(  # type: ignore[union-attr]
                 request={
                     "subscription": self._subscription_path,
                     "max_messages": self.batch_size,
@@ -110,7 +110,7 @@ class PubSubStreamExtractor:
 
             # Acknowledge all pulled messages (including malformed ones)
             if ack_ids:
-                self._subscriber.acknowledge(
+                self._subscriber.acknowledge(  # type: ignore[union-attr]
                     request={
                         "subscription": self._subscription_path,
                         "ack_ids": ack_ids,
