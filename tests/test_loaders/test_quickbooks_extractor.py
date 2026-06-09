@@ -13,8 +13,6 @@ Revision history
 import unittest
 from unittest.mock import MagicMock, patch
 
-import pandas as pd
-
 from pipeline.loaders.quickbooks_extractor import QuickBooksExtractor
 
 
