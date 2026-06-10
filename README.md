@@ -7,7 +7,7 @@
 
 **Production-grade Python ETL with built-in GDPR, CCPA, and HIPAA compliance.**
 
-Most data pipelines make you bolt governance on afterwards -- a separate catalog tool, a separate compliance layer, a separate audit system. This project builds all of it into the pipeline itself: extract, transform, load, and govern in one Python stack with no external orchestration services required.
+Most data pipelines make you bolt governance on afterwards -- a separate catalog tool, a separate compliance layer, a separate audit system. This project builds all of it into the pipeline itself: extract, transform, load, and govern in one Python stack with no external orchestration services required. Multi-tenant data catalog, OpenLineage lineage tracking, field-level encryption, append-only audit ledger, circuit breakers with retry backoff, Prometheus metrics, and a live HTML dashboard -- all included out of the box.
 
 ---
 
@@ -108,10 +108,10 @@ data flow, module map, and extension guide.
 - 12 source formats: CSV, JSON, Excel, XML, Parquet, Avro, ORC, SQL tables, Kafka, Kinesis, Pub/Sub, QuickBooks Online
 - 37 destination loaders (28 standard + 9 vector)
 - Chunked parallel processing, compression (gz/bz2/zip/zstd/lz4), incremental loading, checkpoint/resume
-- Modular architecture: 123 Python modules across 13 packages with a 7-layer import DAG
+- Modular architecture: 130 Python modules across 13 packages with a 7-layer import DAG
 
 **Data governance -- GDPR / CCPA**
-- Tamper-evident SHA-256 audit ledger -- every event is chained; any modification is detectable
+- Append-only tamper-evident SHA-256 audit ledger -- every event is chained; seek/truncate blocked at the file handle level; external truncation detected
 - PII discovery with GDPR Article / CCPA section annotations and HTML report
 - NLP-powered PII detection -- spaCy NER + regex fallback for unstructured text (50+ entity types)
 - GDPR Art. 17 erasure across all destinations in a single call
@@ -127,21 +127,25 @@ data flow, module map, and extension guide.
 - RBAC access policies -- column whitelist/blacklist, row-level filtering, fail-closed enforcement
 
 **Data catalog and metadata**
-- SQLite-backed data catalog with FTS5 full-text search
+- Multi-tenant SQLite-backed data catalog with FTS5 full-text search and tenant isolation
 - Business glossary -- maps business terms to physical columns with domain tagging
 - Automated column profiling -- null rates, cardinality, distributions, value frequency
 - Automated test generation -- creates Great Expectations suites from column profiles
 - ML model registry -- tracks models, training datasets, lineage, and version comparison
 - Data versioning -- content-addressable snapshots with diff and time-travel checkout
-- OpenLineage event emitter -- interoperable lineage in OpenLineage JSON spec v2.0.2
+- OpenLineage event emitter -- interoperable lineage in OpenLineage JSON spec v2.0.2, multi-tenant facets
 
 **Data observability**
 - Freshness monitoring, volume anomaly detection, distribution drift alerts
 - Column-level data lineage graph with HTML visualisation
 - Quality scoring, anomaly alerts, SLA monitoring, run metrics
+- Prometheus `/metrics/prometheus` endpoint for scraping, plus Grafana dashboard export
 - Cost estimator (pre-run), reversible loads with snapshot rollback
 - Natural language pipeline builder (Claude API)
-- REST API server and cron-style scheduler
+- REST API server with live HTML dashboard, cron-style scheduler, process watchdog
+- Circuit breakers with exponential-backoff retry on all loaders
+- Field-level transparent Fernet encryption on load (opt-in per column)
+- Property-based testing with Hypothesis for security-critical paths
 
 **Healthcare / HIPAA** -- `epic_extensions.py`
 - HIPAA Safe Harbor de-identification (45 CFR SS164.514(b)) -- all 18 identifier types, ZIP restriction rules, age->=90 capping
@@ -196,16 +200,24 @@ python -m pipeline.api
 
 Key endpoints:
 
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/health` | GET | Health check (no auth required) |
-| `/run` | POST | Trigger a pipeline run |
-| `/status/<run_id>` | GET | Check run status |
-| `/metrics` | GET | Pipeline metrics |
-| `/docs` | GET | Swagger documentation |
+| Endpoint | Method | Auth | Purpose |
+|----------|--------|------|---------|
+| `/health` | GET | No | Health check with circuit breaker state |
+| `/dashboard` | GET | No | Live HTML dashboard (status, runs, breakers) |
+| `/run` | POST | Yes | Trigger a pipeline run |
+| `/status` | GET | Yes | Current run status with progress |
+| `/runs` | GET | Yes | Run history with pagination |
+| `/runs/<id>/cancel` | POST | Yes | Cancel a queued or running pipeline |
+| `/metrics` | GET | Yes | Pipeline run metrics |
+| `/metrics/prometheus` | GET | No | Prometheus text exposition endpoint |
+| `/auth/token` | POST | Yes | Exchange API key for JWT |
+| `/auth/revoke` | POST | Yes | Revoke a JWT by jti |
+| `/docs` | GET | No | Swagger UI documentation |
+| `/openapi.json` | GET | No | OpenAPI 3.0 spec |
 
-All endpoints (except `/health`) require a Bearer token set via the
-`PIPELINE_API_KEYS` environment variable.
+Authenticated endpoints require a Bearer token or `X-API-Key` header set via
+the `PIPELINE_API_KEYS` environment variable. JWT auth is available when
+`PIPELINE_JWT_SECRET` is configured.
 
 ---
 
@@ -214,9 +226,10 @@ All endpoints (except `/health`) require a Bearer token set via the
 ```
 data-governance-pipeline/
 +-- pipeline_v3.py                    # Backward-compat shim
-+-- pipeline/                         # Modular package (123 files, 13 subpackages)
++-- pipeline/                         # Modular package (130 files, 13 subpackages)
 |   +-- constants.py                  # Layer 0 -- flags, paths, version
 |   +-- governance_logger.py          # Layer 1 -- tamper-evident audit ledger
+|   +-- append_only_writer.py         # Layer 0 -- write-once file handle (seek/truncate blocked)
 |   +-- extract.py                    # Layer 2 -- 12-format extractor
 |   +-- transform.py                  # Layer 2 -- cleaning, dedup, PII masking
 |   +-- profiler.py                   # Layer 2 -- column profiling
@@ -255,26 +268,33 @@ data-governance-pipeline/
 |   |   +-- snapshot_store.py
 |   +-- ml_governance/                # AI/ML model registry
 |   |   +-- model_registry.py
+|   +-- dashboard.py                  # Layer 6 -- self-contained HTML dashboard
 |   +-- advanced/                     # Reversible loads, DLQ replay, NL builder
 |   +-- reporting/                    # HTML reports, lineage graphs, cost estimator
 |   +-- streaming/                    # Kafka/Kinesis/Pub/Sub extractors
-+-- tests/                            # 1,350 tests across 50+ test files
++-- tests/                            # 1,250 tests across 78 test files
 |   +-- test_new_features.py          # 38 tests for catalog, RBAC, lineage, etc.
 |   +-- test_security.py              # Security hardening tests
-|   +-- test_loaders/                 # Loader dispatch tests
+|   +-- test_dashboard.py             # Web dashboard rendering and route tests
+|   +-- test_multi_tenancy.py         # Tenant isolation, migration, lineage facets
+|   +-- test_property_based.py        # Hypothesis property-based testing
+|   +-- test_loaders/                 # Loader dispatch + untested-loader coverage
 |   +-- test_extensions/              # Governance, HIPAA, compliance, Grafana
 +-- governance_extensions.py          # 8 GDPR/CCPA governance classes
 +-- epic_extensions.py                # 6 Epic EHR / HIPAA classes
 +-- compliance_extensions.py          # 3 continuous compliance monitoring classes
 +-- grafana_extensions.py             # 3 Grafana observability classes
-+-- docs/                             # Legal and architecture docs
++-- docs/                             # Legal, architecture, and extension docs
 |   +-- ARCHITECTURE.md               # Full architecture reference
+|   +-- EXTENDING.md                  # Guide for writing custom loaders
+|   +-- DEPLOYMENT.md                 # Production deployment guide
 |   +-- PRIVACY.md                    # Privacy policy
 |   +-- TERMS.md                      # Terms of service
 |   +-- CCPA.md                       # CCPA compliance mapping
 +-- pyproject.toml                    # Package metadata and optional install extras
++-- .github/workflows/test.yml        # CI: lint, test (3 Python versions), integration
 +-- Dockerfile                        # Multi-stage Python 3.12 image
-+-- docker-compose.yml                # API server + test runner services
++-- docker-compose.yml                # Production-ready API server + test runner
 +-- CLAUDE.md                         # Coding standards
 +-- .env.example                      # Credential template
 ```
@@ -429,7 +449,7 @@ pip install -e ".[dev]"
 python -m pytest tests/ -q
 ```
 
-**1,350 tests, all passing** -- ~70% line coverage and climbing.
+**1,250 tests, all passing** -- ~70% line coverage and climbing.
 
 The suite spans three fidelity levels so bugs are caught wherever they hide:
 
