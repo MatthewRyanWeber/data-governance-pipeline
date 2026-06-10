@@ -73,5 +73,5 @@ attrs>=23.0.0                   # OpenLineage event dataclasses (metadata_extens
 
 
 # ── Data catalog connectors ───────────────────────────────────────────────────
-pyatlan>=3.0.0                  # AtlanConnector (catalog_connectors.py)
+pyatlan>=9.7.4                  # AtlanConnector (catalog_connectors.py)
 # Collibra, Alation, and Informatica Axon use requests (already in core)
