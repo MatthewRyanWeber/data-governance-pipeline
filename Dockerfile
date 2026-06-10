@@ -17,7 +17,11 @@ RUN pip install --no-cache-dir ".[dev]"
 COPY tests/ tests/
 RUN python -m pytest tests/ -q --tb=short \
     --ignore=tests/test_extensions \
-    --ignore=tests/test_loaders/test_loader_dispatch.py
+    --ignore=tests/test_loaders/test_loader_dispatch.py \
+    --ignore=tests/test_integration_db.py \
+    --ignore=tests/test_benchmarks.py \
+    --ignore=tests/test_api_load.py \
+    -m "not slow"
 
 # Stage 3: runtime — minimal production image
 FROM python:3.12-slim

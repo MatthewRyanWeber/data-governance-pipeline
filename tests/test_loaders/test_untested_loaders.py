@@ -80,7 +80,7 @@ class TestAthenaLoader(unittest.TestCase):
 class TestDeltaLakeLoader(unittest.TestCase):
 
     def _make(self, dry_run=False):
-        with patch("pipeline.constants.HAS_DELTALAKE", True):
+        with patch("pipeline.loaders.delta_lake_loader.HAS_DELTALAKE", True):
             from pipeline.loaders.delta_lake_loader import DeltaLakeLoader
             return DeltaLakeLoader(_gov(), dry_run=dry_run)
 
@@ -102,7 +102,7 @@ class TestDeltaLakeLoader(unittest.TestCase):
 
     def test_governance_event_on_append(self):
         gov = _gov()
-        with patch("pipeline.constants.HAS_DELTALAKE", True):
+        with patch("pipeline.loaders.delta_lake_loader.HAS_DELTALAKE", True):
             from pipeline.loaders.delta_lake_loader import DeltaLakeLoader
             loader = DeltaLakeLoader(gov, dry_run=False)
         with patch("deltalake.write_deltalake"):
@@ -120,7 +120,7 @@ class TestDeltaLakeLoader(unittest.TestCase):
 class TestIcebergLoader(unittest.TestCase):
 
     def _make(self, dry_run=False):
-        with patch("pipeline.constants.HAS_ICEBERG", True):
+        with patch("pipeline.loaders.iceberg_loader.HAS_ICEBERG", True):
             from pipeline.loaders.iceberg_loader import IcebergLoader
             return IcebergLoader(_gov(), dry_run=dry_run)
 
@@ -143,7 +143,7 @@ class TestIcebergLoader(unittest.TestCase):
 
     def test_governance_event_emitted(self):
         gov = _gov()
-        with patch("pipeline.constants.HAS_ICEBERG", True):
+        with patch("pipeline.loaders.iceberg_loader.HAS_ICEBERG", True):
             from pipeline.loaders.iceberg_loader import IcebergLoader
             loader = IcebergLoader(gov, dry_run=False)
         mock_catalog = MagicMock()
@@ -160,7 +160,7 @@ class TestIcebergLoader(unittest.TestCase):
 class TestMicrosoftFabricLoader(unittest.TestCase):
 
     def _make(self, dry_run=False):
-        with patch("pipeline.constants.HAS_FABRIC", True):
+        with patch("pipeline.loaders.microsoft_fabric_loader.HAS_FABRIC", True):
             from pipeline.loaders.microsoft_fabric_loader import MicrosoftFabricLoader
             return MicrosoftFabricLoader(_gov(), dry_run=dry_run)
 
@@ -184,7 +184,7 @@ class TestMicrosoftFabricLoader(unittest.TestCase):
 
     def test_governance_event_emitted(self):
         gov = _gov()
-        with patch("pipeline.constants.HAS_FABRIC", True):
+        with patch("pipeline.loaders.microsoft_fabric_loader.HAS_FABRIC", True):
             from pipeline.loaders.microsoft_fabric_loader import MicrosoftFabricLoader
             loader = MicrosoftFabricLoader(gov, dry_run=False)
         cfg = {"workspace_id": "w", "lakehouse_id": "l"}
@@ -201,7 +201,7 @@ class TestMicrosoftFabricLoader(unittest.TestCase):
 class TestKafkaLoader(unittest.TestCase):
 
     def _make(self, dry_run=False):
-        with patch("pipeline.constants.HAS_KAFKA_LOADER", True):
+        with patch("pipeline.loaders.kafka_loader.HAS_KAFKA_LOADER", True):
             from pipeline.loaders.kafka_loader import KafkaLoader
             return KafkaLoader(_gov(), dry_run=dry_run)
 
@@ -218,7 +218,7 @@ class TestKafkaLoader(unittest.TestCase):
 
     def test_governance_events_emitted(self):
         gov = _gov()
-        with patch("pipeline.constants.HAS_KAFKA_LOADER", True):
+        with patch("pipeline.loaders.kafka_loader.HAS_KAFKA_LOADER", True):
             from pipeline.loaders.kafka_loader import KafkaLoader
             loader = KafkaLoader(gov, dry_run=False)
         cfg = {"bootstrap_servers": "localhost:9092", "topic": "t"}
@@ -437,7 +437,7 @@ class TestCockroachDBLoader(unittest.TestCase):
 class TestLanceDBLoader(unittest.TestCase):
 
     def _make(self, dry_run=False):
-        with patch("pipeline.constants.HAS_LANCEDB", True):
+        with patch("pipeline.loaders.vector.lancedb_loader.HAS_LANCEDB", True):
             from pipeline.loaders.vector.lancedb_loader import LanceDBLoader
             return LanceDBLoader(_gov(), dry_run=dry_run)
 
@@ -453,7 +453,7 @@ class TestLanceDBLoader(unittest.TestCase):
 
     def test_governance_events_emitted(self):
         gov = _gov()
-        with patch("pipeline.constants.HAS_LANCEDB", True):
+        with patch("pipeline.loaders.vector.lancedb_loader.HAS_LANCEDB", True):
             from pipeline.loaders.vector.lancedb_loader import LanceDBLoader
             loader = LanceDBLoader(gov, dry_run=False)
         mock_db = MagicMock()
@@ -473,7 +473,7 @@ class TestLanceDBLoader(unittest.TestCase):
 class TestBigQueryVectorLoader(unittest.TestCase):
 
     def _make(self, dry_run=False):
-        with patch("pipeline.constants.HAS_BIGQUERY", True):
+        with patch("pipeline.loaders.vector.bigquery_vector_loader.HAS_BIGQUERY", True):
             from pipeline.loaders.vector.bigquery_vector_loader import BigQueryVectorLoader
             return BigQueryVectorLoader(_gov(), dry_run=dry_run)
 
@@ -495,7 +495,7 @@ class TestBigQueryVectorLoader(unittest.TestCase):
 class TestSnowflakeVectorLoader(unittest.TestCase):
 
     def _make(self, dry_run=False):
-        with patch("pipeline.constants.HAS_SNOWFLAKE", True):
+        with patch("pipeline.loaders.vector.snowflake_vector_loader.HAS_SNOWFLAKE", True):
             from pipeline.loaders.vector.snowflake_vector_loader import SnowflakeVectorLoader
             return SnowflakeVectorLoader(_gov(), dry_run=dry_run)
 
