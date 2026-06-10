@@ -474,15 +474,21 @@ class TestAPIWebhook:
 
     @pytest.mark.asyncio
     async def test_webhook_fired_on_completion(self):
-        done = threading.Event()
+        webhook_fired = threading.Event()
 
         def fast_pipeline(s, d, c):
-            done.set()
+            pass
+
+        original_fire = __import__("pipeline.api", fromlist=["_fire_webhook"])._fire_webhook
+
+        def tracking_fire(url, payload):
+            original_fire(url, payload)
+            webhook_fired.set()
 
         from pipeline.api import create_app
         app = create_app(pipeline_fn=fast_pipeline)
 
-        with patch("pipeline.api._fire_webhook") as mock_webhook:
+        with patch("pipeline.api._fire_webhook", side_effect=tracking_fire) as mock_webhook:
             async with app.test_client() as client:
                 resp = await client.post("/run", json={
                     "source": "x.csv", "destination": "sqlite",
@@ -490,8 +496,7 @@ class TestAPIWebhook:
                     "webhook_url": "https://example.com/hook",
                 })
                 assert resp.status_code == 202
-                done.wait(timeout=5)
-                await asyncio.sleep(0.1)
+                webhook_fired.wait(timeout=10)
 
             mock_webhook.assert_called_once()
             call_args = mock_webhook.call_args

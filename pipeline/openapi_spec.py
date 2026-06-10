@@ -917,7 +917,7 @@ def register_docs_routes(app) -> None:
     @app.route("/openapi.json", methods=["GET"])
     async def openapi_json():
         """Return the OpenAPI 3.0 spec as JSON."""
-        return await _jsonify(spec)
+        return _jsonify(spec)
 
     @app.route("/docs", methods=["GET"])
     async def swagger_ui():
