@@ -8,7 +8,7 @@ SQLAlchemy==2.0.50
 PyYAML==6.0.3
 python-dotenv==1.2.2
 requests==2.34.2
-cryptography==46.0.7
+cryptography==48.0.1
 
 # SQL database drivers
 psycopg2-binary==2.9.12
