@@ -24,7 +24,7 @@ sqlalchemy-redshift>=0.8.0
 # Google BigQuery (#7)
 google-cloud-bigquery>=3.0.0
 google-cloud-bigquery-storage>=2.0.0
-db-dtypes>=1.0.0
+db-dtypes>=1.7.0
 
 # Azure Synapse (#9)  — driver already covered by pyodbc in requirements.txt
 azure-storage-blob>=12.0.0
