@@ -19,7 +19,7 @@ snowflake-sqlalchemy>=1.6.0
 
 # Amazon Redshift (#8)
 redshift-connector>=2.0.0
-sqlalchemy-redshift>=0.8.0
+sqlalchemy-redshift>=1.0.0
 
 # Google BigQuery (#7)
 google-cloud-bigquery>=3.0.0
