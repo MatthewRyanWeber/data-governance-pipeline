@@ -176,7 +176,8 @@ def create_token(subject: str, expiry_seconds: int | None = None) -> dict:
     token = jwt.encode(payload, secret, algorithm=_JWT_ALGORITHM)
 
     from datetime import datetime, timezone
-    expires_at = datetime.fromtimestamp(payload["exp"], tz=timezone.utc).isoformat()
+    exp_ts: float = payload["exp"]  # type: ignore[assignment]
+    expires_at = datetime.fromtimestamp(exp_ts, tz=timezone.utc).isoformat()
 
     logger.info("[AUTH] JWT issued for subject=%s, jti=%s, expires_in=%ds",
                 subject, jti, exp_seconds)
@@ -226,12 +227,12 @@ def revoke_token(jti: str, expires_at: float | None = None) -> None:
 
 def is_revoked(jti: str) -> bool:
     """Check if a token has been revoked."""
-    return _revocation_store.contains(jti)
+    return bool(_revocation_store.contains(jti))
 
 
 def prune_revoked() -> int:
     """Remove expired entries from the revocation set. Returns count removed."""
-    return _revocation_store.prune()
+    return int(_revocation_store.prune())
 
 
 def reset_state() -> None:

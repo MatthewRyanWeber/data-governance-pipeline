@@ -147,7 +147,7 @@ class CompressionHandler:
             dctx = zstandard.ZstdDecompressor()
             fh = _builtin_open(str(path), "rb")
             try:
-                stream = dctx.stream_reader(fh)
+                stream = dctx.stream_reader(fh)  # type: ignore[assignment]
                 return SizeLimitedReader(stream, limit, owner=fh)
             except Exception:
                 fh.close()

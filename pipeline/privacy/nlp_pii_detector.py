@@ -95,7 +95,7 @@ class NLPPIIDetector:
                            "pip install spacy && python -m spacy download en_core_web_sm")
             return None
         try:
-            self._nlp = spacy.load(self.model_name)
+            self._nlp = spacy.load(self.model_name)  # type: ignore[assignment]
             logger.info("[NLP-PII] Loaded spaCy model '%s'", self.model_name)
             return self._nlp
         except OSError:

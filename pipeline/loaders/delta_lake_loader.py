@@ -80,7 +80,7 @@ class DeltaLakeLoader(BaseLoader):
              .execute())
         else:
             mode = "overwrite" if if_exists == "replace" else "append"
-            deltalake.write_deltalake(
+            deltalake.write_deltalake(  # type: ignore[call-overload]
                 path,
                 arrow_table,
                 mode=mode,

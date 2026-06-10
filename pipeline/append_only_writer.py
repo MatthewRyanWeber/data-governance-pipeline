@@ -15,6 +15,7 @@ Revision history
 import logging
 import os
 from pathlib import Path
+from typing import IO
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +39,7 @@ class AppendOnlyWriter:
         self._path = Path(path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._verify = verify_integrity
-        self._file = None
+        self._file: IO[str] | None = None
         self._expected_size: int | None = None
 
     def open(self) -> "AppendOnlyWriter":
@@ -50,6 +51,7 @@ class AppendOnlyWriter:
     def write(self, data: str) -> int:
         if self._file is None:
             self.open()
+        assert self._file is not None
         if self._verify:
             self._check_integrity()
         n = self._file.write(data)

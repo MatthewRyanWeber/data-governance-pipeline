@@ -55,7 +55,7 @@ class PubSubStreamExtractor:
         self._subscriber = None
 
         try:
-            from google.cloud import pubsub_v1
+            from google.cloud import pubsub_v1  # type: ignore[attr-defined]
         except ImportError:
             raise RuntimeError(
                 "google-cloud-pubsub is required for PubSubStreamExtractor. "

@@ -30,6 +30,7 @@ from pipeline.constants import default_run_context, EventCategory, RunContext
 from pipeline.helpers import file_hash
 
 if TYPE_CHECKING:
+    from pipeline.append_only_writer import AppendOnlyWriter
     from pipeline.reporting.report_writer import ReportWriter
 
 logger = logging.getLogger(__name__)
@@ -144,7 +145,7 @@ class GovernanceLogger:
         self._prev_hash: str = "GENESIS"
         self._event_lock = threading.RLock()
         self._verify_integrity = verify_integrity
-        self._writer = None
+        self._writer: "AppendOnlyWriter | None" = None
 
     # ── Core event writer with chained hash ──────────────────────────────
     # Performance: each _event() call serialises JSON + computes SHA-256 +

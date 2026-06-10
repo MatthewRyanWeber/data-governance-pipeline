@@ -231,7 +231,7 @@ class BaseLoader:
                     )
                     time.sleep(wait)
         self._record_circuit_failure()
-        raise last_exc
+        raise last_exc  # type: ignore[misc]
 
     # ── Field-level encryption (opt-in) ──────────────────────────────────
 
