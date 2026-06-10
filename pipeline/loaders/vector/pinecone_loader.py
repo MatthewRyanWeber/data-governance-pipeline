@@ -195,7 +195,7 @@ class PineconeLoader(BaseLoader):
             "Pinecone search on %s returned %d matches.",
             index_name, len(results.get("matches", [])),
         )
-        return results.to_dict()  # type: ignore[union-attr]
+        return dict(results)  # type: ignore[arg-type]
 
     def describe_index(self, cfg, table="") -> dict:
         """Return index statistics (dimension, count, etc.)."""
