@@ -9,14 +9,53 @@ config validation, dry_run guard, governance logging, and empty df.
 Revision history
 ────────────────
 1.0   2026-06-09   Initial release.
+1.1   2026-06-10   Fix: stub optional SDK modules in sys.modules so lazy
+                    imports inside load() don't raise ModuleNotFoundError.
 """
 
+import sys
 import unittest
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
 
 from pipeline.exceptions import ConfigValidationError
+
+
+def _ensure_mock_module(*names):
+    """Insert a MagicMock module into sys.modules for each name that
+    isn't already importable.  Uses MagicMock so that attribute access
+    (patch targets, from-imports) auto-creates sub-mocks.  Handles
+    dotted names by creating parent packages as needed.
+    Skips names that are already importable to avoid clobbering real
+    libraries installed in the environment."""
+    from importlib.util import find_spec
+    for dotted in names:
+        try:
+            if find_spec(dotted) is not None:
+                continue
+        except (ModuleNotFoundError, ValueError):
+            pass
+        parts = dotted.split(".")
+        for i in range(len(parts)):
+            partial = ".".join(parts[: i + 1])
+            if partial not in sys.modules:
+                mock_mod = MagicMock()
+                mock_mod.__path__ = []
+                mock_mod.__name__ = partial
+                sys.modules[partial] = mock_mod
+
+
+_ensure_mock_module(
+    "deltalake",
+    "pyiceberg",
+    "adlfs",
+    "kafka",
+    "lancedb",
+    "google.cloud.bigquery",
+    "snowflake.sqlalchemy",
+    "snowflake.connector",
+)
 
 _DF = pd.DataFrame({"id": [1, 2], "name": ["a", "b"]})
 _EMPTY = pd.DataFrame()
