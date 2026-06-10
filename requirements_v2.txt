@@ -67,7 +67,7 @@ google-cloud-pubsub>=2.18.0     # PubSubExtractor (pipeline_streaming.py)
 
 
 # ── Metadata / lineage extensions ────────────────────────────────────────────
-openlineage-python>=1.0.0       # OpenLineageEmitter (metadata_extensions.py)
+openlineage-python>=1.48.0       # OpenLineageEmitter (metadata_extensions.py)
 scipy>=1.11.0                   # AnomalyDetector statistical tests (metadata_extensions.py)
 attrs>=23.0.0                   # OpenLineage event dataclasses (metadata_extensions.py)
 
