@@ -2,12 +2,20 @@
 Pure utility functions used across the pipeline.
 
 Layer 0 — imports only from constants (same layer).
+
+Revision history
+────────────────
+1.0   2026-06-07   Initial extraction from monolith.
+1.1   2026-06-11   read_jsonl_tail: rejoin lines split across chunk boundaries;
+                   flatten_record: optional max_depth; load_file_cached for
+                   (path, mtime)-keyed lookup/rules caching.
 """
 
 import hashlib
 import json
 import logging
 import tempfile
+import threading
 from pathlib import Path
 from typing import Any, Callable
 
@@ -50,26 +58,40 @@ def detect_pii(columns: list[str]) -> list[dict]:
 
 
 def flatten_record(
-    record: Any, parent_key: str = "", separator: str = "__"
+    record: Any,
+    parent_key: str = "",
+    separator: str = "__",
+    max_depth: int | None = None,
 ) -> dict:
     """
     Recursively flatten nested dicts/lists.
     {"a": {"b": 1}} → {"a__b": 1}
     {"scores": [9, 8]} → {"scores__0": 9, "scores__1": 8}
+
+    When max_depth is given, nesting below that depth is kept as-is so
+    callers can cap how far flattening expands the schema.
     """
+    # A depth of 1 means "flatten this level, keep anything deeper intact".
+    can_recurse = max_depth is None or max_depth > 1
+    child_depth = None if max_depth is None else max_depth - 1
+
     items: list[tuple[str, Any]] = []
     if isinstance(record, dict):
         for key, value in record.items():
             new_key = f"{parent_key}{separator}{key}" if parent_key else str(key)
-            if isinstance(value, (dict, list)):
-                items.extend(flatten_record(value, new_key, separator).items())
+            if isinstance(value, (dict, list)) and can_recurse:
+                items.extend(
+                    flatten_record(value, new_key, separator, child_depth).items()
+                )
             else:
                 items.append((new_key, value))
     elif isinstance(record, list):
         for index, value in enumerate(record):
             new_key = f"{parent_key}{separator}{index}" if parent_key else str(index)
-            if isinstance(value, (dict, list)):
-                items.extend(flatten_record(value, new_key, separator).items())
+            if isinstance(value, (dict, list)) and can_recurse:
+                items.extend(
+                    flatten_record(value, new_key, separator, child_depth).items()
+                )
             else:
                 items.append((new_key, value))
     else:
@@ -119,21 +141,40 @@ def read_jsonl_tail(
     """Read the last *count* records from a JSONL file, newest first."""
     if not path.exists():
         return []
-    # Read from end of file to avoid loading entire file into memory
-    lines: list[str] = []
-    buf_size = 8192
+    # Read from end of file to avoid loading entire file into memory.
+    # Work in bytes and decode per line so a multi-byte character split
+    # across a chunk boundary cannot be mangled by early decoding.
+    raw_lines: list[bytes] = []
+    buffer_size = 8192
+    partial_first_line = b""
     with open(path, "rb") as f:
         f.seek(0, 2)
         remaining = f.tell()
-        while remaining > 0 and len(lines) < count * 3:
-            read_size = min(buf_size, remaining)
+        while remaining > 0 and len(raw_lines) < count * 3:
+            read_size = min(buffer_size, remaining)
             remaining -= read_size
             f.seek(remaining)
-            chunk = f.read(read_size).decode("utf-8", errors="replace")
-            lines = chunk.splitlines() + lines
+            chunk = f.read(read_size) + partial_first_line
+            chunk_lines = chunk.splitlines()
+            if remaining > 0 and chunk_lines:
+                # The first element may start mid-line; hold it back and
+                # rejoin it once the preceding chunk has been read, so the
+                # record straddling the boundary stays intact.
+                partial_first_line = chunk_lines.pop(0)
+            else:
+                partial_first_line = b""
+            raw_lines = chunk_lines + raw_lines
+    if partial_first_line:
+        # Loop ended on the record budget with bytes still unread — this
+        # held-back line may be incomplete, so it is only safe to keep it
+        # when the whole file was consumed (handled above); discard here.
+        logger.debug(
+            "Discarding possibly-partial boundary line while tailing %s",
+            path.name,
+        )
     records: list[dict] = []
-    for line in reversed(lines):
-        line = line.strip()
+    for raw_line in reversed(raw_lines):
+        line = raw_line.decode("utf-8", errors="replace").strip()
         if not line:
             continue
         try:
@@ -147,6 +188,31 @@ def read_jsonl_tail(
         if len(records) >= count:
             break
     return records
+
+
+_FILE_CACHE: dict[str, tuple[float, Any]] = {}
+_FILE_CACHE_LOCK = threading.Lock()
+
+
+def load_file_cached(path: str | Path, loader: Callable[[str], Any]) -> Any:
+    """
+    Return loader(path), reusing the previous result while the file is unchanged.
+
+    Keyed by (absolute path, mtime) so chunked pipeline runs parse a shared
+    lookup/reference/rules file once instead of once per chunk. Callers must
+    treat the returned object as read-only — it is shared across calls.
+    """
+    resolved_path = Path(path).resolve()
+    modified_time = resolved_path.stat().st_mtime
+    cache_key = str(resolved_path)
+    with _FILE_CACHE_LOCK:
+        cached = _FILE_CACHE.get(cache_key)
+        if cached is not None and cached[0] == modified_time:
+            return cached[1]
+    data = loader(str(path))
+    with _FILE_CACHE_LOCK:
+        _FILE_CACHE[cache_key] = (modified_time, data)
+    return data
 
 
 def is_present(value: Any) -> bool:

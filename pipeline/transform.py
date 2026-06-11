@@ -5,6 +5,14 @@ Operates on DataFrames using vectorised operations instead of iterrows()
 for ~10-20x performance improvement on wide DataFrames.
 
 Layer 2 — imports from Layer 0 (constants), Layer 1 (governance_logger).
+
+Revision history
+────────────────
+1.0   2026-06-07   Initial extraction from monolith.
+1.1   2026-06-11   PII detection re-runs on columns created by flattening so
+                   nested PII (user → user__email) is masked; flatten_nested
+                   honours its sep/max_level parameters and only processes
+                   columns that actually contain dicts/lists.
 """
 
 import re
@@ -13,7 +21,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from pipeline.constants import default_run_context
-from pipeline.helpers import flatten_record as _flatten_record, mask_value
+from pipeline.helpers import detect_pii, flatten_record as _flatten_record, mask_value
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -59,7 +67,16 @@ class Transformer:
         self.run_context = run_context or default_run_context()
 
     def _flatten_kw(self) -> dict:
-        return {"separator": self._sep}
+        return {"separator": self._sep, "max_depth": self._max_depth}
+
+    @staticmethod
+    def _columns_containing_nested_values(df) -> list:
+        """Object columns that actually hold dicts/lists — plain strings are skipped."""
+        return [
+            c for c in df.columns
+            if df[c].dtype == object
+            and df[c].dropna().apply(lambda x: isinstance(x, (dict, list))).any()
+        ]
 
     @staticmethod
     def _flatten_df(df, obj_cols: list, flatten_kw: dict):
@@ -73,7 +90,12 @@ class Transformer:
             series = df[col].reset_index(drop=True)
             expanded = series.apply(
                 lambda v, _col=col, _fkw=flatten_kw:
-                    _flatten_record(v, parent_key=_col, separator=_fkw.get("separator", "__"))
+                    _flatten_record(
+                        v,
+                        parent_key=_col,
+                        separator=_fkw.get("separator", "__"),
+                        max_depth=_fkw.get("max_depth"),
+                    )
                     if isinstance(v, (dict, list)) else {_col: v}
             )
             parts.append(pd.DataFrame(list(expanded)))
@@ -81,6 +103,27 @@ class Transformer:
         result = pd.concat(parts, axis=1)
         result = result.loc[:, ~result.columns.duplicated()]
         return result
+
+    def _detect_pii_in_flattened_columns(
+        self, columns, original_columns: list[str], separator: str,
+    ) -> list[dict]:
+        """Detect PII in columns created by flattening.
+
+        Flattening happens after the caller's PII scan, so nested PII
+        (user → user__email) would otherwise escape masking. Each separator
+        segment is scanned individually because the PII patterns anchor on
+        word boundaries that the separator suppresses.
+        """
+        findings: list[dict] = []
+        for column_name in columns:
+            if column_name in original_columns:
+                continue
+            segment_findings = detect_pii(str(column_name).split(separator))
+            if segment_findings:
+                finding = dict(segment_findings[0])
+                finding["field"] = column_name
+                findings.append(finding)
+        return findings
 
     def mask_pii(self, df, columns: list[str]):
         """Hash-mask the listed columns in place (SHA-256, 8 hex chars)."""
@@ -117,10 +160,13 @@ class Transformer:
         return df
 
     def flatten_nested(self, df, sep: str = "_", max_level: int = 3):
+        nested_columns = self._columns_containing_nested_values(df)
+        if not nested_columns:
+            return df.copy()
         return self._flatten_df(
             df,
-            [c for c in df.columns if df[c].dtype == object],
-            self._flatten_kw(),
+            nested_columns,
+            {"separator": sep, "max_depth": max_level},
         )
 
     def coerce_types(self, df, mapping: dict[str, str]):
@@ -159,20 +205,29 @@ class Transformer:
         return df
 
     def transform(self, df, pii_findings, pii_strategy, drop_cols) -> "pd.DataFrame":
-        """Full transformation pipeline: flatten, minimise, PII, dedup, sanitise."""
+        """Full transformation pipeline: flatten, minimise, PII, dedup, sanitise.
+
+        Pass pii_findings=None to disable the PII stage entirely (--skip-pii);
+        an empty list still allows supplemental detection on columns created
+        by flattening, which the caller's pre-flatten scan cannot see.
+        """
+        pii_detection_enabled = pii_findings is not None
+        pii_findings = list(pii_findings or [])
         if pii_findings and isinstance(pii_findings[0], str):
             pii_findings = [{"field": col} for col in pii_findings]
 
         original_cols = list(df.columns)
 
-        obj_cols = [
-            c for c in df.columns
-            if df[c].dtype == object
-            and df[c].dropna().apply(lambda x: isinstance(x, (dict, list))).any()
-        ]
+        obj_cols = self._columns_containing_nested_values(df)
         if obj_cols:
             df = self._flatten_df(df, obj_cols, self._flatten_kw())
             self.gov.transformation_applied("FLATTEN_NESTED", {"flattened_columns": obj_cols})
+            if pii_detection_enabled:
+                pii_findings.extend(
+                    self._detect_pii_in_flattened_columns(
+                        df.columns, original_cols, self._sep,
+                    )
+                )
 
         if drop_cols:
             df = df.drop(columns=[c for c in drop_cols if c in df.columns],

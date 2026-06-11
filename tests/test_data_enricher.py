@@ -7,13 +7,16 @@ missing join column, unsupported formats, and the no-row-drop guarantee.
 Revision history
 ────────────────
 1.0   2026-06-09   Initial release: branch coverage for DataEnricher.
+1.1   2026-06-11   Regression tests: key collision keeps the main table's
+                   column, duplicate lookup keys no longer multiply rows,
+                   lookup files are parsed once per (path, mtime).
 """
 
 import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pandas as pd
 
@@ -96,6 +99,52 @@ class TestDataEnricher(unittest.TestCase):
         result = self.enricher.enrich(df, "id", lookup, "id")
         self.assertIn("id", result.columns)
         self.assertEqual(list(result["label"]), ["a", "b"])
+
+    def test_lookup_key_collision_keeps_main_column(self):
+        # Regression: when lookup_key collides with an existing main-table
+        # column, the drop removed the MAIN df's column and its data.
+        df = pd.DataFrame({
+            "dept_id": [1, 2],
+            "department_id": ["keep-1", "keep-2"],
+        })
+        lookup = self._write_csv(
+            pd.DataFrame({"department_id": [1, 2], "dept_name": ["Eng", "HR"]})
+        )
+        result = self.enricher.enrich(df, "dept_id", lookup, "department_id")
+        self.assertIn("department_id", result.columns)
+        self.assertEqual(list(result["department_id"]), ["keep-1", "keep-2"])
+        self.assertEqual(list(result["dept_name"]), ["Eng", "HR"])
+        # The lookup's suffixed copy of the key is the one that goes.
+        self.assertNotIn("department_id_lookup", result.columns)
+
+    def test_duplicate_lookup_keys_do_not_multiply_rows(self):
+        # Regression: duplicate join keys in the lookup fanned out the left
+        # join and silently multiplied main-table rows.
+        df = pd.DataFrame({"dept_id": [1, 2, 3]})
+        lookup = self._write_csv(
+            pd.DataFrame({
+                "department_id": [1, 1, 2],
+                "dept_name": ["Eng-first", "Eng-second", "HR"],
+            })
+        )
+        with self.assertLogs("pipeline.data_enricher", level="WARNING") as cm:
+            result = self.enricher.enrich(df, "dept_id", lookup, "department_id")
+        self.assertEqual(len(result), 3)
+        self.assertEqual(result["dept_name"][0], "Eng-first")
+        self.assertTrue(any("duplicate" in m for m in cm.output))
+
+    def test_lookup_file_is_parsed_once_across_calls(self):
+        # Chunked runs call enrich once per chunk — the lookup must be
+        # parsed once per (path, mtime), not once per call.
+        df = pd.DataFrame({"dept_id": [1]})
+        lookup = self._write_csv(
+            pd.DataFrame({"department_id": [1], "dept_name": ["Eng"]})
+        )
+        with patch("pandas.read_csv", wraps=pd.read_csv) as wrapped_read:
+            self.enricher.enrich(df, "dept_id", lookup, "department_id")
+            self.enricher.enrich(df, "dept_id", lookup, "department_id")
+            self.enricher.enrich(df, "dept_id", lookup, "department_id")
+        self.assertEqual(wrapped_read.call_count, 1)
 
 
 if __name__ == "__main__":

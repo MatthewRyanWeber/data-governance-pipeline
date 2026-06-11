@@ -4,6 +4,14 @@ Tests for pipeline.transform — Transformer class.
 Covers mask_pii, drop_duplicates, fill_nulls, standardise_names,
 flatten_nested, coerce_types, apply_business_rules, enrich,
 and the full transform() pipeline.
+
+Revision history
+────────────────
+1.0   2026-06-08   Initial release.
+1.1   2026-06-11   Regression tests: nested PII (user → user__email) is masked
+                   after flattening; flatten_nested honours sep/max_level and
+                   leaves plain string columns untouched; None pii_findings
+                   disables flatten-time detection.
 """
 
 import hashlib
@@ -177,6 +185,30 @@ class TestFlattenNested(unittest.TestCase):
         result = self.t.flatten_nested(df)
         self.assertEqual(list(result["a"]), [1, 2])
         self.assertEqual(list(result["b"]), ["x", "y"])
+
+    def test_sep_parameter_is_honoured(self):
+        # Regression: flatten_nested ignored its own sep parameter.
+        df = pd.DataFrame({"meta": [{"city": "NYC"}]})
+        result = self.t.flatten_nested(df, sep=".")
+        self.assertIn("meta.city", result.columns)
+
+    def test_max_level_parameter_is_honoured(self):
+        # Regression: flatten_nested ignored max_level entirely.
+        df = pd.DataFrame({"meta": [{"a": {"b": {"c": 1}}}]})
+        result = self.t.flatten_nested(df, sep="__", max_level=1)
+        self.assertIn("meta__a", result.columns)
+        # One level deep stops at meta__a — the inner dict stays intact.
+        self.assertEqual(result["meta__a"].iloc[0], {"b": {"c": 1}})
+        deep_result = self.t.flatten_nested(df, sep="__", max_level=3)
+        self.assertIn("meta__a__b__c", deep_result.columns)
+
+    def test_string_only_object_columns_returned_unchanged(self):
+        # Regression: every object column (including plain strings) was run
+        # through the per-row flatten apply.
+        df = pd.DataFrame({"name": ["alice", "bob"], "note": ["x", "y"]})
+        result = self.t.flatten_nested(df)
+        self.assertEqual(list(result.columns), ["name", "note"])
+        self.assertEqual(list(result["name"]), ["alice", "bob"])
 
 
 class TestCoerceTypes(unittest.TestCase):
@@ -382,6 +414,43 @@ class TestTransformPipeline(unittest.TestCase):
         result = self.t.transform(df, [], "mask", drop_cols=[])
         # Should have been flattened
         self.assertGreater(len(result.columns), 3)  # id + flattened + _pipeline_id + _loaded_at
+
+    def test_nested_pii_is_masked_after_flattening(self):
+        # Regression: PII detection ran on pre-flatten column names, so an
+        # email nested inside a dict (user → user__email) escaped masking.
+        df = pd.DataFrame({
+            "id": [1],
+            "user": [{"email": "alice@example.com", "city": "NYC"}],
+        })
+        result = self.t.transform(df, [], "mask", drop_cols=[])
+        email_columns = [c for c in result.columns if "email" in c.lower()]
+        self.assertEqual(len(email_columns), 1)
+        self.assertTrue(
+            str(result[email_columns[0]].iloc[0]).startswith("MASKED_"),
+            "Nested email must be masked after flattening",
+        )
+        # Non-PII nested values are flattened but left untouched.
+        city_columns = [c for c in result.columns if "city" in c.lower()]
+        self.assertEqual(result[city_columns[0]].iloc[0], "NYC")
+
+    def test_nested_pii_dropped_with_drop_strategy(self):
+        df = pd.DataFrame({
+            "id": [1],
+            "user": [{"email": "alice@example.com", "city": "NYC"}],
+        })
+        result = self.t.transform(df, [], "drop", drop_cols=[])
+        email_columns = [c for c in result.columns if "email" in c.lower()]
+        self.assertEqual(len(email_columns), 0)
+
+    def test_none_findings_skip_all_pii_handling(self):
+        # --skip-pii passes None: even nested PII must pass through untouched.
+        df = pd.DataFrame({
+            "id": [1],
+            "user": [{"email": "alice@example.com"}],
+        })
+        result = self.t.transform(df, None, "mask", drop_cols=[])
+        email_columns = [c for c in result.columns if "email" in c.lower()]
+        self.assertEqual(result[email_columns[0]].iloc[0], "alice@example.com")
 
 
 class TestEdgeCases(unittest.TestCase):

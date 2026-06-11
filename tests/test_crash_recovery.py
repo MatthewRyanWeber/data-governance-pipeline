@@ -5,6 +5,8 @@ run_state, crash_recovery, watchdog, and checkpoint.
 Revision history
 ────────────────
 1.0   2026-06-08   Initial release.
+1.1   2026-06-11   Regression tests: corrupt state/checkpoint JSON is tolerated,
+                   state writes are atomic, checkpoints persist row totals.
 """
 
 import json
@@ -239,6 +241,105 @@ class TestRunStateCleanup(unittest.TestCase):
         removed = self.mgr.cleanup_old_runs(keep_days=7)
         self.assertEqual(removed, 0)
         self.assertIsNotNone(self.mgr._read("run-recent"))
+
+
+class TestRunStateCorruptFiles(unittest.TestCase):
+    """Regression: a crash mid-write used to corrupt state files, and any
+    corrupt JSON then crashed every subsequent read."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.state_dir = Path(self.tmp) / "run_state"
+        self.mgr = RunStateManager(state_dir=self.state_dir)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def _corrupt(self, run_id):
+        path = self.state_dir / f"{run_id}.json"
+        path.write_text('{"run_id": "trunc', encoding="utf-8")
+
+    def test_read_corrupt_state_returns_none(self):
+        state = RunState(run_id="bad-001", source="a.csv",
+                         destination="pg", table="t")
+        self.mgr.save_start(state)
+        self._corrupt("bad-001")
+        with self.assertLogs("pipeline.run_state", level="WARNING"):
+            self.assertIsNone(self.mgr._read("bad-001"))
+
+    def test_get_incomplete_runs_skips_corrupt_files(self):
+        good = RunState(run_id="good-001", source="a.csv",
+                        destination="pg", table="t")
+        bad = RunState(run_id="bad-002", source="b.csv",
+                       destination="pg", table="t")
+        self.mgr.save_start(good)
+        self.mgr.save_start(bad)
+        self._corrupt("bad-002")
+        with self.assertLogs("pipeline.run_state", level="WARNING"):
+            incomplete = self.mgr.get_incomplete_runs()
+        self.assertEqual([r.run_id for r in incomplete], ["good-001"])
+
+    def test_update_chunk_on_corrupt_file_does_not_raise(self):
+        state = RunState(run_id="bad-003", source="a.csv",
+                         destination="pg", table="t")
+        self.mgr.save_start(state)
+        self._corrupt("bad-003")
+        with self.assertLogs("pipeline.run_state", level="WARNING"):
+            self.mgr.update_chunk("bad-003", chunk_idx=1, rows_so_far=100)
+
+    def test_write_leaves_no_temp_files_behind(self):
+        state = RunState(run_id="atomic-001", source="a.csv",
+                         destination="pg", table="t")
+        self.mgr.save_start(state)
+        self.mgr.update_chunk("atomic-001", chunk_idx=2, rows_so_far=200)
+        leftovers = list(self.state_dir.glob("*.tmp"))
+        self.assertEqual(leftovers, [])
+        # The final file is complete, valid JSON.
+        read_back = self.mgr._read("atomic-001")
+        self.assertEqual(read_back.last_chunk_completed, 2)
+
+
+class TestCheckpointCorruptionAndRows(unittest.TestCase):
+    """Corrupt checkpoint JSON is treated as empty; row totals persist."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.cp_file = Path(self.tmp) / "checkpoint.json"
+        self.gov = MockGov()
+        self.rsm = RunStateManager(state_dir=Path(self.tmp) / "run_state")
+        import pipeline.run_state as _mod
+        self._orig_cp = _mod.CHECKPOINT_FILE
+        _mod.CHECKPOINT_FILE = self.cp_file
+
+    def tearDown(self):
+        import pipeline.run_state as _mod
+        _mod.CHECKPOINT_FILE = self._orig_cp
+        shutil.rmtree(self.tmp)
+
+    def test_corrupt_checkpoint_treated_as_missing(self):
+        self.cp_file.write_text("{not json", encoding="utf-8")
+        with self.assertLogs("pipeline.run_state", level="WARNING"):
+            loaded = self.rsm.load_checkpoint(self.gov, "data.csv", "t")
+        self.assertEqual(loaded, -1)
+
+    def test_save_over_corrupt_checkpoint_recovers(self):
+        self.cp_file.write_text("{not json", encoding="utf-8")
+        with self.assertLogs("pipeline.run_state", level="WARNING"):
+            self.rsm.save_checkpoint(self.gov, "data.csv", "t", chunk_idx=2, rows=200)
+        self.assertEqual(self.rsm.load_checkpoint(self.gov, "data.csv", "t"), 2)
+
+    def test_checkpoint_persists_row_total(self):
+        self.rsm.save_checkpoint(self.gov, "data.csv", "t", chunk_idx=4, rows=4000)
+        self.assertEqual(self.rsm.load_checkpoint_rows("data.csv", "t"), 4000)
+
+    def test_legacy_int_checkpoint_still_loads(self):
+        # Pre-1.4 checkpoint files stored a bare chunk index.
+        self.cp_file.write_text(json.dumps({"data.csv::t": 6}), encoding="utf-8")
+        self.assertEqual(self.rsm.load_checkpoint(self.gov, "data.csv", "t"), 6)
+        self.assertEqual(self.rsm.load_checkpoint_rows("data.csv", "t"), 0)
+
+    def test_load_checkpoint_rows_missing_returns_zero(self):
+        self.assertEqual(self.rsm.load_checkpoint_rows("data.csv", "t"), 0)
 
 
 # ── CrashRecoveryManager tests ─────────────────────────────────────────────

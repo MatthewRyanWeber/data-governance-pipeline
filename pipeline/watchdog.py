@@ -21,12 +21,17 @@ Usage
 Revision history
 ────────────────
 1.0   2026-06-08   Initial release.
+1.1   2026-06-11   Treat the Windows Ctrl+C exit status (0xC000013A) as a clean
+                   stop; reset the restart counter after healthy uptime; relay
+                   child stdout on a daemon thread so a reader exception cannot
+                   deadlock wait() on a full pipe.
 """
 
 import json
 import logging
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -34,6 +39,10 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 _RESTART_LOG = Path(__file__).resolve().parent.parent / "config" / "watchdog_restarts.jsonl"
+
+# A Ctrl+C child exits 130 on POSIX but STATUS_CONTROL_C_EXIT on Windows.
+_POSIX_CTRL_C_EXIT_CODE = 130
+_WINDOWS_CTRL_C_EXIT_CODE = 0xC000013A  # 3221225786
 
 
 class ProcessWatchdog:
@@ -98,8 +107,43 @@ class ProcessWatchdog:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            # errors="replace" so undecodable child output cannot crash the
+            # relay thread and leave the pipe full.
+            encoding="utf-8",
+            errors="replace",
             bufsize=1,
         )
+
+    @staticmethod
+    def _relay_child_output(process: subprocess.Popen) -> threading.Thread:
+        """Relay child stdout on a daemon thread.
+
+        Reading on the watch thread meant a reader exception stopped draining
+        the pipe; once full, the child blocked on write and wait() deadlocked.
+        On a daemon thread the pipe keeps draining and wait() always returns.
+        """
+        def _pump() -> None:
+            try:
+                for line in process.stdout:  # type: ignore[union-attr]
+                    sys.stdout.write(line)
+                    sys.stdout.flush()
+            except Exception as exc:
+                logger.warning("[WATCHDOG] Error relaying child stdout: %s", exc)
+                try:
+                    # Keep draining (discarding) so the child can never block
+                    # on a full pipe even after a relay failure.
+                    while process.stdout.read(65_536):  # type: ignore[union-attr]
+                        pass
+                except Exception as drain_exc:
+                    logger.warning(
+                        "[WATCHDOG] Could not drain child stdout: %s", drain_exc,
+                    )
+
+        pump_thread = threading.Thread(
+            target=_pump, daemon=True, name="watchdog-stdout-relay",
+        )
+        pump_thread.start()
+        return pump_thread
 
     def watch(self) -> int:
         """
@@ -118,29 +162,28 @@ class ProcessWatchdog:
         while True:
             self._process = self._spawn()
 
-            try:
-                for line in self._process.stdout:  # type: ignore[union-attr]
-                    sys.stdout.write(line)
-                    sys.stdout.flush()
-            except Exception as exc:
-                logger.warning("[WATCHDOG] Error reading child stdout: %s", exc)
-
+            relay_thread = self._relay_child_output(self._process)
             exit_code = self._process.wait()
+            relay_thread.join(timeout=5)
             uptime = time.monotonic() - self._last_start
 
             if exit_code == 0:
                 logger.info("[WATCHDOG] Process exited cleanly (code 0).")
                 return 0
 
-            if exit_code == 130:
+            if exit_code in (_POSIX_CTRL_C_EXIT_CODE, _WINDOWS_CTRL_C_EXIT_CODE):
                 logger.info("[WATCHDOG] Process interrupted (Ctrl+C) — not restarting.")
-                return 130
+                return _POSIX_CTRL_C_EXIT_CODE
 
-            # Reset backoff if process ran long enough
+            # Reset backoff and the restart budget after healthy uptime — a
+            # service that ran fine for a long stretch should not be a few
+            # failures away from the watchdog giving up forever.
             if uptime > self.reset_after:
                 self._current_delay = self.initial_delay
+                self._restart_count = 0
                 logger.info(
-                    "[WATCHDOG] Process ran %.0fs before failing — resetting backoff.",
+                    "[WATCHDOG] Process ran %.0fs before failing — resetting "
+                    "backoff and restart count.",
                     uptime,
                 )
 

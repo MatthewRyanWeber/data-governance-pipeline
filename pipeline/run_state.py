@@ -16,6 +16,10 @@ Revision history
 1.1   2026-06-08   Merged CheckpointManager into RunStateManager.
 1.2   2026-06-09   Added public get_state() method for API progress tracking.
 1.3   2026-06-09   Added list_runs() for paginated run history.
+1.4   2026-06-11   Atomic state/checkpoint writes via atomic_json_write; tolerate
+                   corrupt JSON on read; hold the lock across update_chunk's full
+                   read-modify-write; checkpoints now persist row totals
+                   (load_checkpoint_rows) so resumed runs keep accurate counts.
 """
 
 import json
@@ -26,6 +30,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from pipeline.constants import CHECKPOINT_FILE, RUN_STATE_DIR, STATE_FILE_LOCK
+from pipeline.helpers import atomic_json_write
 
 if TYPE_CHECKING:
     from pipeline.governance_logger import GovernanceLogger
@@ -74,16 +79,24 @@ class RunStateManager:
     def _write(self, state: RunState) -> None:
         path = self._path(state.run_id)
         with STATE_FILE_LOCK:
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(asdict(state), f, indent=2)
+            # Temp-file-then-rename so a crash mid-write can never leave a
+            # truncated state file behind.
+            atomic_json_write(path, json.dumps(asdict(state), indent=2))
 
     def _read(self, run_id: str) -> RunState | None:
         path = self._path(run_id)
         with STATE_FILE_LOCK:
             if not path.exists():
                 return None
-            with open(path, encoding="utf-8") as f:
-                data = json.load(f)
+            try:
+                with open(path, encoding="utf-8") as f:
+                    data = json.load(f)
+            except json.JSONDecodeError as exc:
+                logger.warning(
+                    "[RUN_STATE] Corrupt state file %s: %s — treating as missing.",
+                    path, exc,
+                )
+                return None
         return RunState(**data)
 
     def save_start(self, state: RunState) -> None:
@@ -94,32 +107,37 @@ class RunStateManager:
 
     def update_chunk(self, run_id: str, chunk_idx: int, rows_so_far: int) -> None:
         """Update progress after each chunk completes."""
-        state = self._read(run_id)
-        if state is None:
-            logger.warning("[RUN_STATE] No state found for run %s — skipping update.", run_id)
-            return
-        state.last_chunk_completed = chunk_idx
-        state.total_rows_processed = rows_so_far
-        self._write(state)
+        # The lock (reentrant) is held across the full read-modify-write so a
+        # concurrent writer cannot interleave between the read and the write.
+        with STATE_FILE_LOCK:
+            state = self._read(run_id)
+            if state is None:
+                logger.warning("[RUN_STATE] No state found for run %s — skipping update.", run_id)
+                return
+            state.last_chunk_completed = chunk_idx
+            state.total_rows_processed = rows_so_far
+            self._write(state)
 
     def mark_complete(self, run_id: str) -> None:
         """Mark a run as successfully completed."""
-        state = self._read(run_id)
-        if state is None:
-            return
-        state.status = "completed"
-        self._write(state)
+        with STATE_FILE_LOCK:
+            state = self._read(run_id)
+            if state is None:
+                return
+            state.status = "completed"
+            self._write(state)
         logger.info("[RUN_STATE] Run %s marked complete (%d rows).",
                     run_id, state.total_rows_processed)
 
     def mark_failed(self, run_id: str, error: str) -> None:
         """Mark a run as failed with an error message."""
-        state = self._read(run_id)
-        if state is None:
-            return
-        state.status = "failed"
-        state.error_message = error
-        self._write(state)
+        with STATE_FILE_LOCK:
+            state = self._read(run_id)
+            if state is None:
+                return
+            state.status = "failed"
+            state.error_message = error
+            self._write(state)
         logger.warning("[RUN_STATE] Run %s marked failed: %s", run_id, error)
 
     def get_state(self, run_id: str) -> RunState | None:
@@ -184,35 +202,56 @@ class RunStateManager:
 
     # ── Chunk-level checkpoint methods ─────────────────────────────────────
 
+    @staticmethod
+    def _read_checkpoint_state() -> dict:
+        """Load the shared checkpoint file, treating corrupt JSON as empty."""
+        if not CHECKPOINT_FILE.exists():
+            return {}
+        try:
+            with open(CHECKPOINT_FILE, encoding="utf-8") as f:
+                return json.load(f)  # type: ignore[no-any-return]
+        except json.JSONDecodeError as exc:
+            logger.warning(
+                "[CHECKPOINT] Corrupt checkpoint file %s: %s — treating as empty.",
+                CHECKPOINT_FILE, exc,
+            )
+            return {}
+
     def load_checkpoint(self, gov: "GovernanceLogger", source: str, table: str) -> int:
         """Return the last completed chunk index, or -1 if none."""
         key = f"{source}::{table}"
         with STATE_FILE_LOCK:
-            if not CHECKPOINT_FILE.exists():
-                return -1
-            with open(CHECKPOINT_FILE, encoding="utf-8") as f:
-                state = json.load(f)
-        last = state.get(key, -1)
+            entry = self._read_checkpoint_state().get(key, -1)
+        # Older checkpoint files stored a bare chunk index instead of a dict.
+        last = entry.get("chunk", -1) if isinstance(entry, dict) else entry
         if last >= 0:
             gov.checkpoint_event("RESTORED", last, 0)
             logger.info(
                 "[CHECKPOINT] Resuming from chunk %d (skipping %d already-completed chunks)",
                 last + 1, last + 1,
             )
-        return last  # type: ignore[no-any-return]
+        return int(last)
+
+    def load_checkpoint_rows(self, source: str, table: str) -> int:
+        """Return rows already loaded at the last checkpoint (0 if unknown)."""
+        key = f"{source}::{table}"
+        with STATE_FILE_LOCK:
+            entry = self._read_checkpoint_state().get(key)
+        if isinstance(entry, dict):
+            return int(entry.get("rows", 0))
+        # Legacy bare-int checkpoints did not record row totals.
+        return 0
 
     def save_checkpoint(self, gov: "GovernanceLogger", source: str, table: str,
                         chunk_idx: int, rows: int) -> None:
-        """Persist the index of the last successfully loaded chunk."""
+        """Persist the last successfully loaded chunk index and row total."""
         key = f"{source}::{table}"
         with STATE_FILE_LOCK:
-            state: dict = {}
-            if CHECKPOINT_FILE.exists():
-                with open(CHECKPOINT_FILE, encoding="utf-8") as f:
-                    state = json.load(f)
-            state[key] = chunk_idx
-            with open(CHECKPOINT_FILE, "w", encoding="utf-8") as f:
-                json.dump(state, f, indent=2)
+            state = self._read_checkpoint_state()
+            # Row total is persisted so a resumed run can carry its count
+            # forward instead of restarting --verify maths at zero.
+            state[key] = {"chunk": chunk_idx, "rows": rows}
+            atomic_json_write(CHECKPOINT_FILE, json.dumps(state, indent=2))
         gov.checkpoint_event("SAVED", chunk_idx, rows)
 
     def clear_checkpoint(self, source: str, table: str) -> None:
@@ -221,11 +260,9 @@ class RunStateManager:
         with STATE_FILE_LOCK:
             if not CHECKPOINT_FILE.exists():
                 return
-            with open(CHECKPOINT_FILE, encoding="utf-8") as f:
-                state = json.load(f)
+            state = self._read_checkpoint_state()
             state.pop(key, None)
-            with open(CHECKPOINT_FILE, "w", encoding="utf-8") as f:
-                json.dump(state, f, indent=2)
+            atomic_json_write(CHECKPOINT_FILE, json.dumps(state, indent=2))
 
     def cleanup_old_runs(self, keep_days: int = 7) -> int:
         """Remove completed/failed state files older than keep_days."""

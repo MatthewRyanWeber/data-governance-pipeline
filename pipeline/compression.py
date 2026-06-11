@@ -11,6 +11,9 @@ Revision history
 1.0   2026-06-07   Initial extraction from pipeline_v3.py.
 1.1   2026-06-08   Added archive path traversal validation, zip bomb protection,
                    ZipFile resource leak fix, builtins_open ordering fix.
+1.2   2026-06-11   SizeLimitedReader.read(-1) now reads in bounded increments so
+                   the limit trips before full decompression; multi-member
+                   .zip/.tgz archives log which members are skipped.
 """
 
 import bz2
@@ -62,29 +65,41 @@ class SizeLimitedReader(io.RawIOBase):
     def readable(self):
         return True
 
-    def readinto(self, b):
-        data = self._stream.read(len(b))
-        if not data:
-            return 0
-        n = len(data)
-        self._bytes_read += n
+    def _register_bytes_read(self, byte_count: int) -> None:
+        self._bytes_read += byte_count
         if self._bytes_read > self._max_bytes:
             raise ValueError(
                 f"Decompression size limit exceeded: {self._max_bytes:,} bytes. "
                 "Possible zip bomb detected."
             )
+
+    def readinto(self, b):
+        data = self._stream.read(len(b))
+        if not data:
+            return 0
+        n = len(data)
+        self._register_bytes_read(n)
         b[:n] = data
         return n
 
     def read(self, size=-1):
+        if size is None or size < 0:
+            # An unbounded read must not decompress the whole stream before
+            # the limit check — read in bounded increments and raise as soon
+            # as the cumulative total crosses the limit.
+            pieces: list[bytes] = []
+            increment = 65_536
+            while True:
+                piece = self._stream.read(increment)
+                if not piece:
+                    break
+                self._register_bytes_read(len(piece))
+                pieces.append(piece)
+            return b"".join(pieces)
+
         data = self._stream.read(size)
         if data:
-            self._bytes_read += len(data)
-            if self._bytes_read > self._max_bytes:
-                raise ValueError(
-                    f"Decompression size limit exceeded: {self._max_bytes:,} bytes. "
-                    "Possible zip bomb detected."
-                )
+            self._register_bytes_read(len(data))
         return data
 
     def close(self):
@@ -133,6 +148,15 @@ class CompressionHandler:
                 members = [m for m in zf.namelist() if not m.endswith("/")]
                 if not members:
                     raise ValueError(f"ZIP archive is empty: {path}")
+                if len(members) > 1:
+                    # Only the first member streams through the pipeline —
+                    # name what gets dropped so it never disappears silently.
+                    logger.warning(
+                        "[COMPRESSION] ZIP archive %s contains %d members — "
+                        "extracting only '%s'; skipping %d member(s): %s",
+                        path, len(members), members[0],
+                        len(members) - 1, members[1:],
+                    )
                 _validate_archive_member(members[0])
                 inner = zf.open(members[0])
                 return SizeLimitedReader(inner, limit, owner=zf)  # type: ignore[arg-type]
@@ -167,6 +191,16 @@ class CompressionHandler:
                 tar_members = [m for m in tf.getmembers() if m.isfile()]
                 if not tar_members:
                     raise ValueError(f"TGZ archive is empty: {path}")
+                if len(tar_members) > 1:
+                    skipped_member_names = [m.name for m in tar_members[1:]]
+                    # Only the first member streams through the pipeline —
+                    # name what gets dropped so it never disappears silently.
+                    logger.warning(
+                        "[COMPRESSION] TGZ archive %s contains %d members — "
+                        "extracting only '%s'; skipping %d member(s): %s",
+                        path, len(tar_members), tar_members[0].name,
+                        len(skipped_member_names), skipped_member_names,
+                    )
                 _validate_archive_member(tar_members[0].name)
                 inner_stream = tf.extractfile(tar_members[0])
                 if inner_stream is None:

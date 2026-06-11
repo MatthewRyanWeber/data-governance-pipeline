@@ -15,6 +15,9 @@ Revision history
                    subcommand, service/watchdog integration.
 1.4   2026-06-09   Capture the real exception in run-state on failure instead of
                    the "see logs" placeholder; log full traceback.
+1.5   2026-06-11   Resumed runs carry forward the previously-loaded row total so
+                   --verify compares the true cumulative count; --skip-pii now
+                   passes None so flatten-time PII detection is also skipped.
 """
 
 import argparse
@@ -224,7 +227,9 @@ def _transform_chunk(chunk, args, config, gov):
             from pipeline.helpers import detect_pii
             pii_findings = detect_pii(list(chunk.columns))
         else:
-            pii_findings = []
+            # None (not []) tells the transformer the PII stage is disabled,
+            # so it also skips supplemental detection on flattened columns.
+            pii_findings = None
         with timed_operation("transform"):
             return transformer.transform(chunk, pii_findings, "mask", drop_cols=[])
 
@@ -263,6 +268,19 @@ def _run_chunked(
     if resume_from_chunk < 0:
         resume_from_chunk = state_manager.load_checkpoint(gov, str(source), table_name)
 
+    # On resume, rows loaded before the crash must seed the running total —
+    # restarting at 0 made the --verify row-count comparison falsely fail.
+    rows_already_loaded = 0
+    if resume_from_chunk >= 0:
+        rows_already_loaded = state_manager.load_checkpoint_rows(str(source), table_name)
+        if rows_already_loaded == 0 and run_state is not None:
+            rows_already_loaded = run_state.total_rows_processed
+        if rows_already_loaded:
+            logger.info(
+                "[CHECKPOINT] Carrying forward %d rows already loaded before resume.",
+                rows_already_loaded,
+            )
+
     loader = _make_loader(args, config, gov)
 
     source_str = str(source)
@@ -277,7 +295,7 @@ def _run_chunked(
             logger.warning("No data extracted from %s.", source)
             return
 
-        total_rows = 0
+        total_rows = rows_already_loaded
         n_chunks = (len(df) + chunk_size - 1) // chunk_size
 
         for i in range(n_chunks):
@@ -306,7 +324,7 @@ def _run_chunked(
         extractor = Extractor(gov)
         metrics.start_stage("extract")
 
-        total_rows = 0
+        total_rows = rows_already_loaded
         chunk_idx = 0
 
         for chunk in extractor.chunks(str(source), chunk_size=chunk_size):

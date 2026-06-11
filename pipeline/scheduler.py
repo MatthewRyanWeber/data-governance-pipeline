@@ -9,6 +9,10 @@ Layer 6 — imports from Layer 0 (constants).
 Revision history
 ----------------
 1.0   2026-06-07   Initial extraction from monolith.
+1.1   2026-06-11   Daily/weekly crons fire every matching day (last-fire key now
+                   includes the date); sleep to the next minute boundary instead
+                   of a drifting fixed 60s wait; cron parser supports range/step
+                   ("1-5/2") and maps weekday 7 to 0 (Sunday alias).
 """
 
 import logging
@@ -59,7 +63,8 @@ class PipelineScheduler:
         Parse a five-field cron expression into a dict of sets.
 
         Supports: integers, wildcards (*), ranges (1-5), steps (*/10),
-        comma-separated lists (1,15,30).
+        steps over ranges (1-5/2), comma-separated lists (1,15,30).
+        Weekday 7 is accepted as an alias for 0 (Sunday).
         """
         fields = expr.strip().split()
         if len(fields) != 5:
@@ -72,25 +77,32 @@ class PipelineScheduler:
         for name, field, (low, high) in zip(names, fields, ranges):
             values: set[int] = set()
             for part in field.split(","):
-                if part == "*":
-                    values.update(range(low, high + 1))
-                elif "/" in part:
-                    base, step_str = part.split("/", 1)
-                    step = int(step_str)
-                    start = low if base == "*" else int(base)
-                    values.update(range(start, high + 1, step))
-                elif "-" in part:
-                    range_start, range_end = part.split("-", 1)
-                    values.update(range(int(range_start), int(range_end) + 1))
+                base, _, step_text = part.partition("/")
+                step = int(step_text) if step_text else 1
+                if base == "*":
+                    start, end = low, high
+                elif "-" in base:
+                    range_start_text, range_end_text = base.split("-", 1)
+                    start, end = int(range_start_text), int(range_end_text)
                 else:
-                    values.add(int(part))
+                    start = int(base)
+                    # Cron treats "N/step" as every step-th value from N to
+                    # the field maximum; a bare "N" is just that value.
+                    end = high if step_text else start
+                values.update(range(start, end + 1, step))
+            if name == "weekday" and 7 in values:
+                # POSIX cron allows both 0 and 7 for Sunday; the matcher only
+                # ever produces 0-6, so 7 could never fire if kept.
+                values.discard(7)
+                values.add(0)
             result[name] = values
 
         return result
 
-    def _matches_now(self) -> bool:
-        """Check whether the current time (in configured timezone) matches the cron expression."""
-        now = datetime.now(self._tz)
+    def _matches_now(self, now: datetime | None = None) -> bool:
+        """Check whether the given time (in configured timezone) matches the cron expression."""
+        if now is None:
+            now = datetime.now(self._tz)
         # Python weekday(): Mon=0..Sun=6; cron weekday: Sun=0..Sat=6
         cron_weekday = (now.weekday() + 1) % 7
         return (
@@ -101,24 +113,41 @@ class PipelineScheduler:
             and cron_weekday in self._cron_parts["weekday"]
         )
 
+    def _should_fire(self, now: datetime, last_fire: datetime | None) -> bool:
+        """Fire when the cron matches and this exact minute has not fired yet.
+
+        The dedup key is the full date+time truncated to the minute — keying
+        on hour*60+minute alone made daily/weekly jobs fire exactly once ever.
+        """
+        return self._matches_now(now) and now.replace(second=0, microsecond=0) != last_fire
+
+    @staticmethod
+    def _seconds_until_next_minute(now: datetime) -> float:
+        """Seconds from *now* to the next minute boundary (always > 0)."""
+        remainder = 60.0 - now.second - now.microsecond / 1_000_000
+        return max(remainder, 0.001)
+
     def _run_loop(self) -> None:
-        """Background loop — checks the cron expression every 60 seconds."""
+        """Background loop — wakes at each minute boundary and checks the cron."""
         logger.info("Scheduler loop started.")
-        last_fire_minute: int | None = None
+        last_fire: datetime | None = None
 
         while not self._stop_event.is_set():
             now = datetime.now(self._tz)
-            current_minute = now.hour * 60 + now.minute
 
-            if self._matches_now() and current_minute != last_fire_minute:
-                last_fire_minute = current_minute
+            if self._should_fire(now, last_fire):
+                last_fire = now.replace(second=0, microsecond=0)
                 logger.info("Cron match at %s — firing pipeline.", now.isoformat())
                 try:
                     self.pipeline_fn()
                 except Exception as exc:
                     logger.error("Scheduled pipeline run failed: %s", exc)
 
-            self._stop_event.wait(timeout=60)
+            # Sleeping to the boundary (instead of a fixed 60s) keeps the
+            # check aligned even when pipeline_fn ran for a while, so no
+            # scheduled minute can be skipped by drift.
+            wake_reference = datetime.now(self._tz)
+            self._stop_event.wait(timeout=self._seconds_until_next_minute(wake_reference))
 
         logger.info("Scheduler loop stopped.")
 

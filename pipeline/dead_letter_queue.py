@@ -5,8 +5,16 @@ Rows that fail validation, referential integrity, or schema checks
 are written here instead of being silently dropped.
 
 Layer 2 — imports from Layer 0 (constants), Layer 1 (governance_logger).
+
+Revision history
+────────────────
+1.0   2026-06-07   Initial extraction from monolith.
+1.1   2026-06-11   Appends align to the existing CSV header: missing keys are
+                   written empty, and genuinely new keys trigger a rewrite with
+                   an expanded header so columns never misalign.
 """
 
+import csv
 import logging
 import threading
 from datetime import datetime, timezone
@@ -54,11 +62,54 @@ class DeadLetterQueue:
         rejected_df["_dlq_timestamp"] = datetime.now(timezone.utc).isoformat()
 
         with self._lock:
-            write_header = not self.dlq_path.exists() or self.dlq_path.stat().st_size == 0
-            rejected_df.to_csv(
-                self.dlq_path, mode="a",
-                header=write_header, index=False,
-                encoding="utf-8",
-            )
+            file_is_empty = not self.dlq_path.exists() or self.dlq_path.stat().st_size == 0
+            if file_is_empty:
+                rejected_df.to_csv(
+                    self.dlq_path, mode="w",
+                    header=True, index=False,
+                    encoding="utf-8",
+                )
+            else:
+                self._append_aligned_to_existing_header(rejected_df)
         self.gov.dlq_written(len(rejected_df), reason)
         return clean_df
+
+    def _read_existing_header(self) -> list[str]:
+        """Return the column names from the DLQ CSV's first line."""
+        with open(self.dlq_path, encoding="utf-8", newline="") as f:
+            return next(csv.reader(f), [])
+
+    def _append_aligned_to_existing_header(self, rejected_df: "pd.DataFrame") -> None:
+        """Append rows so every value lands under the correct existing column.
+
+        A raw mode="a" to_csv writes positionally: a later write with a
+        different column set silently misaligns every row. Missing keys are
+        written empty; genuinely new keys force a one-off rewrite with the
+        expanded header so the file stays rectangular.
+        """
+        import pandas as pd
+
+        existing_header = self._read_existing_header()
+        new_keys = [c for c in rejected_df.columns if c not in existing_header]
+
+        if new_keys:
+            logger.warning(
+                "[DLQ] %d new column(s) %s not in the existing DLQ header — "
+                "rewriting %s with an expanded header.",
+                len(new_keys), new_keys, self.dlq_path,
+            )
+            combined_header = existing_header + new_keys
+            existing_df = pd.read_csv(self.dlq_path, encoding="utf-8")
+            existing_df = existing_df.reindex(columns=combined_header)
+            aligned_df = rejected_df.reindex(columns=combined_header)
+            pd.concat([existing_df, aligned_df], ignore_index=True).to_csv(
+                self.dlq_path, mode="w",
+                header=True, index=False,
+                encoding="utf-8",
+            )
+        else:
+            rejected_df.reindex(columns=existing_header).to_csv(
+                self.dlq_path, mode="a",
+                header=False, index=False,
+                encoding="utf-8",
+            )

@@ -4,6 +4,12 @@ Normalises common data formats to consistent, interoperable standards.
 Rules: phone_e164, date_iso8601, country_iso2, bool_normalize, upper, lower, strip, title.
 
 Layer 2 — imports from Layer 0 (constants), Layer 1 (governance_logger).
+
+Revision history
+────────────────
+1.0   2026-06-07   Initial extraction from monolith.
+1.1   2026-06-11   Changed-count comparisons are NaN-aware: a value that stays
+                   null no longer counts as changed (NaN != NaN inflated counts).
 """
 
 import logging
@@ -44,6 +50,16 @@ class DataStandardiser:
     def __init__(self, gov: "GovernanceLogger") -> None:
         self.gov = gov
 
+    @staticmethod
+    def _count_changed(original: "pd.Series", updated: "pd.Series") -> int:
+        """Count rows whose value actually changed, treating null→null as unchanged.
+
+        NaN != NaN is True in pandas, so a plain inequality counted every
+        untouched null as a change.
+        """
+        both_null = original.isna() & updated.isna()
+        return int(((original != updated) & ~both_null).sum())
+
     def standardise(
         self,
         df: "pd.DataFrame",
@@ -67,7 +83,7 @@ class DataStandardiser:
                 parsed = pd.to_datetime(df[col], errors="coerce")
                 valid = parsed.notna()
                 df[col] = parsed.dt.strftime("%Y-%m-%d").where(valid, other=df[col])
-                changed = int((df[col] != original).sum())
+                changed = self._count_changed(original, df[col])
 
             elif rule == "country_iso2":
                 df[col], changed = self._normalise_countries(df[col])
@@ -82,7 +98,7 @@ class DataStandardiser:
                 keys = df.loc[mask, col].astype(str).str.strip().str.lower()
                 mapped = keys.map(bool_map)
                 df.loc[mask, col] = mapped.fillna(df.loc[mask, col])
-                changed = int((df[col] != original).sum())
+                changed = self._count_changed(original, df[col])
 
             elif rule in ("upper", "lower", "strip", "title"):
                 original = df[col].copy()
@@ -90,7 +106,7 @@ class DataStandardiser:
                 df.loc[mask, col] = getattr(
                     df.loc[mask, col].astype(str).str, rule
                 )()
-                changed = int((df[col] != original).sum())
+                changed = self._count_changed(original, df[col])
 
             self.gov.standardisation_applied(col, rule, changed)
 

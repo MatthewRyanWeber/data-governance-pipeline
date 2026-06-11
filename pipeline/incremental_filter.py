@@ -5,6 +5,14 @@ Tracks the maximum value of a watermark column (e.g. updated_at) so
 subsequent runs only process new/changed rows.
 
 Layer 2 — imports from Layer 0 (constants), Layer 1 (governance_logger).
+
+Revision history
+────────────────
+1.0   2026-06-07   Initial extraction from monolith.
+1.1   2026-06-11   Numeric watermark columns compare numerically and persist
+                   as native JSON numbers; rows that coerce to NaT are now
+                   included in the output with a logged warning instead of
+                   being silently dropped forever.
 """
 
 import json
@@ -57,13 +65,43 @@ class IncrementalFilter:
         if last_wm is None:
             return df
         before = len(df)
-        try:
-            ws = pd.to_datetime(df[col], errors="coerce")
-            wv = pd.to_datetime(last_wm)
-            df = df[ws > wv].copy()
-        except Exception as exc:
-            logger.debug("Datetime comparison failed for %s: %s, falling back to raw comparison", col, exc)
-            df = df[df[col] > last_wm].copy()
+
+        if pd.api.types.is_numeric_dtype(df[col]):
+            # Numeric watermarks must compare numerically — coercing a
+            # version/sequence column through to_datetime is meaningless.
+            try:
+                numeric_watermark = float(last_wm)
+            except (TypeError, ValueError):
+                logger.warning(
+                    "[INCREMENTAL] Watermark %r is not numeric but column '%s' is — "
+                    "processing all rows rather than dropping any.",
+                    last_wm, col,
+                )
+                return df
+            df = df[df[col] > numeric_watermark].copy()
+        else:
+            try:
+                watermark_value = pd.to_datetime(last_wm)
+            except (TypeError, ValueError) as exc:
+                logger.debug(
+                    "Watermark %r for '%s' is not datetime-like: %s — raw comparison.",
+                    last_wm, col, exc,
+                )
+                df = df[df[col] > last_wm].copy()
+            else:
+                parsed = pd.to_datetime(df[col], errors="coerce")
+                unparseable_mask = parsed.isna()
+                unparseable_count = int(unparseable_mask.sum())
+                if unparseable_count:
+                    # Rows that cannot be parsed would otherwise be excluded
+                    # on every run forever — process them instead.
+                    logger.warning(
+                        "[INCREMENTAL] %d row(s) in '%s' could not be parsed as "
+                        "datetime — including them in this run.",
+                        unparseable_count, col,
+                    )
+                df = df[(parsed > watermark_value) | unparseable_mask].copy()
+
         self.gov.watermark_event("READ", col, last_wm, filtered=before - len(df))
         logger.info("[INCREMENTAL] Filtered %d rows | %d new", before - len(df), len(df))
         return df
@@ -75,6 +113,10 @@ class IncrementalFilter:
         raw_max = df[col].max()
         if pd.api.types.is_datetime64_any_dtype(df[col]):
             new_wm = pd.Timestamp(raw_max).isoformat()
+        elif pd.api.types.is_numeric_dtype(df[col]):
+            # Stored as a native JSON number so the next run can compare
+            # numerically instead of round-tripping through str/to_datetime.
+            new_wm = raw_max.item() if hasattr(raw_max, "item") else raw_max
         else:
             new_wm = str(raw_max)
         key = self._key(source, col)

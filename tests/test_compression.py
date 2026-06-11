@@ -9,6 +9,7 @@ zip bombs) live in test_compression_security.py and are not duplicated here.
 Revision history
 ────────────────
 1.0   2026-06-09   Initial release: per-format open() / inner_extension coverage.
+1.1   2026-06-11   Multi-member zip/tgz archives warn about skipped members.
 """
 
 import bz2
@@ -87,6 +88,36 @@ class TestCompressionHandler(unittest.TestCase):
         p = self.tmp / "plain.csv"
         p.write_bytes(_PAYLOAD)
         self.assertEqual(self._read(p), _PAYLOAD)
+
+    def test_multi_member_zip_warns_and_names_skipped(self):
+        p = self.tmp / "multi.zip"
+        with zipfile.ZipFile(p, "w") as zf:
+            zf.writestr("first.csv", _PAYLOAD)
+            zf.writestr("second.csv", b"x,y\n1,2\n")
+            zf.writestr("third.csv", b"a\n1\n")
+        with self.assertLogs("pipeline.compression", level="WARNING") as cm:
+            data = self._read(p)
+        self.assertEqual(data, _PAYLOAD)
+        warning_text = "\n".join(cm.output)
+        self.assertIn("second.csv", warning_text)
+        self.assertIn("third.csv", warning_text)
+        self.assertIn("2 member(s)", warning_text)
+
+    def test_multi_member_tgz_warns_and_names_skipped(self):
+        first = self.tmp / "first.csv"
+        first.write_bytes(_PAYLOAD)
+        second = self.tmp / "second.csv"
+        second.write_bytes(b"x\n")
+        p = self.tmp / "multi.tgz"
+        with tarfile.open(p, "w:gz") as tf:
+            tf.add(first, arcname="first.csv")
+            tf.add(second, arcname="second.csv")
+        with self.assertLogs("pipeline.compression", level="WARNING") as cm:
+            data = self._read(p)
+        self.assertEqual(data, _PAYLOAD)
+        warning_text = "\n".join(cm.output)
+        self.assertIn("second.csv", warning_text)
+        self.assertIn("1 member(s)", warning_text)
 
     def test_empty_zip_raises(self):
         p = self.tmp / "empty.zip"

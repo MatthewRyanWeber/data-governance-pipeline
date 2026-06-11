@@ -4,6 +4,8 @@ Tests for pipeline.cli — argument parsing, subcommand dispatch, and error path
 Revision history
 ----------------
 1.0   2026-06-08   Initial release: 15 tests across 3 test classes.
+1.1   2026-06-11   Regression test: resumed runs carry the previously-loaded
+                   row total forward so --verify compares cumulative counts.
 """
 
 import argparse
@@ -22,6 +24,7 @@ from pipeline.cli import (
     _cmd_profile,
     _cmd_validate,
     _load_config,
+    _run_chunked,
     _run_single_file,
     main,
 )
@@ -249,6 +252,70 @@ class TestSubcommandHandlers(unittest.TestCase):
         mock_rsm.save_start.assert_called_once()
         mock_chunked.assert_called_once()
         mock_rsm.mark_complete.assert_called_once_with("test-abc-123")
+
+
+class TestResumeCarriesRowTotal(unittest.TestCase):
+    """Regression: on resume, total_rows restarted at 0 so the --verify
+    row-count comparison falsely failed."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        import pipeline.run_state as run_state_module
+        self._original_checkpoint_file = run_state_module.CHECKPOINT_FILE
+        run_state_module.CHECKPOINT_FILE = Path(self.tmpdir) / "checkpoint.json"
+
+    def tearDown(self):
+        import pipeline.run_state as run_state_module
+        run_state_module.CHECKPOINT_FILE = self._original_checkpoint_file
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    @patch("pipeline.load_verifier.LoadVerifier")
+    @patch("pipeline.extract.Extractor")
+    @patch("pipeline.cli._make_loader")
+    @patch("pipeline.cli._transform_chunk", side_effect=lambda chunk, *a, **kw: chunk)
+    def test_verify_sees_cumulative_rows_after_resume(
+        self, mock_transform, mock_make_loader, mock_extractor_cls, mock_verifier_cls,
+    ):
+        from pipeline.run_state import RunStateManager
+
+        gov = MagicMock()
+        metrics = MagicMock()
+        state_manager = RunStateManager(state_dir=Path(self.tmpdir) / "run_state")
+
+        # Simulate a prior crashed run that loaded chunk 0 with 100 rows.
+        state_manager.save_checkpoint(gov, "data.csv", "events", chunk_idx=0, rows=100)
+
+        chunk_one = pd.DataFrame({"a": range(100)})
+        chunk_two = pd.DataFrame({"a": range(100)})
+        mock_extractor_cls.return_value.chunks.return_value = iter(
+            [chunk_one, chunk_two]
+        )
+        mock_make_loader.return_value = MagicMock()
+        mock_verifier = mock_verifier_cls.return_value
+        mock_verifier.verify_row_count.return_value = {"match": True}
+
+        args = argparse.Namespace(
+            source="data.csv",
+            destination="postgresql",
+            table="events",
+            config_path="",
+            dry_run=False,
+            skip_pii=True,
+            verify=True,
+            transform_config=None,
+            chunk_size=100,
+        )
+
+        _run_chunked(
+            "data.csv", args, {}, gov, metrics,
+            state_manager=state_manager,
+        )
+
+        mock_verifier.verify_row_count.assert_called_once()
+        verified_df = mock_verifier.verify_row_count.call_args[0][0]
+        # Chunk 0 (100 rows, pre-crash) is skipped on resume; chunk 1 adds
+        # 100 more. The verify comparison must see 200, not 100.
+        self.assertEqual(len(verified_df), 200)
 
 
 if __name__ == "__main__":

@@ -8,6 +8,8 @@ tests, and synthetic data only (alice@example.com, 555-0101).
 Revision history
 ────────────────
 1.0   2026-06-08   Initial release — comprehensive coverage for all four modules.
+1.1   2026-06-11   Tests for the referential-integrity step (now validated
+                   against a cached reference frame) and rules-file caching.
 """
 
 import hashlib
@@ -704,6 +706,114 @@ class TestTransformPipelineChained(unittest.TestCase):
         result = self.tp.run(df, config)
         self.assertEqual(len(result), 3)
         self.assertEqual(result["score"].tolist(), [90, 85, 80])
+
+
+class TestTransformPipelineReferentialIntegrity(unittest.TestCase):
+    """Referential-integrity step — validation against a cached reference frame."""
+
+    def setUp(self):
+        from pipeline.transform_pipeline import TransformPipeline
+        self.gov = MagicMock()
+        self.dlq = MagicMock()
+        self.tp = TransformPipeline(self.gov, dlq=self.dlq)
+        self.tmpdir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _write_reference(self, name="reference.csv"):
+        path = os.path.join(self.tmpdir, name)
+        pd.DataFrame({"dept_id": [1, 2]}).to_csv(path, index=False, encoding="utf-8")
+        return path
+
+    def _step_config(self, reference_path):
+        return {"steps": [{
+            "type": "referential_integrity",
+            "fk_col": "dept_id",
+            "ref": reference_path,
+            "ref_col": "dept_id",
+        }]}
+
+    def test_invalid_fk_rows_routed_to_dlq(self):
+        reference = self._write_reference()
+        df = pd.DataFrame({"dept_id": [1, 2, 99]})
+        self.dlq.write.side_effect = (
+            lambda frame, bad_indices, reason: frame[~frame.index.isin(bad_indices)]
+        )
+        result = self.tp.run(df, self._step_config(reference))
+        self.dlq.write.assert_called_once()
+        self.assertEqual(self.dlq.write.call_args[0][1], [2])
+        self.assertIn("REFERENTIAL_INTEGRITY", self.dlq.write.call_args[0][2])
+        self.assertEqual(len(result), 2)
+        self.gov.referential_integrity_checked.assert_called_once_with(
+            "dept_id", reference, 2, 1,
+        )
+
+    def test_all_valid_rows_skip_dlq(self):
+        reference = self._write_reference()
+        df = pd.DataFrame({"dept_id": [1, 2, 1]})
+        result = self.tp.run(df, self._step_config(reference))
+        self.dlq.write.assert_not_called()
+        self.assertEqual(len(result), 3)
+
+    def test_missing_fk_column_returns_unchanged(self):
+        reference = self._write_reference()
+        df = pd.DataFrame({"other": [1]})
+        result = self.tp.run(df, self._step_config(reference))
+        pd.testing.assert_frame_equal(result, df)
+        self.gov.referential_integrity_checked.assert_not_called()
+
+    def test_no_dlq_skips_step(self):
+        from pipeline.transform_pipeline import TransformPipeline
+        tp_without_dlq = TransformPipeline(self.gov, dlq=None)
+        reference = self._write_reference()
+        df = pd.DataFrame({"dept_id": [99]})
+        result = tp_without_dlq.run(df, self._step_config(reference))
+        self.assertEqual(len(result), 1)
+
+    def test_reference_parsed_once_across_chunked_runs(self):
+        # Regression: the reference file was re-read from disk per chunk.
+        reference = self._write_reference()
+        df = pd.DataFrame({"dept_id": [1, 2]})
+        with patch("pandas.read_csv", wraps=pd.read_csv) as wrapped_read:
+            self.tp.run(df, self._step_config(reference))
+            self.tp.run(df, self._step_config(reference))
+            self.tp.run(df, self._step_config(reference))
+        self.assertEqual(wrapped_read.call_count, 1)
+
+
+class TestTransformPipelineRulesFileCache(unittest.TestCase):
+    """Business-rules files are parsed once per (path, mtime)."""
+
+    def setUp(self):
+        from pipeline.transform_pipeline import TransformPipeline
+        self.tp = TransformPipeline(MockGov())
+        self.tmpdir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_rules_file_parsed_once_across_chunked_runs(self):
+        import json
+        rules_path = os.path.join(self.tmpdir, "rules.json")
+        with open(rules_path, "w", encoding="utf-8") as f:
+            json.dump([{"type": "rename", "from": "old_name", "to": "new_name"}], f)
+
+        from pipeline.business_rules import BusinessRuleEngine
+        original_load_rules = BusinessRuleEngine.load_rules
+        config = {"steps": [{"type": "business_rules", "rules_file": rules_path}]}
+        df = pd.DataFrame({"old_name": [1, 2]})
+
+        with patch.object(
+            BusinessRuleEngine, "load_rules",
+            autospec=True, side_effect=original_load_rules,
+        ) as mock_load:
+            first = self.tp.run(df.copy(), config)
+            second = self.tp.run(df.copy(), config)
+
+        self.assertEqual(mock_load.call_count, 1)
+        self.assertIn("new_name", first.columns)
+        self.assertIn("new_name", second.columns)
 
 
 class TestTransformPipelineErrorHandling(unittest.TestCase):

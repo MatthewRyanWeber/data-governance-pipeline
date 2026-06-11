@@ -11,10 +11,17 @@ Layer 4 — imports from Layer 2 (transform, standardiser, type_coercer,
 Revision history
 ────────────────
 1.0   2026-06-08   Initial release.
+1.1   2026-06-11   Rules and reference files are cached by (path, mtime) via
+                   helpers.load_file_cached so chunked runs parse each file
+                   once; referential-integrity validation runs against the
+                   cached reference frame.
 """
 
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING
+
+from pipeline.helpers import load_file_cached
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -150,7 +157,9 @@ class TransformPipeline:
         from pipeline.business_rules import BusinessRuleEngine
         bre = BusinessRuleEngine(self.gov)
         if "rules_file" in step:
-            rules = bre.load_rules(step["rules_file"])
+            # Cached by (path, mtime) — chunked runs would otherwise re-parse
+            # the same rules file once per chunk.
+            rules = load_file_cached(step["rules_file"], bre.load_rules)
         else:
             rules = step.get("rules", [])
         return bre.apply(df, rules)
@@ -299,21 +308,74 @@ class TransformPipeline:
                 df = df.sort_values(valid, ascending=ascending).reset_index(drop=True)
         return df
 
-    def _step_referential_integrity(self, df, step):
-        from pipeline.referential_integrity import ReferentialIntegrityChecker
+    @staticmethod
+    def _read_reference_file(reference_path: str):
+        """Read a CSV/Excel/JSON reference file — mirrors the checker's formats."""
+        import pandas as pd
 
+        ext = Path(reference_path).suffix.lower()
+        if ext == ".csv":
+            return pd.read_csv(reference_path, encoding="utf-8")
+        if ext in (".xlsx", ".xls"):
+            return pd.read_excel(reference_path)
+        if ext == ".json":
+            return pd.read_json(reference_path)
+        logger.warning("[REFERENTIAL_INTEGRITY] Unsupported reference format: %s", ext)
+        return None
+
+    def _step_referential_integrity(self, df, step):
         if self.dlq is None:
             logger.warning("[TRANSFORM_PIPELINE] referential_integrity requires a DLQ — skipping.")
             return df
 
-        checker = ReferentialIntegrityChecker(self.gov, self.dlq)
-        return checker.check(
-            df,
-            fk_col=step["fk_col"],
-            reference_path=step["ref"],
-            reference_col=step.get("ref_col", step["fk_col"]),
-            on_violation=step.get("on_violation", "dlq"),
+        fk_col = step["fk_col"]
+        reference_path = step["ref"]
+        reference_col = step.get("ref_col", step["fk_col"])
+        on_violation = step.get("on_violation", "dlq")
+
+        if fk_col not in df.columns:
+            logger.warning(
+                "[REFERENTIAL_INTEGRITY] Foreign key column '%s' not found — skipping.",
+                fk_col,
+            )
+            return df
+
+        # The validation mirrors ReferentialIntegrityChecker.check but runs
+        # against a (path, mtime)-cached reference frame: the checker re-reads
+        # the reference file from disk on every call, which re-parsed the same
+        # file once per chunk in chunked runs.
+        reference_df = load_file_cached(reference_path, self._read_reference_file)
+        if reference_df is None:
+            return df
+
+        valid_keys = set(reference_df[reference_col].dropna().astype(str))
+        foreign_keys_as_str = df[fk_col].astype(str)
+        valid_mask = foreign_keys_as_str.isin(valid_keys)
+        invalid_count = int((~valid_mask).sum())
+        valid_count = int(valid_mask.sum())
+
+        self.gov.referential_integrity_checked(
+            fk_col, reference_path, valid_count, invalid_count,
         )
+
+        if invalid_count > 0:
+            invalid_values = df.loc[~valid_mask, fk_col].unique().tolist()
+            logger.warning(
+                "[RI CHECK] '%s': %d invalid FK value(s): %s%s",
+                fk_col, invalid_count,
+                invalid_values[:5], "…" if len(invalid_values) > 5 else "",
+            )
+            if on_violation == "dlq":
+                bad_indices = df.index[~valid_mask].tolist()
+                reason = (
+                    f"REFERENTIAL_INTEGRITY: '{fk_col}' value not found "
+                    f"in '{reference_path}':'{reference_col}'"
+                )
+                df = self.dlq.write(df, bad_indices, reason)
+        else:
+            logger.info("[RI CHECK] '%s': all %d values valid.", fk_col, valid_count)
+
+        return df
 
     def _step_mask_pii(self, df, step):
         from pipeline.transform import Transformer
@@ -324,4 +386,8 @@ class TransformPipeline:
     def _step_flatten(self, df, step):
         from pipeline.transform import Transformer
         t = Transformer(self.gov, sep=step.get("sep", "__"))
-        return t.flatten_nested(df, sep=step.get("sep", "__"))
+        return t.flatten_nested(
+            df,
+            sep=step.get("sep", "__"),
+            max_level=step.get("max_level", 3),
+        )

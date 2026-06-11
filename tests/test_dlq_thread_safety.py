@@ -2,6 +2,12 @@
 Tests that DeadLetterQueue handles concurrent writes safely.
 
 Verifies the threading.Lock protects _header_written and CSV output.
+
+Revision history
+────────────────
+1.0   2026-06-08   Initial release.
+1.1   2026-06-11   Regression tests: appends with differing column sets stay
+                   aligned to the header; new keys expand it via rewrite.
 """
 
 import os
@@ -87,6 +93,36 @@ class TestDLQThreadSafety(unittest.TestCase):
     def test_lock_attribute_exists(self):
         dlq = self._make_dlq()
         self.assertIsInstance(dlq._lock, type(threading.Lock()))
+
+    def test_missing_columns_append_as_empty(self):
+        # Regression: a later write with fewer/different columns appended
+        # values positionally and misaligned every row.
+        dlq = self._make_dlq()
+        df_full = pd.DataFrame({"id": [1], "val": ["a"], "extra": ["e1"]})
+        df_partial = pd.DataFrame({"id": [2], "val": ["b"]})
+        dlq.write(df_full, [0], "REASON_1")
+        dlq.write(df_partial, [0], "REASON_2")
+
+        result = pd.read_csv(self.dlq_path)
+        self.assertEqual(list(result["id"]), [1, 2])
+        self.assertEqual(list(result["val"]), ["a", "b"])
+        self.assertEqual(result["extra"][0], "e1")
+        self.assertTrue(pd.isna(result["extra"][1]))
+        self.assertEqual(list(result["_dlq_reason"]), ["REASON_1", "REASON_2"])
+
+    def test_new_columns_expand_header_via_rewrite(self):
+        dlq = self._make_dlq()
+        df_first = pd.DataFrame({"id": [1], "val": ["a"]})
+        df_with_new_key = pd.DataFrame({"id": [2], "val": ["b"], "brand_new": ["n"]})
+        dlq.write(df_first, [0], "REASON_1")
+        dlq.write(df_with_new_key, [0], "REASON_2")
+
+        result = pd.read_csv(self.dlq_path)
+        self.assertIn("brand_new", result.columns)
+        self.assertTrue(pd.isna(result["brand_new"][0]))
+        self.assertEqual(result["brand_new"][1], "n")
+        self.assertEqual(list(result["id"]), [1, 2])
+        self.assertEqual(list(result["val"]), ["a", "b"])
 
 
 if __name__ == "__main__":

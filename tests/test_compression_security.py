@@ -8,6 +8,7 @@ Revision history
 ----------------
 1.0   2026-06-08   Initial creation: path traversal, absolute paths,
                    SizeLimitedReader limit enforcement, ZIP integration.
+1.1   2026-06-11   read(-1) must raise without buffering the whole stream.
 """
 
 import io
@@ -119,6 +120,44 @@ class TestSizeLimitedReader(unittest.TestCase):
         buf = bytearray(80)
         with self.assertRaises(ValueError):
             reader.readinto(buf)
+
+    def test_unbounded_read_over_limit_raises(self):
+        # Regression: read(-1) fully decompressed the stream before the
+        # limit check, defeating the zip-bomb cap.
+        stream = io.BytesIO(b"x" * 1_000_000)
+        reader = SizeLimitedReader(stream, max_bytes=100)
+        with self.assertRaises(ValueError):
+            reader.read()
+
+    def test_unbounded_read_stops_before_consuming_whole_stream(self):
+        class CountingStream(io.BytesIO):
+            def __init__(self, data):
+                super().__init__(data)
+                self.bytes_served = 0
+
+            def read(self, size=-1):
+                data = super().read(size)
+                self.bytes_served += len(data)
+                return data
+
+        stream = CountingStream(b"x" * 1_000_000)
+        reader = SizeLimitedReader(stream, max_bytes=100)
+        with self.assertRaises(ValueError):
+            reader.read()
+        # The reader must bail on the first over-limit increment instead of
+        # buffering the full megabyte.
+        self.assertLess(stream.bytes_served, 1_000_000)
+
+    def test_unbounded_read_within_limit_returns_everything(self):
+        stream = io.BytesIO(b"abc" * 10)
+        reader = SizeLimitedReader(stream, max_bytes=100)
+        self.assertEqual(reader.read(), b"abc" * 10)
+
+    def test_read_none_treated_as_unbounded(self):
+        stream = io.BytesIO(b"x" * 200)
+        reader = SizeLimitedReader(stream, max_bytes=50)
+        with self.assertRaises(ValueError):
+            reader.read(None)
 
     def test_readable_returns_true(self):
         stream = io.BytesIO(b"data")
