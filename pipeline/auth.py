@@ -18,6 +18,10 @@ Revision history
 1.2   2026-06-09   Added persistent SQLite revocation store (opt-in).
 1.3   2026-06-09   PRAGMA synchronous=FULL for revocation durability,
                    added close() to persistent store.
+1.4   2026-06-11   Security fix: revoke_token fallback expiry now covers the
+                   max issuable token lifetime (86400s) so prune_revoked can
+                   never un-revoke a live token; added revoke_token_by_value
+                   to extract the real exp from the token itself.
 """
 
 import logging
@@ -39,6 +43,9 @@ except ImportError:
 _JWT_ALGORITHM = "HS256"
 _JWT_ISSUER = "data-governance-pipeline"
 _DEFAULT_EXPIRY_SECONDS = 3600
+# Revocations must outlive the longest token the API can issue (86400s),
+# otherwise prune_revoked() resurrects revoked-but-unexpired tokens.
+MAX_TOKEN_LIFETIME_SECONDS = 86400
 
 
 # ── Revocation stores ─────────────────────────────────────────────────
@@ -219,10 +226,40 @@ def validate_token(token: str) -> dict:
 
 
 def revoke_token(jti: str, expires_at: float | None = None) -> None:
-    """Add a token ID to the revocation set."""
-    exp = expires_at or (time.time() + _DEFAULT_EXPIRY_SECONDS)
+    """
+    Add a token ID to the revocation set.
+
+    When the caller does not know the token's real expiry, the revocation
+    is kept for the maximum issuable token lifetime — never shorter than
+    any token that could still be in circulation.
+    """
+    exp = expires_at or (time.time() + MAX_TOKEN_LIFETIME_SECONDS)
     _revocation_store.add(jti, exp)
     logger.info("[AUTH] Token revoked: jti=%s", jti)
+
+
+def revoke_token_by_value(token: str) -> str:
+    """
+    Revoke a token using the token string itself. Returns the revoked jti.
+
+    The signature is verified but an expired ``exp`` is accepted — revoking
+    an already-expired token is harmless and must not fail.
+    """
+    if not HAS_JWT:
+        raise RuntimeError("PyJWT is not installed.")
+    secret = os.environ.get("PIPELINE_JWT_SECRET", "")
+    if not secret:
+        raise RuntimeError("PIPELINE_JWT_SECRET is not set.")
+
+    claims = jwt.decode(
+        token, secret,
+        algorithms=[_JWT_ALGORITHM],
+        issuer=_JWT_ISSUER,
+        options={"require": ["jti", "exp"], "verify_exp": False},
+    )
+    jti = str(claims["jti"])
+    revoke_token(jti, expires_at=float(claims["exp"]))
+    return jti
 
 
 def is_revoked(jti: str) -> bool:

@@ -6,6 +6,9 @@ Revision history
 1.0   2026-06-09   Initial release.
 1.1   2026-06-09   Migrated API tests to async for Quart.
 1.2   2026-06-09   Added persistent revocation tests, fixed fixture ordering.
+1.3   2026-06-11   Regression tests: revocation must outlive long-lived tokens
+                   (prune must never un-revoke), /auth/revoke accepts the
+                   token itself and uses its real exp claim.
 """
 
 import os
@@ -136,6 +139,62 @@ class TestJWTTokenRevocation(unittest.TestCase):
         self.assertEqual(removed, 1)
         self.assertFalse(is_revoked("old-jti"))
 
+    def test_default_revocation_expiry_covers_max_token_lifetime(self):
+        """Regression: the old 3600s default let prune_revoked un-revoke a
+        token issued with the max 86400s lifetime after one hour."""
+        from pipeline.auth import MAX_TOKEN_LIFETIME_SECONDS, revoke_token
+        from pipeline.auth import _revocation_store
+        revoke_token("long-lived-jti")
+        stored_expiry = _revocation_store._tokens["long-lived-jti"]
+        minimum_expected = time.time() + MAX_TOKEN_LIFETIME_SECONDS - 5
+        self.assertGreaterEqual(stored_expiry, minimum_expected)
+
+    def test_max_lifetime_token_stays_revoked_after_prune(self):
+        from pipeline.auth import (
+            create_token, validate_token, revoke_token, prune_revoked,
+        )
+        result = create_token("long-lived-user", 86400)
+        claims = validate_token(result["token"])
+        revoke_token(claims["jti"])
+        prune_revoked()
+        with self.assertRaises(ValueError):
+            validate_token(result["token"])
+
+    def test_revoke_token_by_value_uses_real_exp(self):
+        from pipeline.auth import (
+            create_token, revoke_token_by_value, _revocation_store,
+        )
+        result = create_token("victim", 86400)
+        jti = revoke_token_by_value(result["token"])
+        stored_expiry = _revocation_store._tokens[jti]
+        minimum_expected = time.time() + 86400 - 5
+        self.assertGreaterEqual(stored_expiry, minimum_expected)
+
+    def test_revoke_token_by_value_accepts_expired_token(self):
+        """Revoking an already-expired token must not raise."""
+        import jwt as pyjwt
+        from pipeline.auth import revoke_token_by_value, is_revoked
+        secret = os.environ["PIPELINE_JWT_SECRET"]
+        expired_token = pyjwt.encode({
+            "sub": "test", "iat": int(time.time()) - 7200,
+            "exp": int(time.time()) - 3600,
+            "jti": "already-expired", "iss": "data-governance-pipeline",
+        }, secret, algorithm="HS256")
+        jti = revoke_token_by_value(expired_token)
+        self.assertEqual(jti, "already-expired")
+        self.assertTrue(is_revoked("already-expired"))
+
+    def test_revoke_token_by_value_rejects_bad_signature(self):
+        import jwt as pyjwt
+        from pipeline.auth import revoke_token_by_value
+        forged = pyjwt.encode({
+            "sub": "x", "iat": int(time.time()),
+            "exp": int(time.time()) + 60,
+            "jti": "forged", "iss": "data-governance-pipeline",
+        }, "wrong-secret-key-also-32-bytes-xx", algorithm="HS256")
+        with self.assertRaises(pyjwt.InvalidTokenError):
+            revoke_token_by_value(forged)
+
 
 # ── API integration tests (async for Quart) ───────────────────────────────
 
@@ -214,6 +273,37 @@ class TestAPIWithJWT:
             resp = await client.get("/status",
                                     headers={"Authorization": f"Bearer {token}"})
             assert resp.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_revoke_endpoint_accepts_token_and_survives_prune(self):
+        """Regression: revoking by token pins the revocation to the token's
+        real exp, so prune_revoked can never resurrect it."""
+        async with self.app.test_client() as client:
+            resp = await client.post("/auth/token",
+                                     headers={"X-API-Key": "static-key-1"},
+                                     json={"subject": "test-client",
+                                           "expiry_seconds": 86400})
+            token = (await resp.get_json())["token"]
+
+            resp = await client.post("/auth/revoke",
+                                     headers={"X-API-Key": "static-key-1"},
+                                     json={"token": token})
+            assert resp.status_code == 200
+
+            from pipeline.auth import prune_revoked
+            prune_revoked()
+
+            resp = await client.get("/status",
+                                    headers={"Authorization": f"Bearer {token}"})
+            assert resp.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_revoke_endpoint_rejects_undecodable_token(self):
+        async with self.app.test_client() as client:
+            resp = await client.post("/auth/revoke",
+                                     headers={"X-API-Key": "static-key-1"},
+                                     json={"token": "not.a.jwt"})
+            assert resp.status_code == 400
 
     @pytest.mark.asyncio
     async def test_static_key_still_works_alongside_jwt(self):

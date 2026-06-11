@@ -4,6 +4,8 @@ Tests for pipeline/rate_limiter.py — in-memory and SQLite-backed rate limiting
 Revision history
 ────────────────
 1.0   2026-06-09   Initial release.
+1.1   2026-06-11   Regression tests: idle-bucket eviction bounds memory when
+                   an attacker rotates keys.
 """
 
 import os
@@ -55,6 +57,41 @@ class TestInMemoryRateLimiter(unittest.TestCase):
 
         self.assertEqual(len(results), 100)
         self.assertTrue(all(results))
+
+
+class TestInMemoryIdleBucketEviction(unittest.TestCase):
+    """Regression: rotating attacker-chosen keys must not grow the bucket
+    dict without bound — idle buckets are evicted after the window."""
+
+    def test_idle_buckets_evicted_after_window(self):
+        import time
+        limiter = InMemoryRateLimiter(max_requests=5, window_seconds=1)
+        for i in range(50):
+            limiter.allow(f"rotating-key-{i}")
+        self.assertEqual(len(limiter._buckets), 50)
+
+        time.sleep(1.1)
+        limiter.allow("fresh-key")
+
+        self.assertEqual(set(limiter._buckets), {"fresh-key"})
+
+    def test_active_buckets_survive_eviction_sweep(self):
+        import time
+        limiter = InMemoryRateLimiter(max_requests=5, window_seconds=2)
+        limiter.allow("idle-key")
+        time.sleep(1.0)
+        limiter.allow("active-key")
+        time.sleep(1.2)
+        # idle-key's only timestamp is now outside the window; active-key's is not
+        limiter.allow("trigger-sweep")
+        self.assertNotIn("idle-key", limiter._buckets)
+        self.assertIn("active-key", limiter._buckets)
+
+    def test_eviction_does_not_reset_limits(self):
+        limiter = InMemoryRateLimiter(max_requests=3, window_seconds=60)
+        for _ in range(3):
+            self.assertTrue(limiter.allow("client"))
+        self.assertFalse(limiter.allow("client"))
 
 
 class TestPersistentRateLimiter(unittest.TestCase):

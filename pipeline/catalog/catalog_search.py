@@ -11,6 +11,9 @@ Revision history
 1.1   2026-06-08   Taste fixes: renamed import to CATALOG_DB, added dry_run,
                    guard clauses on search/search_columns, FTS fallback warning,
                    renamed d -> dataset_record.
+1.2   2026-06-11   Security fix: all query paths are tenant-scoped (tenant_id
+                   parameter matching CatalogStore) — previously every tenant
+                   could read every other tenant's catalog rows.
 """
 
 import json
@@ -43,10 +46,14 @@ class CatalogSearch:
         gov: "GovernanceLogger",
         db_path: str | Path | None = None,
         dry_run: bool = False,
+        tenant_id: str = "default",
     ) -> None:
         self.gov = gov
         self.dry_run = dry_run
         self.db_path = Path(db_path) if db_path else CATALOG_DB
+        # Must match CatalogStore's tenant convention so search never
+        # returns rows the calling tenant did not register.
+        self.tenant_id = tenant_id
 
     def _conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self.db_path))
@@ -72,19 +79,21 @@ class CatalogSearch:
                     SELECT d.*, fts.rank
                     FROM catalog_fts fts
                     JOIN datasets d ON d.dataset_id = fts.dataset_id
-                    WHERE catalog_fts MATCH ?
+                    WHERE catalog_fts MATCH ? AND d.tenant_id = ?
                     ORDER BY fts.rank
                     LIMIT ?
-                """, (query, limit)).fetchall()
+                """, (query, self.tenant_id, limit)).fetchall()
             except sqlite3.OperationalError as exc:
                 logger.warning("[CATALOG] FTS search failed, falling back to LIKE: %s", exc)
                 like_q = f"%{query}%"
                 rows = conn.execute("""
                     SELECT *, 0 as rank FROM datasets
-                    WHERE name LIKE ? OR description LIKE ?
-                       OR owner LIKE ? OR domain LIKE ? OR tags LIKE ?
+                    WHERE tenant_id = ?
+                      AND (name LIKE ? OR description LIKE ?
+                       OR owner LIKE ? OR domain LIKE ? OR tags LIKE ?)
                     ORDER BY name LIMIT ?
-                """, (like_q, like_q, like_q, like_q, like_q, limit)).fetchall()
+                """, (self.tenant_id, like_q, like_q, like_q, like_q, like_q,
+                      limit)).fetchall()
 
             results = []
             for row in rows:
@@ -113,17 +122,19 @@ class CatalogSearch:
                 SELECT c.*, d.name as dataset_name
                 FROM columns c
                 JOIN datasets d ON d.dataset_id = c.dataset_id
-                WHERE c.name LIKE ? OR c.description LIKE ?
-                   OR c.glossary_term LIKE ?
+                              AND d.tenant_id = c.tenant_id
+                WHERE c.tenant_id = ?
+                  AND (c.name LIKE ? OR c.description LIKE ?
+                   OR c.glossary_term LIKE ?)
                 ORDER BY d.name, c.name
                 LIMIT ?
-            """, (like_q, like_q, like_q, limit)).fetchall()
+            """, (self.tenant_id, like_q, like_q, like_q, limit)).fetchall()
             return [dict(r) for r in rows]
         finally:
             conn.close()
 
     def find_pii_columns(self) -> list[dict]:
-        """Return all columns flagged as PII across all datasets."""
+        """Return all PII-flagged columns across the current tenant's datasets."""
         if not self.db_path.exists():
             return []
 
@@ -133,23 +144,25 @@ class CatalogSearch:
                 SELECT c.*, d.name as dataset_name
                 FROM columns c
                 JOIN datasets d ON d.dataset_id = c.dataset_id
-                WHERE c.pii = 1
+                              AND d.tenant_id = c.tenant_id
+                WHERE c.pii = 1 AND c.tenant_id = ?
                 ORDER BY d.name, c.name
-            """).fetchall()
+            """, (self.tenant_id,)).fetchall()
             return [dict(r) for r in rows]
         finally:
             conn.close()
 
     def datasets_by_owner(self, owner: str) -> list[dict]:
-        """Return all datasets owned by a specific owner."""
+        """Return the current tenant's datasets owned by a specific owner."""
         if not self.db_path.exists():
             return []
 
         conn = self._conn()
         try:
             rows = conn.execute(
-                "SELECT * FROM datasets WHERE owner = ? ORDER BY name",
-                (owner,),
+                "SELECT * FROM datasets WHERE owner = ? AND tenant_id = ? "
+                "ORDER BY name",
+                (owner, self.tenant_id),
             ).fetchall()
             results = []
             for row in rows:

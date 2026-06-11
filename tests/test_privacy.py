@@ -9,6 +9,9 @@ Uses real SQLite databases for erasure tests, synthetic data only
 Revision history
 ────────────────
 1.0   2026-06-08   Initial release — ~30 tests covering all six privacy modules.
+1.1   2026-06-11   Regression tests: ColumnEncryptor active_key recovery and
+                   numeric-column encryption; NLPPIIDetector dry_run honored,
+                   failed model load memoized, passport/licence overlap dedup.
 """
 
 import hashlib
@@ -150,6 +153,40 @@ class TestColumnEncryptorRoundtrip(unittest.TestCase):
         key = ColumnEncryptor.generate_key()
         self.assertIsInstance(key, str)
         self.assertTrue(len(key) > 0)
+
+    def test_active_key_exposes_provided_key(self):
+        self.assertEqual(self.enc.active_key, self.key)
+
+    def test_active_key_recovers_auto_generated_key(self):
+        """Regression: the warning told users to retrieve an auto-generated
+        key via generate_key(), which mints a NEW key — following it lost
+        the data. active_key must return the key actually in use."""
+        from pipeline.privacy.column_encryptor import ColumnEncryptor
+        auto_enc = ColumnEncryptor(MockGov())
+        self.assertIsNotNone(auto_enc.active_key)
+
+        df = pd.DataFrame({"ssn": ["000-00-0000"]})
+        df = auto_enc.encrypt(df, ["ssn"])
+
+        recovered = ColumnEncryptor(MockGov(), auto_enc.active_key)
+        df = recovered.decrypt(df, ["ssn"])
+        self.assertEqual(df["ssn"].iloc[0], "000-00-0000")
+
+    def test_encrypt_numeric_column_converts_to_object(self):
+        """Regression: assigning ciphertext strings into an int64 column
+        raises TypeError under pandas 3.x."""
+        df = pd.DataFrame({"salary": [50000, 60000], "id": [1, 2]})
+        df = self.enc.encrypt(df, ["salary"])
+        self.assertEqual(df["salary"].dtype, object)
+        self.assertTrue(df["salary"].iloc[0].startswith("ENCRYPTED:"))
+        df = self.enc.decrypt(df, ["salary"])
+        self.assertEqual(df["salary"].iloc[0], "50000")
+
+    def test_encrypt_float_column_with_nulls(self):
+        df = pd.DataFrame({"amount": [10.5, None, 99.9]})
+        df = self.enc.encrypt(df, ["amount"])
+        self.assertTrue(df["amount"].iloc[0].startswith("ENCRYPTED:"))
+        self.assertTrue(pd.isna(df["amount"].iloc[1]))
 
 
 # =============================================================================
@@ -459,6 +496,81 @@ class TestNLPPIIDetectorRegex(unittest.TestCase):
         columns_scanned = {f["column"] for f in findings}
         if findings:
             self.assertNotIn("numeric_field", columns_scanned)
+
+    def test_passport_and_licence_overlap_counts_once_as_passport(self):
+        """Regression: a value matching both US_PASSPORT and the broader
+        US_DRIVERS_LICENSE pattern produced two findings — the dedup keys
+        on entity_type so it never merged them. The more specific passport
+        type must win."""
+        from pipeline.privacy.nlp_pii_detector import NLPPIIDetector
+        detector = NLPPIIDetector(MockGov(), confidence_threshold=0.1)
+        df = pd.DataFrame({"notes": ["Passport A12345678 on file"]})
+        with patch.object(detector, "_scan_column_ner", return_value=[]):
+            findings = detector.scan(df, text_columns=["notes"], include_regex=True)
+        entity_types = {f["entity_type"] for f in findings}
+        self.assertIn("US_PASSPORT", entity_types)
+        self.assertNotIn("US_DRIVERS_LICENSE", entity_types)
+
+    def test_licence_only_value_still_detected(self):
+        from pipeline.privacy.nlp_pii_detector import NLPPIIDetector
+        detector = NLPPIIDetector(MockGov(), confidence_threshold=0.1)
+        # 11 digits: licence pattern matches, passport (exactly 8) does not
+        df = pd.DataFrame({"notes": ["Licence A12345678901 on file"]})
+        with patch.object(detector, "_scan_column_ner", return_value=[]):
+            findings = detector.scan(df, text_columns=["notes"], include_regex=True)
+        entity_types = {f["entity_type"] for f in findings}
+        self.assertIn("US_DRIVERS_LICENSE", entity_types)
+        self.assertNotIn("US_PASSPORT", entity_types)
+
+    def test_passport_and_separate_licence_both_detected(self):
+        from pipeline.privacy.nlp_pii_detector import NLPPIIDetector
+        detector = NLPPIIDetector(MockGov(), confidence_threshold=0.1)
+        df = pd.DataFrame({
+            "notes": ["Passport A12345678 and licence B12345678901 on file"],
+        })
+        with patch.object(detector, "_scan_column_ner", return_value=[]):
+            findings = detector.scan(df, text_columns=["notes"], include_regex=True)
+        entity_types = {f["entity_type"] for f in findings}
+        self.assertIn("US_PASSPORT", entity_types)
+        self.assertIn("US_DRIVERS_LICENSE", entity_types)
+
+    def test_dry_run_does_not_write_governance_event(self):
+        """Regression: scan() wrote a governance event even with dry_run=True."""
+        from pipeline.privacy.nlp_pii_detector import NLPPIIDetector
+        gov = MagicMock()
+        detector = NLPPIIDetector(gov, confidence_threshold=0.1, dry_run=True)
+        df = pd.DataFrame({"notes": ["Contact alice@example.com"]})
+        with patch.object(detector, "_scan_column_ner", return_value=[]):
+            findings = detector.scan(df, text_columns=["notes"], include_regex=True)
+        self.assertTrue(len(findings) > 0)
+        gov.transformation_applied.assert_not_called()
+
+    def test_non_dry_run_writes_governance_event(self):
+        from pipeline.privacy.nlp_pii_detector import NLPPIIDetector
+        gov = MagicMock()
+        detector = NLPPIIDetector(gov, confidence_threshold=0.1)
+        df = pd.DataFrame({"notes": ["Contact alice@example.com"]})
+        with patch.object(detector, "_scan_column_ner", return_value=[]):
+            detector.scan(df, text_columns=["notes"], include_regex=True)
+        gov.transformation_applied.assert_called_once()
+
+    def test_failed_model_load_memoized(self):
+        """Regression: a missing spaCy model was retried (disk hit + warning)
+        for every scanned column instead of once per detector."""
+        from pipeline.privacy import nlp_pii_detector as module
+        from pipeline.privacy.nlp_pii_detector import NLPPIIDetector
+
+        mock_spacy = MagicMock()
+        mock_spacy.load.side_effect = OSError("model not found")
+
+        detector = NLPPIIDetector(MockGov(), confidence_threshold=0.1)
+        with patch.object(module, "_HAS_SPACY", True), \
+             patch.object(module, "spacy", mock_spacy, create=True):
+            self.assertIsNone(detector._load_model())
+            self.assertIsNone(detector._load_model())
+            self.assertIsNone(detector._load_model())
+
+        self.assertEqual(mock_spacy.load.call_count, 1)
 
 
 class TestNLPPIIDetectorWithSpacy(unittest.TestCase):

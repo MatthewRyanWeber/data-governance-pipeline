@@ -9,6 +9,9 @@ Revision history
 1.0   2026-06-08   Initial creation: covers pgvector WHERE/select_cols,
                    duckdb mutating SQL, business_rules derive expression,
                    snowflake identifier injection, sftp host key policy.
+1.1   2026-06-11   Regression tests: AccessPolicy mutations hold the lock
+                   across the full read-modify-write (concurrent role/
+                   assignment updates must not be lost).
 """
 
 import logging
@@ -279,6 +282,78 @@ class TestSFTPHostKeyPolicy(unittest.TestCase):
         mock_ssh.set_missing_host_key_policy.assert_called_once()
         policy_arg = mock_ssh.set_missing_host_key_policy.call_args[0][0]
         self.assertIsInstance(policy_arg, paramiko.AutoAddPolicy)
+
+
+# ---------------------------------------------------------------------------
+# 7. AccessPolicy concurrent mutation safety
+# ---------------------------------------------------------------------------
+
+class TestAccessPolicyConcurrentMutation(unittest.TestCase):
+    """Regression: the lock only covered _save, so concurrent add_role /
+    assign_role calls could interleave the read-modify-write and lose
+    updates."""
+
+    def setUp(self):
+        import tempfile
+        from pathlib import Path
+        self.tmpdir = tempfile.mkdtemp(prefix="access_policy_")
+        self.policy_file = Path(self.tmpdir) / "policies.json"
+        self.policy = self._make_policy()
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _make_policy(self):
+        from pipeline.security.access_policy import AccessPolicy
+        return AccessPolicy(MagicMock(), policy_file=self.policy_file)
+
+    def test_concurrent_add_role_loses_no_roles(self):
+        import json
+        import threading
+        errors = []
+
+        def add(index):
+            try:
+                self.policy.add_role(f"role_{index}",
+                                     denied_columns=[f"col_{index}"])
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=add, args=(i,)) for i in range(10)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        self.assertEqual(errors, [])
+        self.assertEqual(len(self.policy.list_roles()), 10)
+        persisted = json.loads(self.policy_file.read_text(encoding="utf-8"))
+        self.assertEqual(len(persisted["roles"]), 10)
+
+    def test_concurrent_assign_role_loses_no_assignments(self):
+        import json
+        import threading
+        self.policy.add_role("shared_role", denied_columns=["ssn"])
+        errors = []
+
+        def assign(index):
+            try:
+                self.policy.assign_role(f"user_{index}", "shared_role")
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=assign, args=(i,)) for i in range(10)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        self.assertEqual(errors, [])
+        persisted = json.loads(self.policy_file.read_text(encoding="utf-8"))
+        self.assertEqual(len(persisted["user_roles"]), 10)
+        for i in range(10):
+            self.assertEqual(self.policy.user_roles(f"user_{i}"), ["shared_role"])
 
 
 if __name__ == "__main__":

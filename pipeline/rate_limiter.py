@@ -12,6 +12,8 @@ Revision history
 1.0   2026-06-09   Initial release: InMemoryRateLimiter, PersistentRateLimiter.
 1.1   2026-06-09   Added WAL mode to PersistentRateLimiter for concurrent access.
 1.2   2026-06-09   Added close() for connection cleanup.
+1.3   2026-06-11   Security fix: InMemoryRateLimiter evicts idle buckets so
+                   an attacker rotating keys cannot grow the dict unboundedly.
 """
 
 import logging
@@ -35,10 +37,12 @@ class InMemoryRateLimiter:
         self._window = window_seconds
         self._lock = threading.Lock()
         self._buckets: dict[str, list[float]] = {}
+        self._last_eviction = time.monotonic()
 
     def allow(self, key: str) -> bool:
         now = time.monotonic()
         with self._lock:
+            self._evict_idle_buckets(now)
             bucket = self._buckets.get(key, [])
             bucket = [t for t in bucket if now - t < self._window]
             if len(bucket) >= self._max:
@@ -47,6 +51,27 @@ class InMemoryRateLimiter:
             bucket.append(now)
             self._buckets[key] = bucket
             return True
+
+    def _evict_idle_buckets(self, now: float) -> None:
+        """Drop buckets whose every timestamp has aged out of the window.
+
+        Without eviction, each distinct key (which may be attacker-chosen)
+        leaves a dict entry behind forever — unbounded memory growth.
+        Sweeping at most once per window keeps allow() amortised O(1).
+        Caller must hold self._lock.
+        """
+        if now - self._last_eviction < self._window:
+            return
+        cutoff = now - self._window
+        idle_keys = [
+            key for key, bucket in self._buckets.items()
+            if not bucket or bucket[-1] < cutoff
+        ]
+        for key in idle_keys:
+            del self._buckets[key]
+        self._last_eviction = now
+        if idle_keys:
+            logger.debug("[RATE-LIMIT] Evicted %d idle buckets", len(idle_keys))
 
 
 class PersistentRateLimiter:

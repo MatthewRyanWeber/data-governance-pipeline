@@ -12,6 +12,10 @@ Revision history
 1.1   2026-06-08   Taste fixes: dry_run support, instance lock, use
                    atomic_json_write, fix mutable-default falsy trap,
                    warn on auto-register, rename terse locals.
+1.2   2026-06-11   Concurrency fix: RLock held across full read-modify-write
+                   (lock was only inside _save, so concurrent training runs
+                   could be assigned the same version number); RLock because
+                   log_training_run may nest register_model (auto-register).
 """
 
 import json
@@ -54,7 +58,9 @@ class ModelRegistry:
     ) -> None:
         self.gov = gov
         self.dry_run = dry_run
-        self._lock = threading.Lock()
+        # RLock: log_training_run holds the lock and may call
+        # register_model (auto-register), which locks again.
+        self._lock = threading.RLock()
         self.registry_file = Path(registry_file) if registry_file else _REGISTRY_FILE
         self.registry_file.parent.mkdir(parents=True, exist_ok=True)
         self._registry: dict = self._load()
@@ -69,10 +75,11 @@ class ModelRegistry:
             return {"models": {}}
 
     def _save(self) -> None:
-        with self._lock:
-            self._registry["updated_utc"] = datetime.now(timezone.utc).isoformat()
-            data = json.dumps(self._registry, indent=2, default=str)
-            atomic_json_write(self.registry_file, data)
+        # Caller must hold self._lock: the lock has to span the whole
+        # read-modify-write, not just the serialise-and-write tail.
+        self._registry["updated_utc"] = datetime.now(timezone.utc).isoformat()
+        data = json.dumps(self._registry, indent=2, default=str)
+        atomic_json_write(self.registry_file, data)
 
     def register_model(
         self,
@@ -101,21 +108,22 @@ class ModelRegistry:
 
         now = datetime.now(timezone.utc).isoformat()
 
-        existing = self._registry["models"].get(model_name, {})
-        model = {
-            "model_name": model_name,
-            "framework": framework or existing.get("framework", ""),
-            "description": description or existing.get("description", ""),
-            "owner": owner or existing.get("owner", ""),
-            "datasets": datasets if datasets is not None else existing.get("datasets", []),
-            "tags": tags if tags is not None else existing.get("tags", []),
-            "versions": existing.get("versions", []),
-            "created_utc": existing.get("created_utc", now),
-            "updated_utc": now,
-        }
+        with self._lock:
+            existing = self._registry["models"].get(model_name, {})
+            model = {
+                "model_name": model_name,
+                "framework": framework or existing.get("framework", ""),
+                "description": description or existing.get("description", ""),
+                "owner": owner or existing.get("owner", ""),
+                "datasets": datasets if datasets is not None else existing.get("datasets", []),
+                "tags": tags if tags is not None else existing.get("tags", []),
+                "versions": existing.get("versions", []),
+                "created_utc": existing.get("created_utc", now),
+                "updated_utc": now,
+            }
 
-        self._registry["models"][model_name] = model
-        self._save()
+            self._registry["models"][model_name] = model
+            self._save()
 
         self.gov.transformation_applied("MODEL_REGISTERED", {
             "model": model_name, "framework": framework,
@@ -142,31 +150,34 @@ class ModelRegistry:
             logger.info("[ML] [DRY RUN] Would log training run for '%s'", model_name)
             return 0
 
-        if model_name not in self._registry["models"]:
-            logger.warning("[ML] Auto-registering unknown model '%s'", model_name)
-            self.register_model(model_name, datasets=datasets)
+        # Version = len(versions) + 1: assignment and append must happen
+        # under one lock hold or two concurrent runs get the same version.
+        with self._lock:
+            if model_name not in self._registry["models"]:
+                logger.warning("[ML] Auto-registering unknown model '%s'", model_name)
+                self.register_model(model_name, datasets=datasets)
 
-        model = self._registry["models"][model_name]
-        version = len(model["versions"]) + 1
+            model = self._registry["models"][model_name]
+            version = len(model["versions"]) + 1
 
-        if datasets:
-            for ds in datasets:
-                if ds not in model["datasets"]:
-                    model["datasets"].append(ds)
+            if datasets:
+                for ds in datasets:
+                    if ds not in model["datasets"]:
+                        model["datasets"].append(ds)
 
-        run = {
-            "version": version,
-            "metrics": metrics or {},
-            "hyperparameters": hyperparameters or {},
-            "datasets_used": datasets or model["datasets"],
-            "artifact_path": artifact_path,
-            "notes": notes,
-            "trained_utc": datetime.now(timezone.utc).isoformat(),
-        }
+            run = {
+                "version": version,
+                "metrics": metrics or {},
+                "hyperparameters": hyperparameters or {},
+                "datasets_used": datasets or model["datasets"],
+                "artifact_path": artifact_path,
+                "notes": notes,
+                "trained_utc": datetime.now(timezone.utc).isoformat(),
+            }
 
-        model["versions"].append(run)
-        model["updated_utc"] = datetime.now(timezone.utc).isoformat()
-        self._save()
+            model["versions"].append(run)
+            model["updated_utc"] = datetime.now(timezone.utc).isoformat()
+            self._save()
 
         self.gov.transformation_applied("MODEL_TRAINING_LOGGED", {
             "model": model_name, "version": version,
@@ -249,12 +260,13 @@ class ModelRegistry:
             logger.info("[ML] [DRY RUN] Would delete model '%s'", model_name)
             return False
 
-        if model_name in self._registry["models"]:
+        with self._lock:
+            if model_name not in self._registry["models"]:
+                return False
             del self._registry["models"][model_name]
             self._save()
-            logger.info("[ML] Deleted model '%s'", model_name)
-            return True
-        return False
+        logger.info("[ML] Deleted model '%s'", model_name)
+        return True
 
     def compare_versions(
         self, model_name: str,

@@ -25,6 +25,11 @@ Revision history
                    when any breaker is open.
 2.3   2026-06-09   Added /metrics/prometheus endpoint for Prometheus text scraping.
 2.4   2026-06-09   Added /dashboard route serving self-contained HTML dashboard.
+2.5   2026-06-11   Security fixes: rate limiter keyed on client address instead
+                   of unvalidated credential headers, case-insensitive Bearer
+                   scheme (RFC 7235), /auth/revoke accepts the token itself so
+                   the revocation lives as long as the token, X-Bootstrap-Secret
+                   path for /auth/token in JWT-only deployments.
 """
 
 import functools
@@ -135,26 +140,42 @@ def create_app(pipeline_fn=None, max_queue_size: int | None = None, prometheus_e
 
     from pipeline.auth import jwt_available, validate_token as _validate_jwt
 
+    def _extract_bearer_credential() -> str:
+        """Parse the Authorization header. RFC 7235: scheme is case-insensitive."""
+        auth_header = (request.headers.get("Authorization") or "").strip()
+        scheme, _, credential_part = auth_header.partition(" ")
+        if scheme.lower() == "bearer":
+            return credential_part.strip()
+        return ""
+
+    def _check_rate_limit():
+        """Apply the rate limit. Returns an error response, or None if allowed.
+
+        Keyed on the client address, never on credential headers: those are
+        attacker-controlled before auth runs, so keying on them hands every
+        request a fresh bucket (full bypass) and grows the store unboundedly.
+        """
+        rate_limit_id = request.remote_addr or "unknown"
+        if not rate_limiter.allow(rate_limit_id):
+            return _error_response(
+                "rate_limit_exceeded",
+                "Rate limit exceeded. Try again later.",
+                429,
+            )
+        return None
+
     def require_auth(fn):
         """Decorator: reject requests without a valid API key or JWT."""
         @functools.wraps(fn)
         async def wrapper(*args, **kwargs):
             api_key = (request.headers.get("X-API-Key") or "").strip()
-            bearer = (
-                request.headers.get("Authorization", "")
-                .removeprefix("Bearer ")
-                .strip()
-            )
+            bearer = _extract_bearer_credential()
             credential = api_key or bearer
             is_bearer = bool(not api_key and bearer)
 
-            rate_limit_id = credential or request.remote_addr
-            if not rate_limiter.allow(rate_limit_id):
-                return _error_response(
-                    "rate_limit_exceeded",
-                    "Rate limit exceeded. Try again later.",
-                    429,
-                )
+            rate_limit_error = _check_rate_limit()
+            if rate_limit_error is not None:
+                return rate_limit_error
 
             if not api_keys and not jwt_available():
                 return await fn(*args, **kwargs)
@@ -176,6 +197,51 @@ def create_app(pipeline_fn=None, max_queue_size: int | None = None, prometheus_e
             return _error_response(
                 "unauthorized",
                 "Unauthorized. Provide a valid API key.",
+                401,
+            )
+
+        return wrapper
+
+    def require_token_issuance_auth(fn):
+        """Decorator for /auth/token only.
+
+        In a JWT-only deployment (PIPELINE_JWT_SECRET set, no static API
+        keys) every endpoint demands a JWT — including the only endpoint
+        that issues JWTs, a deadlock. Break it by accepting an
+        X-Bootstrap-Secret header that matches PIPELINE_JWT_SECRET, in
+        constant time. Static-key deployments keep the normal auth path.
+        """
+        authenticated_fn = require_auth(fn)
+
+        @functools.wraps(fn)
+        async def wrapper(*args, **kwargs):
+            if api_keys or not jwt_available():
+                return await authenticated_fn(*args, **kwargs)
+
+            rate_limit_error = _check_rate_limit()
+            if rate_limit_error is not None:
+                return rate_limit_error
+
+            bearer = _extract_bearer_credential()
+            if bearer:
+                from pipeline.auth import validate_token as _validate
+                try:
+                    _validate(bearer)
+                    return await fn(*args, **kwargs)
+                except Exception as exc:
+                    logger.debug("[API] JWT validation failed on /auth/token, "
+                                 "trying bootstrap secret: %s", exc)
+
+            jwt_secret = os.environ.get("PIPELINE_JWT_SECRET", "")
+            bootstrap_secret = (request.headers.get("X-Bootstrap-Secret") or "").strip()
+            if bootstrap_secret and hmac.compare_digest(bootstrap_secret, jwt_secret):
+                return await fn(*args, **kwargs)
+
+            logger.warning("[API] Unauthorized token-issuance request from %s",
+                           request.remote_addr)
+            return _error_response(
+                "unauthorized",
+                "Unauthorized. Provide a valid JWT or X-Bootstrap-Secret.",
                 401,
             )
 
@@ -560,9 +626,16 @@ def create_app(pipeline_fn=None, max_queue_size: int | None = None, prometheus_e
     # ── Auth token endpoints ──────────────────────────────────────────
 
     @app.route("/auth/token", methods=["POST"])
-    @require_auth
+    @require_token_issuance_auth
     async def create_auth_token():
-        """Exchange an API key for a short-lived JWT."""
+        """Exchange a credential for a short-lived JWT.
+
+        Accepted credentials: a static API key (X-API-Key or Bearer), a
+        still-valid JWT, or — when no static API keys are configured — an
+        X-Bootstrap-Secret header equal to PIPELINE_JWT_SECRET. The
+        bootstrap path exists because a JWT-only deployment has no other
+        way to obtain its first token.
+        """
         if not jwt_available():
             return _error_response(
                 "jwt_not_configured",
@@ -587,7 +660,13 @@ def create_app(pipeline_fn=None, max_queue_size: int | None = None, prometheus_e
     @app.route("/auth/revoke", methods=["POST"])
     @require_auth
     async def revoke_auth_token():
-        """Revoke a JWT by its jti claim."""
+        """Revoke a JWT — by the token itself ('token') or its jti claim ('jti').
+
+        Passing the token is preferred: its real exp claim is extracted (an
+        expired signature is fine for revocation) so the revocation entry
+        lives exactly as long as the token. With only a jti, the revocation
+        is held for the maximum issuable token lifetime instead.
+        """
         if not jwt_available():
             return _error_response(
                 "jwt_not_configured",
@@ -595,11 +674,26 @@ def create_app(pipeline_fn=None, max_queue_size: int | None = None, prometheus_e
                 501,
             )
         body = await request.get_json(silent=True) or {}
+        token = body.get("token")
         jti = body.get("jti")
+
+        if token and isinstance(token, str):
+            from pipeline.auth import revoke_token_by_value
+            try:
+                revoked_jti = revoke_token_by_value(token)
+            except Exception as exc:
+                logger.warning("[API] Could not decode token for revocation: %s", exc)
+                return _error_response(
+                    "invalid_token",
+                    "Could not decode 'token' for revocation.",
+                    400,
+                )
+            return jsonify({"jti": revoked_jti, "status": "revoked"})
+
         if not jti or not isinstance(jti, str):
             return _error_response(
                 "missing_jti",
-                "Request body must include a 'jti' string.",
+                "Request body must include a 'token' or 'jti' string.",
                 400,
             )
 

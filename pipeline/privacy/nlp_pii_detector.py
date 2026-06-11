@@ -13,6 +13,11 @@ Revision history
 1.0   2026-06-08   Initial release.
 1.1   2026-06-08   Taste fixes: dry_run, return types, guard clause, naming,
                    configurable random seed, defaultdict, regex ordering.
+1.2   2026-06-11   Bug fixes: scan() honors dry_run (no governance write);
+                   failed spaCy model load memoized so spacy.load runs once;
+                   passport/licence overlap deduped at match-span level
+                   (passport wins) instead of relying on a dedup that keys
+                   on entity_type and so never merged the two.
 """
 
 import logging
@@ -44,6 +49,9 @@ _ENTITY_PII_MAP: dict[str, str] = {
     "FAC": "ADDRESS",
 }
 
+_US_PASSPORT_PATTERN = re.compile(r"\b[A-Z]\d{8}\b")
+_US_DRIVERS_LICENSE_PATTERN = re.compile(r"\b[A-Z]\d{7,12}\b")
+
 _REGEX_DETECTORS: list[tuple[str, re.Pattern]] = [
     ("EMAIL", re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b")),
     ("PHONE", re.compile(r"\b(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b")),
@@ -52,11 +60,32 @@ _REGEX_DETECTORS: list[tuple[str, re.Pattern]] = [
     ("IP_ADDRESS", re.compile(
         r"\b(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\b"
     )),
-    ("US_PASSPORT", re.compile(r"\b[A-Z]\d{8}\b")),
-    # Overlaps with US_PASSPORT (8 digits); passport checked first so it takes priority in dedup
-    ("US_DRIVERS_LICENSE", re.compile(r"\b[A-Z]\d{7,12}\b")),
+    ("US_PASSPORT", _US_PASSPORT_PATTERN),
+    # A licence pattern (letter + 7-12 digits) also matches every passport
+    # (letter + exactly 8 digits). _deduplicate keys on entity_type so it
+    # cannot merge them — instead the licence scan skips any match whose
+    # span already matched the more specific passport pattern.
+    ("US_DRIVERS_LICENSE", _US_DRIVERS_LICENSE_PATTERN),
     ("IBAN", re.compile(r"\b[A-Z]{2}\d{2}[A-Z0-9]{11,30}\b")),
 ]
+
+
+def _has_licence_match_outside_passport_spans(text: str) -> bool:
+    """True when *text* has a drivers-licence match that is not a passport.
+
+    Passport is the more specific pattern (exactly 8 digits), so a span
+    matching both must count once, as a passport.
+    """
+    passport_spans = [m.span() for m in _US_PASSPORT_PATTERN.finditer(text)]
+    for licence_match in _US_DRIVERS_LICENSE_PATTERN.finditer(text):
+        start, end = licence_match.span()
+        overlaps_passport = any(
+            start < p_end and p_start < end
+            for p_start, p_end in passport_spans
+        )
+        if not overlaps_passport:
+            return True
+    return False
 
 
 class NLPPIIDetector:
@@ -86,11 +115,17 @@ class NLPPIIDetector:
         self.random_seed = random_seed
         self.dry_run = dry_run
         self._nlp = None
+        self._model_load_failed = False
 
     def _load_model(self) -> object | None:
         if self._nlp is not None:
             return self._nlp
+        # Memoize failure: without this, every scanned column retries
+        # spacy.load (a multi-second disk hit) and re-logs the warning.
+        if self._model_load_failed:
+            return None
         if not _HAS_SPACY:
+            self._model_load_failed = True
             logger.warning("spaCy not installed — NLP PII detection unavailable. "
                            "pip install spacy && python -m spacy download en_core_web_sm")
             return None
@@ -99,6 +134,7 @@ class NLPPIIDetector:
             logger.info("[NLP-PII] Loaded spaCy model '%s'", self.model_name)
             return self._nlp
         except OSError:
+            self._model_load_failed = True
             logger.warning("spaCy model '%s' not found. "
                            "Run: python -m spacy download %s",
                            self.model_name, self.model_name)
@@ -146,11 +182,16 @@ class NLPPIIDetector:
             col_findings = self._deduplicate(col_findings)
             findings.extend(col_findings)
 
-        self.gov.transformation_applied("NLP_PII_SCAN", {
-            "columns_scanned": len(text_columns),
-            "findings": len(findings),
-            "entity_types": list({f["entity_type"] for f in findings}),
-        })
+        if self.dry_run:
+            logger.info("[NLP-PII] DRY RUN — would record NLP_PII_SCAN "
+                        "governance event (%d findings, %d columns)",
+                        len(findings), len(text_columns))
+        else:
+            self.gov.transformation_applied("NLP_PII_SCAN", {
+                "columns_scanned": len(text_columns),
+                "findings": len(findings),
+                "entity_types": list({f["entity_type"] for f in findings}),
+            })
 
         if findings:
             logger.info("[NLP-PII] Found %d PII instances across %d columns",
@@ -194,7 +235,12 @@ class NLPPIIDetector:
         text_values = sample.astype(str)
 
         for pii_type, pattern in _REGEX_DETECTORS:
-            matches = text_values.str.contains(pattern, na=False)
+            if pii_type == "US_DRIVERS_LICENSE":
+                # Same span matching both passport and licence must count
+                # once, under the more specific passport type.
+                matches = text_values.map(_has_licence_match_outside_passport_spans)
+            else:
+                matches = text_values.str.contains(pattern, na=False)
             count = int(matches.sum())
             if count > 0:
                 detection_rate = count / max(len(sample), 1)

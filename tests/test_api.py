@@ -11,6 +11,10 @@ Revision history
 1.4   2026-06-09   Added config validation tests for destination-specific required keys.
 2.0   2026-06-09   Migrated from Flask/unittest to Quart/pytest-asyncio.
 2.1   2026-06-09   Added Prometheus /metrics/prometheus endpoint tests.
+2.2   2026-06-11   Regression tests: rate limiter keyed on client address
+                   (rotating credential headers no longer bypasses it),
+                   case-insensitive Bearer scheme, X-Bootstrap-Secret path
+                   for /auth/token in JWT-only deployments.
 """
 
 import asyncio
@@ -91,6 +95,25 @@ class TestAPIAuth:
             assert resp.status_code == 200
 
     @pytest.mark.asyncio
+    async def test_bearer_scheme_is_case_insensitive(self):
+        """RFC 7235: the auth scheme token is case-insensitive."""
+        async with self.app.test_client() as client:
+            for scheme in ("bearer", "BEARER", "BeArEr"):
+                resp = await client.get(
+                    "/status",
+                    headers={"Authorization": f"{scheme} test-key-2"},
+                )
+                assert resp.status_code == 200, f"scheme {scheme!r} rejected"
+
+    @pytest.mark.asyncio
+    async def test_non_bearer_scheme_rejected(self):
+        async with self.app.test_client() as client:
+            resp = await client.get(
+                "/status", headers={"Authorization": "Basic test-key-2"},
+            )
+            assert resp.status_code == 401
+
+    @pytest.mark.asyncio
     async def test_invalid_api_key_rejected(self):
         async with self.app.test_client() as client:
             resp = await client.get("/status", headers={"X-API-Key": "wrong-key"})
@@ -126,6 +149,77 @@ class TestAPINoAuth:
         async with self.app.test_client() as client:
             resp = await client.get("/status")
             assert resp.status_code == 200
+
+
+class TestJWTOnlyBootstrap:
+    """JWT-only deployments (no static keys) must be able to obtain a first
+    token via X-Bootstrap-Secret — previously /auth/token demanded a JWT,
+    which only /auth/token could issue (deadlock)."""
+
+    SECRET = "bootstrap-test-secret-for-unit-tests"
+
+    def setup_method(self):
+        os.environ.pop("PIPELINE_API_KEYS", None)
+        os.environ["PIPELINE_JWT_SECRET"] = self.SECRET
+        from pipeline.auth import reset_state
+        reset_state()
+        from pipeline.api import create_app
+        self.app = create_app(pipeline_fn=lambda s, d, c: None)
+
+    def teardown_method(self):
+        os.environ.pop("PIPELINE_JWT_SECRET", None)
+
+    @pytest.mark.asyncio
+    async def test_bootstrap_secret_issues_token(self):
+        async with self.app.test_client() as client:
+            resp = await client.post("/auth/token",
+                                     headers={"X-Bootstrap-Secret": self.SECRET},
+                                     json={"subject": "first-client"})
+            assert resp.status_code == 201
+            body = await resp.get_json()
+            assert "token" in body
+
+            resp = await client.get(
+                "/status",
+                headers={"Authorization": f"Bearer {body['token']}"},
+            )
+            assert resp.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_wrong_bootstrap_secret_rejected(self):
+        async with self.app.test_client() as client:
+            resp = await client.post("/auth/token",
+                                     headers={"X-Bootstrap-Secret": "wrong-secret"},
+                                     json={"subject": "attacker"})
+            assert resp.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_missing_bootstrap_secret_rejected(self):
+        async with self.app.test_client() as client:
+            resp = await client.post("/auth/token", json={"subject": "nobody"})
+            assert resp.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_valid_jwt_can_still_request_new_token(self):
+        async with self.app.test_client() as client:
+            resp = await client.post("/auth/token",
+                                     headers={"X-Bootstrap-Secret": self.SECRET},
+                                     json={"subject": "rotator"})
+            token = (await resp.get_json())["token"]
+
+            resp = await client.post("/auth/token",
+                                     headers={"Authorization": f"Bearer {token}"},
+                                     json={"subject": "rotator"})
+            assert resp.status_code == 201
+
+    @pytest.mark.asyncio
+    async def test_other_endpoints_still_require_jwt(self):
+        """The bootstrap secret only works on /auth/token."""
+        async with self.app.test_client() as client:
+            resp = await client.get(
+                "/status", headers={"X-Bootstrap-Secret": self.SECRET},
+            )
+            assert resp.status_code == 401
 
 
 # ── Validation ─────────────────────────────────────────────────────────────
@@ -277,6 +371,20 @@ class TestAPIRateLimiting:
             for _ in range(100):
                 await client.get("/status", headers=headers)
             resp = await client.get("/status", headers=headers)
+            assert resp.status_code == 429
+            assert (await resp.get_json())["error"]["code"] == "rate_limit_exceeded"
+
+    @pytest.mark.asyncio
+    async def test_rotating_credentials_do_not_bypass_rate_limit(self):
+        """Regression: the limiter was keyed on the raw credential header,
+        so a unique X-API-Key per request earned a fresh bucket every time.
+        It must key on the client address instead."""
+        async with self.app.test_client() as client:
+            for i in range(100):
+                await client.get("/status",
+                                 headers={"X-API-Key": f"rotating-key-{i}"})
+            resp = await client.get("/status",
+                                    headers={"X-API-Key": "rotating-key-final"})
             assert resp.status_code == 429
             assert (await resp.get_json())["error"]["code"] == "rate_limit_exceeded"
 

@@ -13,6 +13,11 @@ Revision history
 4.1   2026-06-08   Extracted report writers into pipeline.reporting.ReportWriter;
                    GovernanceLogger delegates to ReportWriter for backward compat.
 4.2   2026-06-09   Audit ledger writes via AppendOnlyWriter (seek/truncate blocked).
+4.3   2026-06-11   Integrity fixes: hash chain advances only after a successful
+                   write (a failed write no longer poisons every later event);
+                   sidecar anchor file (last hash + entry count) makes tail
+                   truncation and whole-ledger deletion detectable; fixed
+                   af-south-1 region mapping (dead "a" prefix never matched).
 """
 
 import getpass
@@ -27,7 +32,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from pipeline.constants import default_run_context, EventCategory, RunContext
-from pipeline.helpers import file_hash
+from pipeline.helpers import atomic_json_write, file_hash
 
 if TYPE_CHECKING:
     from pipeline.append_only_writer import AppendOnlyWriter
@@ -35,9 +40,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Keys must be the full hyphen-delimited prefix: af-south-1 splits to "af",
+# so a single-letter "a" entry can never match anything.
 _REGION_PREFIX_TO_COUNTRY: dict[str, str] = {
     "us": "US", "eu": "EU", "ap": "SG", "ca": "CA",
-    "sa": "BR", "me": "AE", "a": "ZA", "au": "AU",
+    "sa": "BR", "me": "AE", "af": "ZA", "au": "AU",
 }
 
 
@@ -120,6 +127,9 @@ class GovernanceLogger:
 
         self.log_file = self.log_dir / f"pipeline_{ts}.log"
         self.ledger_file = self.log_dir / f"audit_ledger_{ts}.jsonl"
+        # Anchor sidecar: last chain hash + entry count, rewritten atomically
+        # on every event so deleting or truncating the ledger is detectable.
+        self.ledger_anchor_file = Path(str(self.ledger_file) + ".anchor")
         self.pii_report_file = self.log_dir / f"pii_report_{ts}.json"
         self.validation_rpt_file = self.log_dir / f"validation_report_{ts}.json"
         self.profile_rpt_file = self.log_dir / f"profile_report_{ts}.json"
@@ -143,6 +153,7 @@ class GovernanceLogger:
         self.transfer_events: list[dict] = []
         self.dlq_rows_total: int = 0
         self._prev_hash: str = "GENESIS"
+        self._written_event_count: int = 0
         self._event_lock = threading.RLock()
         self._verify_integrity = verify_integrity
         self._writer: "AppendOnlyWriter | None" = None
@@ -176,8 +187,8 @@ class GovernanceLogger:
         with self._event_lock:
             base_entry["prev_hash"] = self._prev_hash
             raw_json = json.dumps(base_entry, sort_keys=True)
-            self._prev_hash = hashlib.sha256(raw_json.encode()).hexdigest()
-            base_entry["self_hash"] = self._prev_hash
+            event_hash = hashlib.sha256(raw_json.encode()).hexdigest()
+            base_entry["self_hash"] = event_hash
             final_json = json.dumps(base_entry, sort_keys=True)
 
             if not self.dry_run:
@@ -189,7 +200,13 @@ class GovernanceLogger:
                     )
                     self._writer.open()
                 self._writer.write(final_json + "\n")
+                self._written_event_count += 1
+                self._write_anchor(event_hash)
 
+            # Advance the chain only after the write lands: if the write
+            # raises, the next event reuses this prev_hash and the on-disk
+            # chain stays contiguous instead of permanently broken.
+            self._prev_hash = event_hash
             self.ledger_entries.append(base_entry)
 
         msg = f"[{category}] {action}"
@@ -197,19 +214,67 @@ class GovernanceLogger:
             msg += f" | {json.dumps(detail)}"
         getattr(self.logger, level.lower(), self.logger.info)(msg)
 
+    def _write_anchor(self, last_hash: str) -> None:
+        """Persist the chain anchor atomically alongside the ledger.
+
+        The chained hashes alone cannot prove the ledger's *tail* exists:
+        truncating the last N lines (or deleting the file) leaves a chain
+        that still verifies. The anchor pins the expected final hash and
+        entry count outside the ledger file itself.
+        """
+        anchor = {
+            "last_hash": last_hash,
+            "entry_count": self._written_event_count,
+            "ledger_file": self.ledger_file.name,
+        }
+        atomic_json_write(self.ledger_anchor_file, json.dumps(anchor, indent=2))
+
+    def _read_anchor(self) -> dict | None:
+        """Load the anchor sidecar. Returns None when no anchor exists."""
+        if not self.ledger_anchor_file.exists():
+            return None
+        try:
+            anchor = json.loads(
+                self.ledger_anchor_file.read_text(encoding="utf-8")
+            )
+        except (json.JSONDecodeError, OSError) as exc:
+            # An unreadable anchor is itself a tamper signal — never treat
+            # it as "no anchor", which would let truncation pass unnoticed.
+            self.logger.error("[TAMPER CHECK] Anchor file unreadable: %s", exc)
+            return {"last_hash": "UNREADABLE", "entry_count": -1}
+        if not isinstance(anchor, dict):
+            self.logger.error("[TAMPER CHECK] Anchor file malformed (not a dict)")
+            return {"last_hash": "UNREADABLE", "entry_count": -1}
+        return anchor
+
     def verify_ledger(self) -> bool:
         """
-        Walk the JSONL ledger and verify the chained-hash integrity.
+        Walk the JSONL ledger and verify the chained-hash integrity,
+        then check the tail against the persisted anchor.
 
         Returns True if the entire ledger is intact; False if tampering detected.
         """
+        anchor = self._read_anchor()
+
         if not self.ledger_file.exists():
+            if anchor is not None:
+                self.logger.error(
+                    "[TAMPER DETECTED] Ledger file is missing but anchor "
+                    "records %s written events.", anchor.get("entry_count"),
+                )
+                return False
             return True
 
         with open(self.ledger_file, encoding="utf-8") as f:
             lines = [line.strip() for line in f if line.strip()]
 
         if not lines:
+            if anchor is not None:
+                self.logger.error(
+                    "[TAMPER DETECTED] Ledger file is empty but anchor "
+                    "records %s written events.", anchor.get("entry_count"),
+                )
+                return False
             return True
 
         prev_hash = "GENESIS"
@@ -237,6 +302,21 @@ class GovernanceLogger:
                 )
                 return False
             prev_hash = computed_hash
+
+        if anchor is not None:
+            if anchor.get("entry_count") != len(lines):
+                self.logger.error(
+                    "[TAMPER DETECTED] Ledger has %s events but anchor "
+                    "records %s — tail truncation suspected.",
+                    len(lines), anchor.get("entry_count"),
+                )
+                return False
+            if anchor.get("last_hash") != prev_hash:
+                self.logger.error(
+                    "[TAMPER DETECTED] Final ledger hash %r does not match "
+                    "anchored hash %r.", prev_hash, anchor.get("last_hash"),
+                )
+                return False
 
         self.logger.info(
             "[TAMPER CHECK] Ledger integrity verified — %s events OK.", len(lines)

@@ -13,6 +13,9 @@ Revision history
 1.2   2026-06-08   Taste fixes: dry_run support, instance lock, use atomic_json_write,
                     module-level _FORBIDDEN regex, warn on no-role fail-open, re-raise
                     on bad row_filter, document first-role-wins strategy.
+1.3   2026-06-11   Concurrency fix: lock now held across the full
+                    read-modify-write of _policies, not just inside _save —
+                    concurrent mutations could interleave and lose updates.
 """
 
 import json
@@ -76,10 +79,11 @@ class AccessPolicy:
             return {"roles": {}, "user_roles": {}, "dataset_policies": {}}
 
     def _save(self) -> None:
-        with self._lock:
-            self._policies["updated_utc"] = datetime.now(timezone.utc).isoformat()
-            data = json.dumps(self._policies, indent=2)
-            atomic_json_write(self.policy_file, data)
+        # Caller must hold self._lock: the lock has to span the whole
+        # read-modify-write, not just the serialise-and-write tail.
+        self._policies["updated_utc"] = datetime.now(timezone.utc).isoformat()
+        data = json.dumps(self._policies, indent=2)
+        atomic_json_write(self.policy_file, data)
 
     def add_role(
         self,
@@ -103,13 +107,14 @@ class AccessPolicy:
         if self.dry_run:
             logger.info("[RBAC][DRY RUN] Would create role '%s'", role)
             return
-        self._policies["roles"][role] = {
-            "allowed_columns": allowed_columns,
-            "denied_columns": denied_columns or [],
-            "row_filter": row_filter,
-            "description": description,
-        }
-        self._save()
+        with self._lock:
+            self._policies["roles"][role] = {
+                "allowed_columns": allowed_columns,
+                "denied_columns": denied_columns or [],
+                "row_filter": row_filter,
+                "description": description,
+            }
+            self._save()
         self.gov.transformation_applied("RBAC_ROLE_CREATED", {
             "role": role,
             "allowed_columns": len(allowed_columns) if allowed_columns else "all",
@@ -125,10 +130,11 @@ class AccessPolicy:
         if self.dry_run:
             logger.info("[RBAC][DRY RUN] Would assign role '%s' to user '%s'", role, user)
             return
-        user_roles = self._policies["user_roles"].setdefault(user, [])
-        if role not in user_roles:
-            user_roles.append(role)
-        self._save()
+        with self._lock:
+            user_roles = self._policies["user_roles"].setdefault(user, [])
+            if role not in user_roles:
+                user_roles.append(role)
+            self._save()
         logger.info("[RBAC] Assigned role '%s' to user '%s'", role, user)
 
     def set_dataset_policy(
@@ -139,11 +145,12 @@ class AccessPolicy:
         if self.dry_run:
             logger.info("[RBAC][DRY RUN] Would set dataset policy for '%s'", dataset)
             return
-        self._policies["dataset_policies"][dataset] = {
-            "default_role": default_role,
-            "public": public,
-        }
-        self._save()
+        with self._lock:
+            self._policies["dataset_policies"][dataset] = {
+                "default_role": default_role,
+                "public": public,
+            }
+            self._save()
 
     def enforce(
         self,

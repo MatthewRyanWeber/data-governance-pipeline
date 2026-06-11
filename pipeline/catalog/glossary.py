@@ -12,6 +12,8 @@ Revision history
 1.1   2026-06-08   Taste fixes: dry_run support, instance-level lock,
                    atomic_json_write from helpers, input guard clauses,
                    extracted _term_matches helper.
+1.2   2026-06-11   Concurrency fix: lock now held across the full
+                   read-modify-write of _glossary, not just inside _save.
 """
 
 import json
@@ -69,13 +71,14 @@ class BusinessGlossary:
             return {}
 
     def _save(self) -> None:
-        with self._lock:
-            payload = {
-                "version": "1.0",
-                "updated_utc": datetime.now(timezone.utc).isoformat(),
-                "terms": self._glossary,
-            }
-            atomic_json_write(self.glossary_file, json.dumps(payload, indent=2))
+        # Caller must hold self._lock: the lock has to span the whole
+        # read-modify-write, not just the serialise-and-write tail.
+        payload = {
+            "version": "1.0",
+            "updated_utc": datetime.now(timezone.utc).isoformat(),
+            "terms": self._glossary,
+        }
+        atomic_json_write(self.glossary_file, json.dumps(payload, indent=2))
 
     def _term_matches(self, entry: dict, query: str) -> bool:
         """Check whether *entry* matches *query* on any searchable field."""
@@ -106,17 +109,18 @@ class BusinessGlossary:
             return
 
         key = term.lower()
-        self._glossary[key] = {
-            "term": term,
-            "definition": definition,
-            "domain": domain,
-            "owner": owner,
-            "columns": columns or [],
-            "synonyms": synonyms or [],
-            "tags": tags or [],
-            "updated_utc": datetime.now(timezone.utc).isoformat(),
-        }
-        self._save()
+        with self._lock:
+            self._glossary[key] = {
+                "term": term,
+                "definition": definition,
+                "domain": domain,
+                "owner": owner,
+                "columns": columns or [],
+                "synonyms": synonyms or [],
+                "tags": tags or [],
+                "updated_utc": datetime.now(timezone.utc).isoformat(),
+            }
+            self._save()
         self.gov.transformation_applied("GLOSSARY_TERM_ADDED", {
             "term": term, "domain": domain,
             "column_count": len(columns or []),
@@ -161,12 +165,13 @@ class BusinessGlossary:
             return False
 
         key = term.lower().strip()
-        if key in self._glossary:
+        with self._lock:
+            if key not in self._glossary:
+                return False
             del self._glossary[key]
             self._save()
-            logger.info("[GLOSSARY] Removed term '%s'", term)
-            return True
-        return False
+        logger.info("[GLOSSARY] Removed term '%s'", term)
+        return True
 
     def export(self) -> dict:
         """Export the full glossary as a dict."""

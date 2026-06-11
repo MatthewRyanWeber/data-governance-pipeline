@@ -18,6 +18,9 @@ Revision history
                    nonexistent, glossary search empty query, glossary
                    terms_for_column partial match, catalog dry-run for
                    tag_column/quality/delete, search on empty DB.
+2.1   2026-06-11   Regression tests: CatalogSearch tenant isolation on all
+                   four query paths (search, search_columns, find_pii_columns,
+                   datasets_by_owner), glossary concurrent add_term.
 """
 
 import json
@@ -341,6 +344,75 @@ class TestCatalogSearch(unittest.TestCase):
         # so we verify it doesn't raise and the search completes.
 
 
+class TestCatalogSearchTenantIsolation(unittest.TestCase):
+    """Regression: every CatalogSearch query path ignored tenant_id, so any
+    tenant could read every other tenant's datasets and columns."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.gov = GovernanceLogger("tenant_search_test", log_dir=self.tmp)
+        self.db_path = Path(self.tmp) / "tenant_catalog.db"
+
+        store_a = CatalogStore(self.gov, db_path=self.db_path, tenant_id="tenant_a")
+        df = pd.DataFrame({"email": ["alice@example.com"], "age": [30]})
+        store_a.register_dataset(
+            df, "customer_emails",
+            description="Customer email addresses",
+            owner="data-team", domain="CRM",
+        )
+        store_a.tag_column("customer_emails", "email", pii=True)
+
+        self.search_a = CatalogSearch(
+            self.gov, db_path=self.db_path, tenant_id="tenant_a",
+        )
+        self.search_b = CatalogSearch(
+            self.gov, db_path=self.db_path, tenant_id="tenant_b",
+        )
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_search_scoped_to_tenant(self):
+        self.assertGreater(len(self.search_a.search("customer")), 0)
+        self.assertEqual(self.search_b.search("customer"), [])
+
+    def test_search_like_fallback_scoped_to_tenant(self):
+        # Drop the FTS table to force the LIKE fallback path
+        import sqlite3
+        conn = sqlite3.connect(str(self.db_path))
+        conn.execute("DROP TABLE catalog_fts")
+        conn.commit()
+        conn.close()
+        logging.disable(logging.CRITICAL)
+        try:
+            self.assertGreater(len(self.search_a.search("customer")), 0)
+            self.assertEqual(self.search_b.search("customer"), [])
+        finally:
+            logging.disable(logging.NOTSET)
+
+    def test_search_columns_scoped_to_tenant(self):
+        self.assertGreater(len(self.search_a.search_columns("email")), 0)
+        self.assertEqual(self.search_b.search_columns("email"), [])
+
+    def test_find_pii_columns_scoped_to_tenant(self):
+        self.assertGreater(len(self.search_a.find_pii_columns()), 0)
+        self.assertEqual(self.search_b.find_pii_columns(), [])
+
+    def test_datasets_by_owner_scoped_to_tenant(self):
+        self.assertEqual(len(self.search_a.datasets_by_owner("data-team")), 1)
+        self.assertEqual(self.search_b.datasets_by_owner("data-team"), [])
+
+    def test_default_tenant_matches_catalog_store_default(self):
+        """A search built without tenant_id sees only 'default' tenant rows."""
+        default_store = CatalogStore(self.gov, db_path=self.db_path)
+        df = pd.DataFrame({"ssn": ["000-00-0000"]})
+        default_store.register_dataset(df, "default_ds", owner="default-team")
+        default_search = CatalogSearch(self.gov, db_path=self.db_path)
+        owners = {d["owner"] for d in default_search.datasets_by_owner("default-team")}
+        self.assertEqual(owners, {"default-team"})
+        self.assertEqual(default_search.datasets_by_owner("data-team"), [])
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 #  3. BusinessGlossary
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -574,6 +646,30 @@ class TestGlossaryPersistence(unittest.TestCase):
         self.assertIn("updated_utc", data)
         self.assertIn("terms", data)
         self.assertEqual(data["version"], "1.0")
+
+    def test_concurrent_add_term_loses_no_updates(self):
+        """Regression: the lock only covered _save, so concurrent add_term
+        calls could interleave the read-modify-write and drop terms."""
+        import threading
+        g = BusinessGlossary(self.gov, glossary_file=self.glossary_file)
+        errors = []
+
+        def add(index):
+            try:
+                g.add_term(f"Term {index}", f"Definition {index}")
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=add, args=(i,)) for i in range(10)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        self.assertEqual(errors, [])
+        self.assertEqual(len(g.list_terms()), 10)
+        persisted = json.loads(self.glossary_file.read_text(encoding="utf-8"))
+        self.assertEqual(len(persisted["terms"]), 10)
 
 
 if __name__ == "__main__":

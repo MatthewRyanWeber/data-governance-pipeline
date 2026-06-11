@@ -9,6 +9,9 @@ Revision history
 ────────────────
 1.0   2026-06-08   Initial release: 25 tests covering ledger, events, dry-run,
                    thread safety, verification, and cross-border inference.
+1.1   2026-06-11   Regression tests: failed write must not advance the hash
+                   chain, anchor file detects tail truncation and ledger
+                   deletion, af-south-1 region maps to ZA.
 """
 
 import hashlib
@@ -192,6 +195,111 @@ class TestVerifyLedger(unittest.TestCase):
     def test_empty_ledger_passes(self):
         # No events written, file does not exist
         self.assertTrue(self.gov.verify_ledger())
+
+
+class TestFailedWriteDoesNotPoisonChain(unittest.TestCase):
+    """Regression: _prev_hash used to advance before the write, so one
+    failed write broke prev_hash chaining for every later event."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.gov = GovernanceLogger("failwrite_test", log_dir=self.tmp)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_chain_intact_after_one_failed_write(self):
+        self.gov.pipeline_start({"source": "synth.csv"})
+
+        original_write = self.gov._writer.write
+
+        def failing_write(data):
+            raise IOError("disk full")
+
+        self.gov._writer.write = failing_write
+        with self.assertRaises(IOError):
+            self.gov.quality_event("LOST_EVENT", {"i": 1})
+        self.gov._writer.write = original_write
+
+        self.gov.pipeline_end({"rows": 10})
+
+        self.assertTrue(self.gov.verify_ledger())
+        with open(self.gov.ledger_file, encoding="utf-8") as f:
+            events = [json.loads(ln) for ln in f if ln.strip()]
+        self.assertEqual(len(events), 2)
+        self.assertEqual(events[1]["prev_hash"], events[0]["self_hash"])
+
+    def test_failed_event_not_recorded_in_memory(self):
+        self.gov.pipeline_start({"source": "synth.csv"})
+        self.gov._writer.write = lambda data: (_ for _ in ()).throw(IOError("disk full"))
+        with self.assertRaises(IOError):
+            self.gov.quality_event("LOST_EVENT", {"i": 1})
+        self.assertEqual(len(self.gov.ledger_entries), 1)
+
+
+class TestLedgerAnchor(unittest.TestCase):
+    """Regression: without an anchor, deleting the ledger or truncating its
+    tail produced a chain that still verified as intact."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.gov = GovernanceLogger("anchor_test", log_dir=self.tmp)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _silence_and_verify(self):
+        logging.disable(logging.CRITICAL)
+        try:
+            return self.gov.verify_ledger()
+        finally:
+            logging.disable(logging.NOTSET)
+
+    def test_anchor_file_written_alongside_ledger(self):
+        self.gov.pipeline_start({"source": "synth.csv"})
+        self.assertTrue(self.gov.ledger_anchor_file.exists())
+        anchor = json.loads(
+            self.gov.ledger_anchor_file.read_text(encoding="utf-8")
+        )
+        self.assertEqual(anchor["entry_count"], 1)
+        self.assertEqual(anchor["last_hash"],
+                         self.gov.ledger_entries[-1]["self_hash"])
+
+    def test_tail_truncation_detected(self):
+        for i in range(3):
+            self.gov.quality_event("CHECK", {"i": i})
+        with open(self.gov.ledger_file, encoding="utf-8") as f:
+            lines = f.readlines()
+        with open(self.gov.ledger_file, "w", encoding="utf-8") as f:
+            f.writelines(lines[:-1])
+        self.assertFalse(self._silence_and_verify())
+
+    def test_ledger_deletion_detected(self):
+        self.gov.pipeline_start({"source": "synth.csv"})
+        self.gov._writer.close()
+        self.gov.ledger_file.unlink()
+        self.assertFalse(self._silence_and_verify())
+
+    def test_emptied_ledger_detected(self):
+        self.gov.pipeline_start({"source": "synth.csv"})
+        self.gov._writer.close()
+        self.gov.ledger_file.write_text("", encoding="utf-8")
+        self.assertFalse(self._silence_and_verify())
+
+    def test_intact_ledger_with_anchor_passes(self):
+        for i in range(5):
+            self.gov.quality_event("CHECK", {"i": i})
+        self.assertTrue(self.gov.verify_ledger())
+
+    def test_no_anchor_no_ledger_passes(self):
+        # Nothing was ever written — nothing to detect
+        self.assertTrue(self.gov.verify_ledger())
+
+    def test_dry_run_writes_no_anchor(self):
+        gov = GovernanceLogger("anchor_dry", log_dir=self.tmp, dry_run=True)
+        gov.pipeline_start({"source": "synth.csv"})
+        self.assertFalse(gov.ledger_anchor_file.exists())
+        self.assertTrue(gov.verify_ledger())
 
 
 class TestEventMethods(unittest.TestCase):
@@ -382,6 +490,20 @@ class TestCrossBorderTransferInference(unittest.TestCase):
     def test_unknown_db_returns_none(self):
         result = _infer_cross_border_transfer("sqlite", "local.db")
         self.assertIsNone(result)
+
+    def test_snowflake_af_south_region_maps_to_za(self):
+        """Regression: the dead 'a' prefix never matched af-south-1, so
+        South Africa transfers were silently logged as US (the default)."""
+        result = _infer_cross_border_transfer("snowflake", "acct.af-south-1/db")
+        self.assertIsNotNone(result)
+        self.assertEqual(result["dest_country"], "ZA")
+
+    def test_redshift_af_south_region_maps_to_za(self):
+        result = _infer_cross_border_transfer(
+            "redshift", "cluster.af-south-1.redshift.amazonaws.com/db",
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(result["dest_country"], "ZA")
 
 
 class TestSourceNameSanitisation(unittest.TestCase):

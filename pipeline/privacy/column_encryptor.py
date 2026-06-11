@@ -5,6 +5,14 @@ Two-way encryption (unlike SHA-256 masking) — values can be recovered
 by authorised parties with the key. GDPR Art. 32 / CCPA §1798.150.
 
 Layer 3 — imports from Layer 0 (constants), Layer 1 (governance_logger).
+
+Revision history
+────────────────
+1.0   2026-06-08   Initial release.
+1.1   2026-06-11   Exposed in-use key via active_key property (the old warning
+                   pointed at generate_key(), which mints a NEW key — following
+                   it lost the data); cast columns to object dtype before
+                   assigning ciphertext (pandas 3.x raises on numeric columns).
 """
 
 import logging
@@ -33,6 +41,7 @@ class ColumnEncryptor:
 
     def __init__(self, gov: "GovernanceLogger", key: str | None = None) -> None:
         self.gov = gov
+        self._active_key: str | None = None
         if not HAS_CRYPTO:
             logger.warning("[ENCRYPT] cryptography library not installed — encryption disabled.")
             self._fernet = None
@@ -41,19 +50,32 @@ class ColumnEncryptor:
         from cryptography.fernet import Fernet
 
         if key:
-            self._fernet = Fernet(key.encode() if isinstance(key, str) else key)
+            key_bytes = key.encode() if isinstance(key, str) else key
+            self._fernet = Fernet(key_bytes)
+            self._active_key = key_bytes.decode()
         else:
             new_key = Fernet.generate_key()
             self._fernet = Fernet(new_key)
+            self._active_key = new_key.decode()
             logger.warning(
                 "[ENCRYPT] No key provided — generated new key. "
-                "Retrieve it via ColumnEncryptor.generate_key() or store "
-                "the key returned by this constructor before it is lost.",
+                "Read it from the active_key property and store it securely "
+                "before this process exits, or the data is unrecoverable.",
             )
-            self._generated_key = new_key.decode()
+
+    @property
+    def active_key(self) -> str | None:
+        """The key this instance encrypts and decrypts with.
+
+        This is the only handle on an auto-generated key — generate_key()
+        returns a fresh random key every call and can never recover it.
+        Returns None when the cryptography library is unavailable.
+        """
+        return self._active_key
 
     @staticmethod
     def generate_key() -> str:
+        """Mint a NEW random Fernet key — unrelated to any instance's key."""
         if HAS_CRYPTO:
             from cryptography.fernet import Fernet
             return Fernet.generate_key().decode()
@@ -74,6 +96,10 @@ class ColumnEncryptor:
                     "ENCRYPTED:" + fernet.encrypt(v.encode()).decode()
                     for v in vals
                 ]
+                # Ciphertext is a string; assigning it into an int/float
+                # column raises TypeError under pandas 3.x.
+                if df[col].dtype != object:
+                    df[col] = df[col].astype(object)
                 df.loc[mask, col] = encrypted
             self.gov.encryption_applied(col, "AES-256-CBC/Fernet")
         return df

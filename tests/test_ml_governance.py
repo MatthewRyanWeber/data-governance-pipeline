@@ -16,6 +16,8 @@ Revision history
                    registry operations, re-register preserves created_utc,
                    impact analysis governance event, concurrent-safe
                    register via threading.
+2.1   2026-06-11   Regression test: concurrent log_training_run calls must
+                   produce unique, gapless version numbers.
 """
 
 import json
@@ -614,6 +616,35 @@ class TestThreadSafety(unittest.TestCase):
 
         self.assertEqual(errors, [])
         self.assertEqual(len(self.reg.list_models()), 10)
+
+    def test_concurrent_training_runs_get_unique_versions(self):
+        """Regression: version = len(versions) + 1 was computed outside the
+        lock, so two concurrent runs could be assigned the same version."""
+        self.reg.register_model("contended", framework="sklearn")
+        versions = []
+        errors = []
+
+        def train(index):
+            try:
+                versions.append(
+                    self.reg.log_training_run(
+                        "contended", metrics={"accuracy": 0.5 + index / 100},
+                    )
+                )
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=train, args=(i,)) for i in range(10)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        self.assertEqual(errors, [])
+        self.assertEqual(sorted(versions), list(range(1, 11)))
+        stored = self.reg._registry["models"]["contended"]["versions"]
+        stored_versions = sorted(run["version"] for run in stored)
+        self.assertEqual(stored_versions, list(range(1, 11)))
 
 
 if __name__ == "__main__":
