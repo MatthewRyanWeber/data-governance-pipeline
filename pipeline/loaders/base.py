@@ -13,6 +13,8 @@ Revision history
 1.3   2026-06-09   Added opt-in circuit breaker helpers.
 1.4   2026-06-09   Added _retry_with_backoff helper with circuit breaker integration.
 1.5   2026-06-09   Added field-level encryption helpers for transparent encrypt-on-load.
+1.6   2026-06-11   Added backtick to _BAD_CHARS_RE so column names cannot break
+                   out of backtick-quoted DDL (BigQuery, Databricks, ClickHouse).
 """
 
 import contextlib
@@ -29,7 +31,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_BAD_CHARS_RE = re.compile(r"[;'\"\-\-/\\*]")
+# Backtick included: several loaders quote identifiers with ` (BigQuery,
+# Databricks, ClickHouse), so a backtick in a column name would break out
+# of the quoting and allow SQL injection through DDL/MERGE strings.
+_BAD_CHARS_RE = re.compile(r"[;'\"`\-/\\*]")
 
 
 def validate_sql_identifier(name: str, label: str = "identifier") -> str:

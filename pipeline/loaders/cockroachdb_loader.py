@@ -8,6 +8,8 @@ Revision history
 ────────────────
 1.0   2026-06-07   Extracted from pipeline_v3.py (class CockroachDBLoader).
 1.1   2026-06-07   Added Layer 4 docstring convention.
+1.2   2026-06-11   if_exists='upsert' without natural_keys now raises instead
+                   of silently appending.
 """
 
 import logging
@@ -47,11 +49,18 @@ class CockroachDBLoader(BaseLoader):
             return 0
         self._validate_config(cfg, ["host", "user", "db_name"])
 
+        if if_exists == "upsert" and not natural_keys:
+            # Silently appending here would duplicate rows the caller
+            # expected to be merged.
+            raise ValueError(
+                "CockroachDBLoader: if_exists='upsert' requires natural_keys."
+            )
+
         if df.empty:
             return 0
 
         with self._engine_scope(cfg) as engine:
-            if if_exists == "upsert" and natural_keys:
+            if if_exists == "upsert":
                 rows = self._upsert(df, engine, table, natural_keys)
             else:
                 pg_if_exists = "replace" if if_exists == "replace" else "append"

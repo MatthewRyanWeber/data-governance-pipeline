@@ -5,6 +5,11 @@ EU data-residency detection for GDPR compliance.
 Revision history
 ────────────────
 1.0   2026-06-07   Extracted from pipeline_v3.py (class BigQueryLoader).
+1.1   2026-06-11   Config validated before cfg['dataset'] is read so missing
+                   keys raise ConfigValidationError, not KeyError; upsert now
+                   calls _ensure_table so the first upsert into a new table
+                   works; all-key MERGE omits WHEN MATCHED instead of
+                   referencing a non-existent __noop__ column.
 """
 
 import time
@@ -96,10 +101,12 @@ class BigQueryLoader(BaseLoader):
         natural_keys: list[str] | None = None,
     ) -> None:
         validate_sql_identifier(table, "table")
-        validate_sql_identifier(cfg["dataset"], "dataset")
         if self._dry_run_guard(table, len(df)):
             return
-        self._validate_config(cfg, ["project"])
+        # Validate before reading cfg['dataset'] so a missing key surfaces
+        # as ConfigValidationError instead of an opaque KeyError.
+        self._validate_config(cfg, ["project", "dataset"])
+        validate_sql_identifier(cfg["dataset"], "dataset")
         if natural_keys:
             self._upsert(df, cfg, table, natural_keys)
         else:
@@ -153,6 +160,11 @@ class BigQueryLoader(BaseLoader):
         fqt_tmp = f"`{project}.{dataset}.{tmp_table}`"
         tmp_id = f"{project}.{dataset}.{tmp_table}"
 
+        # First upsert into a fresh dataset must create the target,
+        # otherwise the MERGE fails with "table not found".
+        dataset_ref = _bigquery.DatasetReference(project, dataset)
+        self._ensure_table(client, dataset_ref, table, df, "append")
+
         tmp_cfg = _bigquery.LoadJobConfig(
             write_disposition=_bigquery.WriteDisposition.WRITE_TRUNCATE
         )
@@ -163,17 +175,23 @@ class BigQueryLoader(BaseLoader):
         on_clause = " AND ".join(
             f"t.`{k}` = s.`{k}`" for k in natural_keys
         )
-        update_clause = ", ".join(
-            f"t.`{c}` = s.`{c}`" for c in non_key_cols
-        )
         all_cols = ", ".join(f"`{c}`" for c in df.columns)
         stage_cols = ", ".join(f"s.`{c}`" for c in df.columns)
+
+        # When every column is a key there is nothing to update: omit the
+        # WHEN MATCHED clause instead of referencing a non-existent column.
+        if non_key_cols:
+            update_clause = ", ".join(
+                f"t.`{c}` = s.`{c}`" for c in non_key_cols
+            )
+            matched_part = f"WHEN MATCHED THEN\n                UPDATE SET {update_clause}"
+        else:
+            matched_part = ""
 
         merge_sql = f"""
             MERGE {fqt} AS t
             USING {fqt_tmp} AS s ON ({on_clause})
-            WHEN MATCHED THEN
-                UPDATE SET {update_clause or "t.__noop__ = 0"}
+            {matched_part}
             WHEN NOT MATCHED THEN
                 INSERT ({all_cols}) VALUES ({stage_cols})
         """

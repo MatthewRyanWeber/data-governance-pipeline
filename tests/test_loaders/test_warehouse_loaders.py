@@ -13,6 +13,10 @@ Revision history
 ────────────────
 1.0   2026-06-09   Initial release: MERGE coverage for clickhouse, hana,
                    firebolt, databricks, yellowbrick, redshift, cockroachdb.
+1.1   2026-06-11   Databricks upsert now stages into a real Delta table (no
+                   temp view); ClickHouse upsert checks the existing table
+                   engine, so the mock returns an empty engine lookup; added
+                   coverage for the non-ReplacingMergeTree error.
 """
 
 import sys
@@ -57,6 +61,8 @@ class TestClickHouseUpsert(unittest.TestCase):
         self.client = MagicMock()
 
     def test_upsert_uses_replacingmergetree_and_optimize(self):
+        # Empty engine lookup result: the target table does not exist yet.
+        self.client.command.return_value = ""
         with patch.object(self.loader, "_client", return_value=self.client):
             self.loader.load(_DF, {"database": "db"}, "events", natural_keys=["id"])
         commands = [str(c[0][0]) for c in self.client.command.call_args_list]
@@ -64,6 +70,16 @@ class TestClickHouseUpsert(unittest.TestCase):
         self.assertTrue(any("ORDER BY (`id`)" in c for c in commands))
         self.assertTrue(any("OPTIMIZE TABLE" in c and "FINAL" in c for c in commands))
         self.client.insert_df.assert_called_once()
+
+    def test_upsert_into_plain_mergetree_raises(self):
+        """A pre-existing plain MergeTree would silently duplicate rows."""
+        self.client.command.return_value = "MergeTree"
+        with patch.object(self.loader, "_client", return_value=self.client):
+            with self.assertRaises(ValueError) as ctx:
+                self.loader.load(_DF, {"database": "db"}, "events",
+                                 natural_keys=["id"])
+        self.assertIn("ReplacingMergeTree", str(ctx.exception))
+        self.client.insert_df.assert_not_called()
 
     def test_replace_drops_table(self):
         with patch.object(self.loader, "_client", return_value=self.client):
@@ -120,14 +136,28 @@ class TestDatabricksUpsert(unittest.TestCase):
         self.cursor = self.conn.cursor.return_value
         self.cfg = {"server_hostname": "h", "http_path": "/p"}
 
-    def test_merge_uses_backtick_quoting_and_temp_view(self):
+    def test_merge_uses_backtick_quoting_and_staging_table(self):
         with patch.object(self.loader, "_connect", return_value=self.conn):
             self.loader.load(_DF, self.cfg, "t", natural_keys=["id"])
         sql = _cursor_sql(self.cursor)
-        self.assertTrue(any("CREATE OR REPLACE TEMPORARY VIEW" in s for s in sql))
+        # Upsert stages into a real Delta table, not a VALUES-literal view.
+        self.assertTrue(any("CREATE OR REPLACE TABLE" in s
+                            and "_pipeline_stage_" in s for s in sql))
         merge = next(s for s in sql if "MERGE INTO" in s)
         self.assertIn("t.`id` = s.`id`", merge)
         self.assertIn("t.`name` = s.`name`", merge)
+        self.assertNotIn("TEMPORARY VIEW", " ".join(sql))
+        self.assertTrue(any("DROP TABLE IF EXISTS" in s
+                            and "_pipeline_stage_" in s for s in sql))
+
+    def test_bulk_insert_batches_rows_per_statement(self):
+        """Bulk insert must pack many rows per INSERT, not one per row."""
+        with patch.object(self.loader, "_connect", return_value=self.conn):
+            self.loader.load(_DF, self.cfg, "t", if_exists="append")
+        inserts = [str(c[0][0]) for c in self.cursor.execute.call_args_list
+                   if c[0] and "INSERT INTO" in str(c[0][0])]
+        self.assertEqual(len(inserts), 1)          # 2 rows fit one statement
+        self.assertEqual(inserts[0].count("(?, ?)"), 2)  # multi-row VALUES
 
 
 class TestYellowbrickUpsert(unittest.TestCase):

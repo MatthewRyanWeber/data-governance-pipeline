@@ -4,6 +4,10 @@ Amazon Redshift loader with S3-staged COPY, MERGE upsert, and retry.
 Revision history
 ────────────────
 1.0   2026-06-07   Extracted from pipeline_v3.py (class RedshiftLoader).
+1.1   2026-06-11   Upsert stages via the S3 COPY path when s3_bucket is
+                   configured; all-key MERGE omits WHEN MATCHED instead of
+                   referencing __noop__; SQLAlchemy engines disposed via
+                   _engine_scope.
 """
 
 import os
@@ -203,30 +207,43 @@ class RedshiftLoader(BaseLoader):
         fqt = f'"{schema}"."{table}"'
         fqt_tmp = f'"{schema}"."{tmp_table}"'
 
+        # Stage through S3 COPY when configured — to_sql row-by-row staging
+        # is orders of magnitude slower for warehouse-sized frames.
+        if cfg.get("s3_bucket"):
+            self._s3_copy(df, cfg, tmp_table, "replace")
+        else:
+            with self._engine_scope(cfg) as engine:
+                with engine.begin() as _conn:
+                    df.to_sql(tmp_table, _conn, if_exists="replace",
+                              index=False, schema=schema, chunksize=500,
+                              method="multi")
+
         conn = self._connect(cfg)
         cur = conn.cursor()
         try:
-            engine = self._engine(cfg)
-            with engine.begin() as _conn:
-                df.to_sql(tmp_table, _conn, if_exists="replace", index=False,
-                          schema=schema, chunksize=500, method="multi")
-
             non_key_cols = [c for c in df.columns if c not in natural_keys]
             on_clause = " AND ".join(
                 f't."{k}" = s."{k}"' for k in natural_keys
-            )
-            update_clause = ", ".join(
-                f't."{c}" = s."{c}"' for c in non_key_cols
             )
             all_cols = ", ".join(f'"{c}"' for c in df.columns)
             stage_cols = ", ".join(f's."{c}"' for c in df.columns)
 
             self._ensure_table(cur, df, fqt, "append")
 
+            # When every column is a key there is nothing to update: omit
+            # WHEN MATCHED instead of referencing a non-existent __noop__.
+            if non_key_cols:
+                update_clause = ", ".join(
+                    f't."{c}" = s."{c}"' for c in non_key_cols
+                )
+                matched_part = f"WHEN MATCHED THEN UPDATE SET {update_clause}"
+            else:
+                matched_part = ""
+
             merge_sql = f"""
                 MERGE INTO {fqt} AS t
                 USING {fqt_tmp} AS s ON ({on_clause})
-                WHEN MATCHED THEN UPDATE SET {update_clause or '"__noop__"=0'}
+                {matched_part}
                 WHEN NOT MATCHED THEN INSERT ({all_cols}) VALUES ({stage_cols})
             """
             cur.execute(merge_sql)
@@ -243,17 +260,18 @@ class RedshiftLoader(BaseLoader):
             conn.close()
 
     def _sql_fallback(self, df, cfg, table, if_exists):
-        engine = self._engine(cfg)
         schema = cfg.get("schema", "public")
-        for attempt in range(1, 4):
-            try:
-                with engine.begin() as _conn:
-                    df.to_sql(table, _conn, if_exists=if_exists, index=False,
-                              schema=schema, chunksize=500, method="multi")
-                return
-            except Exception as exc:
-                if attempt == 3:
-                    raise
-                wait = 2 ** attempt
-                self.gov.retry_attempt(attempt, 3, float(wait), exc)
-                time.sleep(wait)
+        with self._engine_scope(cfg) as engine:
+            for attempt in range(1, 4):
+                try:
+                    with engine.begin() as _conn:
+                        df.to_sql(table, _conn, if_exists=if_exists,
+                                  index=False, schema=schema, chunksize=500,
+                                  method="multi")
+                    return
+                except Exception as exc:
+                    if attempt == 3:
+                        raise
+                    wait = 2 ** attempt
+                    self.gov.retry_attempt(attempt, 3, float(wait), exc)
+                    time.sleep(wait)

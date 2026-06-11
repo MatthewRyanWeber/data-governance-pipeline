@@ -8,6 +8,11 @@ Revision history
 ────────────────
 1.0   2026-06-07   Extracted from pipeline_v3.py (class Db2Loader).
 1.1   2026-06-07   Added Layer 4 docstring convention.
+1.2   2026-06-11   Bulk insert runs with autocommit off and rolls back before
+                   each retry so partial batches are not duplicated; INSERT
+                   emits an explicit column list; all-key MERGE omits
+                   WHEN MATCHED instead of referencing __NOOP__; staging
+                   engine disposed via _engine_scope.
 """
 
 import time
@@ -100,10 +105,17 @@ class Db2Loader(BaseLoader):
         try:
             self._ensure_table(conn, df, fqt, if_exists)
 
+            # Explicit column list: positional VALUES against a pre-existing
+            # table with a different column order would land values in the
+            # wrong columns.
+            col_list = ", ".join(f'"{c.upper()}"' for c in df.columns)
             bind_vars = ", ".join("?" * len(df.columns))
-            insert_sql = f'INSERT INTO {fqt} VALUES ({bind_vars})'
+            insert_sql = f'INSERT INTO {fqt} ({col_list}) VALUES ({bind_vars})'
             stmt = _ibm_db.prepare(conn, insert_sql)
 
+            # ibm_db autocommits each row by default, so a failure mid-batch
+            # would leave a committed partial insert that a retry duplicates.
+            _ibm_db.autocommit(conn, _ibm_db.SQL_AUTOCOMMIT_OFF)
             rows = list(df.where(df.notna(), None).itertuples(index=False, name=None))
             for attempt in range(1, 4):
                 try:
@@ -111,6 +123,9 @@ class Db2Loader(BaseLoader):
                     _ibm_db.commit(conn)
                     break
                 except Exception as exc:
+                    # Discard the partial batch before retrying so the retry
+                    # starts from a clean transaction.
+                    _ibm_db.rollback(conn)
                     if attempt == 3:
                         raise
                     wait = 2 ** attempt
@@ -149,10 +164,10 @@ class Db2Loader(BaseLoader):
         fqt = f'"{schema}"."{table}"'
         fqt_tmp = f'"{schema}"."{tmp_table}"'
 
-        engine = self._engine(cfg)
-        with engine.begin() as conn_sa:
-            df.to_sql(tmp_table.lower(), conn_sa, if_exists="replace",
-                      index=False, schema=schema.lower(), chunksize=500)
+        with self._engine_scope(cfg) as engine:
+            with engine.begin() as conn_sa:
+                df.to_sql(tmp_table.lower(), conn_sa, if_exists="replace",
+                          index=False, schema=schema.lower(), chunksize=500)
 
         conn = _ibm_db.connect(self._conn_str(cfg), "", "")
         try:
@@ -160,16 +175,23 @@ class Db2Loader(BaseLoader):
             on_clause = " AND ".join(
                 f't."{k.upper()}" = s."{k.upper()}"' for k in natural_keys
             )
-            update_clause = ", ".join(
-                f't."{c.upper()}" = s."{c.upper()}"' for c in non_key_cols
-            ) or 't."__NOOP__" = 0'
             all_cols = ", ".join(f'"{c.upper()}"' for c in df.columns)
             stage_cols = ", ".join(f's."{c.upper()}"' for c in df.columns)
+
+            # When every column is a key there is nothing to update: omit
+            # WHEN MATCHED instead of referencing a non-existent __NOOP__.
+            if non_key_cols:
+                update_clause = ", ".join(
+                    f't."{c.upper()}" = s."{c.upper()}"' for c in non_key_cols
+                )
+                matched_part = f"WHEN MATCHED THEN UPDATE SET {update_clause} "
+            else:
+                matched_part = ""
 
             merge_sql = (
                 f"MERGE INTO {fqt} t "
                 f"USING {fqt_tmp} s ON ({on_clause}) "
-                f"WHEN MATCHED THEN UPDATE SET {update_clause} "
+                f"{matched_part}"
                 f"WHEN NOT MATCHED THEN INSERT ({all_cols}) VALUES ({stage_cols})"
             )
             _ibm_db.exec_immediate(conn, merge_sql)

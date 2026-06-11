@@ -7,6 +7,12 @@ Revision history
 ────────────────
 1.0   2026-06-07   Extracted from pipeline_v3.py (class OracleLoader).
 1.1   2026-06-07   Added Layer 4 docstring convention.
+1.2   2026-06-11   Rollback before each executemany retry so partial batches
+                   are not duplicated; INSERTs emit an explicit column list;
+                   load_complete reports rows actually inserted (excluding
+                   batcherrors quarantine); table-existence check honours
+                   cfg['schema'] via all_tables; all-key MERGE omits
+                   WHEN MATCHED instead of the non-updatable ROWID trick.
 """
 
 import time
@@ -74,24 +80,29 @@ class OracleLoader(BaseLoader):
             return
         self._validate_config(cfg, ["user", "password", "dsn"])
         if natural_keys:
-            self._upsert(df, cfg, table, natural_keys)
+            inserted = self._upsert(df, cfg, table, natural_keys)
         else:
-            self._array_insert(df, cfg, table, if_exists)
-        self.gov.load_complete(len(df), table)
+            inserted = self._array_insert(df, cfg, table, if_exists)
+        self.gov.load_complete(inserted, table)
         self.gov.destination_registered(
             "oracle", f"{cfg['dsn']}/{cfg.get('schema', cfg['user'])}", table,
         )
 
-    def _array_insert(self, df, cfg, table, if_exists):
+    def _array_insert(self, df, cfg, table, if_exists) -> int:
         schema = cfg.get("schema", "").upper()
         fqt = f'"{schema}"."{table}"' if schema else f'"{table}"'
         conn = self._connect(cfg)
         cur = conn.cursor()
+        inserted = len(df)
         try:
             self._ensure_table(cur, df, fqt, if_exists)
             conn.commit()
+            # Explicit column list: positional VALUES against a pre-existing
+            # table with a different column order would land values in the
+            # wrong columns.
+            col_list = ", ".join(f'"{c.upper()}"' for c in df.columns)
             bind_vars = ", ".join(f":{i+1}" for i in range(len(df.columns)))
-            insert_sql = f"INSERT INTO {fqt} VALUES ({bind_vars})"
+            insert_sql = f"INSERT INTO {fqt} ({col_list}) VALUES ({bind_vars})"
             rows = list(df.where(df.notna(), None).itertuples(index=False, name=None))
             for attempt in range(1, 4):
                 try:
@@ -104,19 +115,23 @@ class OracleLoader(BaseLoader):
                             logger.warning("[ORACLE] Row %d: %s",
                                            err.offset, err.message)
                     conn.commit()
+                    inserted = len(df) - len(batch_errors)
                     logger.info("[ORACLE] INSERT INTO %s -- %s rows OK, %d quarantined",
-                                fqt, f"{len(df) - len(batch_errors):,}",
-                                len(batch_errors))
+                                fqt, f"{inserted:,}", len(batch_errors))
                     break
                 except Exception as exc:
                     if attempt == 3:
                         raise
+                    # Discard any partially-executed batch before retrying,
+                    # otherwise the retry re-inserts rows that already landed.
+                    conn.rollback()
                     wait = 2 ** attempt
                     self.gov.retry_attempt(attempt, 3, float(wait), exc)
                     time.sleep(wait)
         finally:
             cur.close()
             conn.close()
+        return inserted
 
     def _ensure_table(self, cur, df, fqt, if_exists):
         col_defs = ", ".join(
@@ -129,15 +144,30 @@ class OracleLoader(BaseLoader):
             except Exception as exc:
                 logger.debug("Cleanup failed: %s", exc)
         table_name_raw = fqt.split(".")[-1].strip('"')
-        cur.execute(
-            "DECLARE v_cnt NUMBER; BEGIN "
-            "SELECT COUNT(*) INTO v_cnt FROM user_tables "
-            "WHERE table_name = :tname; "
-            "IF v_cnt = 0 THEN "
-            f"EXECUTE IMMEDIATE 'CREATE TABLE {fqt} ({col_defs})'; "
-            "END IF; END;",
-            {"tname": table_name_raw},
-        )
+        fqt_parts = fqt.split(".")
+        owner = fqt_parts[0].strip('"') if len(fqt_parts) == 2 else ""
+        if owner:
+            # user_tables only sees the connected user's tables; with an
+            # explicit schema the check must go through all_tables + owner.
+            cur.execute(
+                "DECLARE v_cnt NUMBER; BEGIN "
+                "SELECT COUNT(*) INTO v_cnt FROM all_tables "
+                "WHERE table_name = :tname AND owner = :towner; "
+                "IF v_cnt = 0 THEN "
+                f"EXECUTE IMMEDIATE 'CREATE TABLE {fqt} ({col_defs})'; "
+                "END IF; END;",
+                {"tname": table_name_raw, "towner": owner},
+            )
+        else:
+            cur.execute(
+                "DECLARE v_cnt NUMBER; BEGIN "
+                "SELECT COUNT(*) INTO v_cnt FROM user_tables "
+                "WHERE table_name = :tname; "
+                "IF v_cnt = 0 THEN "
+                f"EXECUTE IMMEDIATE 'CREATE TABLE {fqt} ({col_defs})'; "
+                "END IF; END;",
+                {"tname": table_name_raw},
+            )
 
     def _upsert(self, df, cfg, table, natural_keys):
         schema = cfg.get("schema", "").upper()
@@ -151,8 +181,9 @@ class OracleLoader(BaseLoader):
             self._ensure_table(cur, df, fqt, "append")
             self._ensure_table(cur, df, fqt_tmp, "replace")
             conn.commit()
+            col_list = ", ".join(f'"{c.upper()}"' for c in df.columns)
             bind_vars = ", ".join(f":{i+1}" for i in range(len(df.columns)))
-            insert_sql = f"INSERT INTO {fqt_tmp} VALUES ({bind_vars})"
+            insert_sql = f"INSERT INTO {fqt_tmp} ({col_list}) VALUES ({bind_vars})"
             rows = list(df.where(df.notna(), None).itertuples(index=False, name=None))
             cur.executemany(insert_sql, rows)
             conn.commit()
@@ -160,14 +191,21 @@ class OracleLoader(BaseLoader):
             on_clause = " AND ".join(
                 f't."{k.upper()}" = s."{k.upper()}"' for k in natural_keys
             )
-            update_clause = ", ".join(
-                f't."{c.upper()}" = s."{c.upper()}"' for c in non_key_cols
-            ) or "t.ROWID = t.ROWID"
             all_cols = ", ".join(f'"{c.upper()}"' for c in df.columns)
             stage_cols = ", ".join(f's."{c.upper()}"' for c in df.columns)
+            # When every column is a key there is nothing to update: omit
+            # WHEN MATCHED (ROWID is not updatable, so the old no-op trick
+            # raised ORA-38104).
+            if non_key_cols:
+                update_clause = ", ".join(
+                    f't."{c.upper()}" = s."{c.upper()}"' for c in non_key_cols
+                )
+                matched_part = f"WHEN MATCHED THEN UPDATE SET {update_clause} "
+            else:
+                matched_part = ""
             merge_sql = (
                 f"MERGE INTO {fqt} t USING {fqt_tmp} s ON ({on_clause}) "
-                f"WHEN MATCHED THEN UPDATE SET {update_clause} "
+                f"{matched_part}"
                 f"WHEN NOT MATCHED THEN INSERT ({all_cols}) VALUES ({stage_cols})"
             )
             cur.execute(merge_sql)
@@ -177,6 +215,7 @@ class OracleLoader(BaseLoader):
                 "ORACLE_UPSERT_COMPLETE",
                 {"table": table, "natural_keys": natural_keys, "rows": len(df)},
             )
+            return len(df)
         finally:
             try:
                 cur.execute(f"DROP TABLE {fqt_tmp} PURGE")

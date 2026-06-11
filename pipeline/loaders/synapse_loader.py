@@ -5,6 +5,10 @@ and Entra ID (AAD) authentication support.
 Revision history
 ────────────────
 1.0   2026-06-07   Extracted from pipeline_v3.py (class SynapseLoader).
+1.1   2026-06-11   to_sql chunksize now derived from SQL Server's 2,100
+                   bind-parameter limit so wide frames no longer fail;
+                   all-key MERGE omits WHEN MATCHED instead of referencing
+                   __noop__; SQLAlchemy engines disposed via _engine_scope.
 """
 
 import time
@@ -65,6 +69,13 @@ class SynapseLoader(BaseLoader):
             f"mssql+pyodbc:///?odbc_connect="
             f"{urllib.parse.quote_plus(conn_str)}"
         )
+
+    @staticmethod
+    def _safe_chunksize(df) -> int:
+        # SQL Server caps a statement at 2,100 bind parameters; with
+        # method="multi" each row consumes len(columns) parameters, so the
+        # chunk size must shrink as the frame gets wider (2000 leaves headroom).
+        return max(1, 2000 // max(1, len(df.columns)))
 
     def load(self, df, cfg, table, if_exists="append", natural_keys=None):
         validate_sql_identifier(table, "table")
@@ -164,10 +175,11 @@ class SynapseLoader(BaseLoader):
         tmp_table = f"{table}__stage__{int(time.time())}"
         fqt = f"[{schema}].[{table}]"
         fqt_tmp = f"[{schema}].[{tmp_table}]"
-        engine = self._engine(cfg)
-        with engine.begin() as _conn:
-            df.to_sql(tmp_table, _conn, if_exists="replace", index=False,
-                      schema=schema, chunksize=500, method="multi")
+        with self._engine_scope(cfg) as engine:
+            with engine.begin() as _conn:
+                df.to_sql(tmp_table, _conn, if_exists="replace", index=False,
+                          schema=schema, chunksize=self._safe_chunksize(df),
+                          method="multi")
         conn_str = self._connection_string(cfg)
         conn = _pyodbc.connect(conn_str, autocommit=False)
         cur = conn.cursor()
@@ -176,17 +188,22 @@ class SynapseLoader(BaseLoader):
             on_clause = " AND ".join(
                 f"t.[{k}] = s.[{k}]" for k in natural_keys
             )
-            update_clause = ", ".join(
-                f"t.[{c}] = s.[{c}]" for c in non_key_cols
-            )
             all_cols = ", ".join(f"[{c}]" for c in df.columns)
             stage_cols = ", ".join(f"s.[{c}]" for c in df.columns)
             self._ensure_table(cur, df, fqt, "append")
+            # When every column is a key there is nothing to update: omit
+            # WHEN MATCHED instead of referencing a non-existent __noop__.
+            if non_key_cols:
+                update_clause = ", ".join(
+                    f"t.[{c}] = s.[{c}]" for c in non_key_cols
+                )
+                matched_part = f"WHEN MATCHED THEN UPDATE SET {update_clause} "
+            else:
+                matched_part = ""
             merge_sql = (
                 f"MERGE {fqt} AS t "
                 f"USING {fqt_tmp} AS s ON ({on_clause}) "
-                f"WHEN MATCHED THEN UPDATE SET "
-                f"{update_clause or 't.[__noop__]=0'} "
+                f"{matched_part}"
                 f"WHEN NOT MATCHED THEN INSERT ({all_cols}) "
                 f"VALUES ({stage_cols});"
             )
@@ -204,17 +221,19 @@ class SynapseLoader(BaseLoader):
             conn.close()
 
     def _sql_fallback(self, df, cfg, table, if_exists):
-        engine = self._engine(cfg)
         schema = cfg.get("schema", "dbo")
-        for attempt in range(1, 4):
-            try:
-                with engine.begin() as _conn:
-                    df.to_sql(table, _conn, if_exists=if_exists, index=False,
-                              schema=schema, chunksize=500, method="multi")
-                return
-            except Exception as exc:
-                if attempt == 3:
-                    raise
-                wait = 2 ** attempt
-                self.gov.retry_attempt(attempt, 3, float(wait), exc)
-                time.sleep(wait)
+        with self._engine_scope(cfg) as engine:
+            for attempt in range(1, 4):
+                try:
+                    with engine.begin() as _conn:
+                        df.to_sql(table, _conn, if_exists=if_exists,
+                                  index=False, schema=schema,
+                                  chunksize=self._safe_chunksize(df),
+                                  method="multi")
+                    return
+                except Exception as exc:
+                    if attempt == 3:
+                        raise
+                    wait = 2 ** attempt
+                    self.gov.retry_attempt(attempt, 3, float(wait), exc)
+                    time.sleep(wait)

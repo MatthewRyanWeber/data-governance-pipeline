@@ -9,13 +9,21 @@ Revision history
 1.0   2026-06-07   Initial extraction from pipeline_v3.py.
 1.1   2026-06-08   Added validate_loader_config() for parse-time config checks.
 1.2   2026-06-09   Upgraded validate_loader_config to raise ConfigValidationError.
+1.3   2026-06-11   resolve_loader() now installs a column-name validation guard
+                   on every loader's load() so DataFrame columns are checked for
+                   SQL-injection characters before any loader builds DDL/MERGE
+                   strings.  Rebuilt the required-keys registry per db_type to
+                   match what each loader actually reads (snowflake: account,
+                   databricks: server_hostname, firebolt: username|client_id,
+                   datasphere: tenant_url, mongodb: db_name, etc.).
 """
 
+import functools
 import importlib
 import logging
 
 from pipeline.exceptions import ConfigValidationError
-from pipeline.loaders.base import validate_sql_identifier
+from pipeline.loaders.base import validate_column_names, validate_sql_identifier
 
 logger = logging.getLogger(__name__)
 
@@ -78,12 +86,42 @@ _LAZY_DISPATCH: dict[str, tuple[str, str, bool, bool]] = {
 }
 
 
+def _install_column_name_guard(loader_class: type) -> type:
+    """
+    Wrap loader_class.load so DataFrame column names are validated before
+    the loader runs.
+
+    Roughly ten loaders interpolate df.columns into DDL/MERGE f-strings, so
+    a malicious column name is an injection vector everywhere.  Guarding at
+    dispatch covers every loader without touching each implementation.
+    The wrap is applied to the class once and preserves the original
+    signature via functools.wraps, keeping the dispatch contract intact.
+    """
+    if loader_class.__dict__.get("_column_guard_installed", False):
+        return loader_class
+
+    original_load = getattr(loader_class, "load")
+
+    @functools.wraps(original_load)
+    def load_with_column_validation(self, df, *args, **kwargs):
+        if hasattr(df, "columns"):
+            validate_column_names(df, label=loader_class.__name__)
+        return original_load(self, df, *args, **kwargs)
+
+    setattr(loader_class, "load", load_with_column_validation)
+    setattr(loader_class, "_column_guard_installed", True)
+    return loader_class
+
+
 def resolve_loader(db_type: str) -> tuple[type, bool, bool]:
     """
     Resolve a db_type string to (LoaderClass, needs_db_type_arg, uses_mongo_sig).
 
     Imports the loader module lazily on first access so that only the
     required SDK is loaded.  Case-insensitive.
+
+    The returned class has its load() wrapped with column-name validation
+    so DataFrame columns are injection-checked before any SQL is built.
 
     Raises ValueError if db_type is not recognised.
     """
@@ -96,6 +134,7 @@ def resolve_loader(db_type: str) -> tuple[type, bool, bool]:
     module_path, class_name, needs_db_type, uses_mongo = _LAZY_DISPATCH[key]
     module = importlib.import_module(module_path)
     loader_class = getattr(module, class_name)
+    _install_column_name_guard(loader_class)
     return loader_class, needs_db_type, uses_mongo
 
 
@@ -125,18 +164,52 @@ _VECTOR_TYPES: frozenset[str] = _SQL_VECTOR_TYPES | frozenset({
     "chroma", "milvus", "pinecone", "weaviate", "qdrant", "lancedb",
 })
 
-# Minimum required cfg keys per db_type category.
-# Each entry is (set_of_db_types, list_of_required_keys).
-_REQUIRED_KEYS: list[tuple[frozenset[str], list[str]]] = [
-    (frozenset({"sqlite"}),                               ["db_name"]),
-    (_SQL_TYPES - {"sqlite"},                              ["host"]),
-    (frozenset({"sftp"}),                                  ["host", "username"]),
-    (frozenset({"s3", "gcs", "azure_blob"}),               ["bucket"]),
-    (frozenset({"mongodb"}),                               ["connection_string|host"]),
-    (frozenset({"pgvector"}),                              ["host", "db_name"]),
-    (frozenset({"snowflake_vector"}),                      ["host"]),
-    (frozenset({"bigquery_vector"}),                       ["host"]),
-]
+# Required cfg keys per db_type, mirroring what each loader's own
+# _validate_config / load() actually demands.  'a|b' means at least one
+# of the alternatives must be present.  db_types with no hard config
+# requirement (e.g. clickhouse defaults to localhost) are omitted.
+_REQUIRED_KEYS: dict[str, list[str]] = {
+    "sqlite":           ["db_name"],
+    "postgresql":       ["host", "db_name", "user", "password"],
+    "postgres":         ["host", "db_name", "user", "password"],
+    "mysql":            ["host", "db_name", "user", "password"],
+    "mssql":            ["host", "db_name", "user", "password"],
+    "snowflake":        ["account", "user", "password", "database", "warehouse"],
+    "bigquery":         ["project", "dataset"],
+    "redshift":         ["host", "database", "user", "password"],
+    "synapse":          ["host", "database"],
+    "databricks":       ["server_hostname", "http_path"],
+    "oracle":           ["user", "password", "dsn"],
+    "db2":              ["host", "user", "password", "database"],
+    "firebolt":         ["username|client_id", "database", "account_name", "engine_name"],
+    "yellowbrick":      ["host", "database", "user", "password"],
+    "hana":             ["host", "user", "password"],
+    "datasphere":       ["tenant_url", "token|token_url"],
+    "mongodb":          ["db_name"],
+    "quickbooks":       ["client_id", "client_secret", "refresh_token", "realm_id"],
+    "sftp":             ["host", "username"],
+    "s3":               ["bucket"],
+    "gcs":              ["bucket"],
+    "azure_blob":       ["bucket"],
+    "athena":           ["database", "s3_data_dir", "s3_staging_dir"],
+    "duckdb":           ["db_path"],
+    "motherduck":       ["db_path"],
+    "deltalake":        ["path"],
+    "iceberg":          ["namespace"],
+    "fabric":           ["workspace_id", "lakehouse_id"],
+    "postgis":          ["host", "user", "password", "db_name"],
+    "cockroachdb":      ["host", "user", "db_name"],
+    "kafka":            ["bootstrap_servers"],
+    "pgvector":         ["host", "db_name"],
+    "snowflake_vector": ["account", "user", "password", "database", "warehouse"],
+    "bigquery_vector":  ["project", "dataset"],
+    "chroma":           ["id_column"],
+    "milvus":           ["uri"],
+    "pinecone":         ["api_key", "index_name"],
+    "weaviate":         ["url"],
+    "qdrant":           ["url|path|memory"],
+    "lancedb":          ["db_path|uri"],
+}
 
 
 def validate_loader_config(db_type: str, cfg: dict, table: str = "") -> None:
@@ -161,17 +234,14 @@ def validate_loader_config(db_type: str, cfg: dict, table: str = "") -> None:
 
     # ── Required config keys ────────────────────────────────────────────
     missing: list[str] = []
-    for type_set, required in _REQUIRED_KEYS:
-        if key not in type_set:
-            continue
-        for req in required:
-            if "|" in req:
-                alternatives = req.split("|")
-                if not any(cfg.get(alt) for alt in alternatives):
-                    missing.append("|".join(alternatives))
-            else:
-                if not cfg.get(req):
-                    missing.append(req)
+    for req in _REQUIRED_KEYS.get(key, []):
+        if "|" in req:
+            alternatives = req.split("|")
+            if not any(cfg.get(alt) for alt in alternatives):
+                missing.append("|".join(alternatives))
+        else:
+            if not cfg.get(req):
+                missing.append(req)
 
     if missing:
         raise ConfigValidationError(db_type=db_type, missing_keys=missing)

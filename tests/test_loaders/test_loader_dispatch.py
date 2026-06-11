@@ -853,7 +853,7 @@ class TestKafkaLoader(unittest.TestCase):
         call_kwargs = mock_producer.send.call_args_list[0][1]
         self.assertIn("key", call_kwargs)
 
-    def test_load_upsert_sends_tombstones(self):
+    def test_load_upsert_sends_no_tombstones(self):
         loader = self._loader()
         mock_producer = MagicMock()
         mock_future   = MagicMock()
@@ -864,12 +864,37 @@ class TestKafkaLoader(unittest.TestCase):
             loader.load(self._df(), self._cfg(key_column="id"),
                         if_exists="upsert", natural_keys=["id"])
 
-        # 3 tombstones + 3 records = 6 sends
-        self.assertEqual(mock_producer.send.call_count, 6)
-        # Verify at least one tombstone (value=None)
+        # One keyed record per row, no tombstones: a tombstone sent before a
+        # record that then fails delivery would delete the previous value.
+        self.assertEqual(mock_producer.send.call_count, 3)
         all_calls = [c[1] for c in mock_producer.send.call_args_list]
         tombstones = [c for c in all_calls if c.get("value") is None]
-        self.assertEqual(len(tombstones), 3)
+        self.assertEqual(len(tombstones), 0)
+
+    def test_load_upsert_without_natural_keys_raises(self):
+        loader = self._loader()
+        mock_producer = MagicMock()
+        with patch("kafka.KafkaProducer", return_value=mock_producer):
+            with self.assertRaises(ValueError) as ctx:
+                loader.load(self._df(), self._cfg(key_column="id"),
+                            if_exists="upsert")
+        self.assertIn("natural_keys", str(ctx.exception))
+        mock_producer.send.assert_not_called()
+
+    def test_topic_from_table_arg_passes_validation(self):
+        """Topic via the table arg (no cfg['topic']) must not fail validation."""
+        loader = self._loader()
+        mock_producer = MagicMock()
+        mock_future   = MagicMock()
+        mock_future.get.return_value = MagicMock()
+        mock_producer.send.return_value = mock_future
+
+        with patch("kafka.KafkaProducer", return_value=mock_producer):
+            rows = loader.load(self._df(),
+                               {"bootstrap_servers": "localhost:9092"},
+                               table="topic_from_arg")
+
+        self.assertEqual(rows, 3)
 
     def test_governance_event_fired(self):
         loader = self._loader()

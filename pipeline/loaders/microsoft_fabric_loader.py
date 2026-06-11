@@ -8,6 +8,10 @@ Revision history
 ────────────────
 1.0   2026-06-07   Extracted from pipeline_v3.py (class MicrosoftFabricLoader).
 1.1   2026-06-07   Added Layer 4 docstring convention.
+1.2   2026-06-11   format='delta' raises RuntimeError when deltalake is not
+                   installed instead of silently degrading to parquet; parquet
+                   append now reads + concatenates + rewrites instead of
+                   overwriting the existing file.
 """
 
 import logging
@@ -75,7 +79,15 @@ class MicrosoftFabricLoader(BaseLoader):
 
         fs = adlfs.AzureBlobFileSystem(**fs_kwargs)
 
-        if fmt == "delta" and HAS_DELTALAKE:
+        if fmt == "delta":
+            if not HAS_DELTALAKE:
+                # Silently degrading to parquet would hand back a Lakehouse
+                # file the caller's Delta tooling cannot read.
+                raise RuntimeError(
+                    "MicrosoftFabricLoader: format='delta' requires the "
+                    "deltalake package.\n"
+                    "Install with:  pip install deltalake"
+                )
             import deltalake
             abfs_path = f"abfs://{full_path.rsplit('/', 1)[0]}"
             storage_opts = {"bearer_token": token} if token else {}
@@ -86,10 +98,22 @@ class MicrosoftFabricLoader(BaseLoader):
                 storage_options=storage_opts,
             )
         else:
+            arrow_table = pa.Table.from_pandas(df, preserve_index=False)
+            if if_exists == "append" and fs.exists(full_path):
+                # A single Parquet file cannot be appended to in place:
+                # read + concat + rewrite, otherwise append silently
+                # overwrites the existing data.
+                with fs.open(full_path, "rb") as existing_file:
+                    existing_table = pq.read_table(existing_file)
+                arrow_table = pa.concat_tables(
+                    [existing_table, arrow_table], promote_options="default"
+                )
+                logger.info(
+                    "[FABRIC] append: rewriting %s with %d existing + %d "
+                    "new rows.", full_path, existing_table.num_rows, len(df),
+                )
             buf = io.BytesIO()
-            pq.write_table(
-                pa.Table.from_pandas(df, preserve_index=False), buf
-            )
+            pq.write_table(arrow_table, buf)
             buf.seek(0)
             with fs.open(full_path, "wb") as f:
                 f.write(buf.getvalue())

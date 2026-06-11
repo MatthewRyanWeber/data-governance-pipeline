@@ -8,13 +8,17 @@ Revision history
 ────────────────
 1.0   2026-06-07   Extracted from pipeline_v3.py (class DeltaLakeLoader).
 1.1   2026-06-07   Added Layer 4 docstring convention.
+1.2   2026-06-11   First upsert into a non-existent table falls back to a
+                   plain write instead of crashing; natural_keys validated
+                   as SQL identifiers before interpolation into the merge
+                   predicate.
 """
 
 import logging
 from typing import TYPE_CHECKING
 
 from pipeline.constants import HAS_DELTALAKE
-from pipeline.loaders.base import BaseLoader
+from pipeline.loaders.base import BaseLoader, validate_sql_identifier
 
 if TYPE_CHECKING:
     from pipeline.governance_logger import GovernanceLogger
@@ -59,6 +63,8 @@ class DeltaLakeLoader(BaseLoader):
         arrow_table = pa.Table.from_pandas(df, preserve_index=False)
 
         if if_exists == "upsert" and natural_keys:
+            for key in natural_keys:
+                validate_sql_identifier(key, "natural_key")
             missing = [k for k in natural_keys if k not in df.columns]
             if missing:
                 raise ValueError(
@@ -68,16 +74,34 @@ class DeltaLakeLoader(BaseLoader):
             predicate = " AND ".join(
                 f"t.{k} = s.{k}" for k in natural_keys
             )
-            dt = deltalake.DeltaTable(path, storage_options=storage_opts)
-            (dt.merge(
-                source=arrow_table,
-                predicate=predicate,
-                source_alias="s",
-                target_alias="t",
-             )
-             .when_matched_update_all()
-             .when_not_matched_insert_all()
-             .execute())
+            try:
+                dt = deltalake.DeltaTable(path, storage_options=storage_opts)
+            except Exception as exc:
+                # First upsert into a brand-new destination: there is no
+                # table to merge into yet, so the write itself is the upsert.
+                logger.warning(
+                    "DeltaLakeLoader: no Delta table at %s yet (%s) — "
+                    "writing initial data instead of merging.", path, exc,
+                )
+                dt = None
+            if dt is None:
+                deltalake.write_deltalake(  # type: ignore[call-overload]
+                    path,
+                    arrow_table,
+                    mode="append",
+                    schema_mode=schema_mode,
+                    storage_options=storage_opts or None,
+                )
+            else:
+                (dt.merge(
+                    source=arrow_table,
+                    predicate=predicate,
+                    source_alias="s",
+                    target_alias="t",
+                 )
+                 .when_matched_update_all()
+                 .when_not_matched_insert_all()
+                 .execute())
         else:
             mode = "overwrite" if if_exists == "replace" else "append"
             deltalake.write_deltalake(  # type: ignore[call-overload]

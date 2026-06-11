@@ -8,6 +8,8 @@ Revision history
 ────────────────
 1.0   2026-06-07   Extracted from pipeline_v3.py (class HanaLoader).
 1.1   2026-06-07   Added Layer 4 docstring convention.
+1.2   2026-06-11   Upsert staging table is dropped in a finally block so a
+                   failed MERGE no longer leaks the stage table.
 """
 
 import logging
@@ -111,8 +113,11 @@ class HanaLoader(BaseLoader):
             {update_part}
             WHEN NOT MATCHED THEN INSERT ({insert_cols}) VALUES ({insert_vals})
         """
-        cur.execute(merge_sql)
-        self._drop_table(cur, schema, stage)
+        # Drop in finally: a failed MERGE must not leak the stage table.
+        try:
+            cur.execute(merge_sql)
+        finally:
+            self._drop_table(cur, schema, stage)
 
     def load(self, df, cfg, table, if_exists="append", natural_keys=None):
         schema = cfg.get("schema", "PIPELINE")

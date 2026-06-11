@@ -5,6 +5,10 @@ GDPR-safe truncation.
 Revision history
 ────────────────
 1.0   2026-06-07   Extracted from pipeline_v3.py (class SnowflakeLoader).
+1.1   2026-06-11   Upsert now creates the target table before MERGE; all-key
+                   MERGE omits WHEN MATCHED instead of referencing __NOOP__;
+                   temp CSV no longer leaks when _connect fails; SQLAlchemy
+                   engines disposed via _engine_scope.
 """
 
 import time
@@ -118,6 +122,11 @@ class SnowflakeLoader(BaseLoader):
         import os
         import pathlib
 
+        # Connect first: writing the temp CSV before a failed connect would
+        # leak the file because the unlink lives in the finally below.
+        conn = self._connect(cfg)
+        cur = conn.cursor()
+
         with tempfile.NamedTemporaryFile(
             suffix=".csv.gz", delete=False, mode="wb"
         ) as tmp:
@@ -126,8 +135,6 @@ class SnowflakeLoader(BaseLoader):
         df.to_csv(tmp_path, index=False, compression="gzip")
         stage_file = pathlib.Path(tmp_path).name
 
-        conn = self._connect(cfg)
-        cur = conn.cursor()
         try:
             schema = cfg.get("schema", "PUBLIC")
             fqt = f'"{cfg["database"]}"."{schema}"."{table.upper()}"'
@@ -198,42 +205,53 @@ class SnowflakeLoader(BaseLoader):
         fqt = f'"{cfg["database"]}"."{schema}"."{table.upper()}"'
         fqt_tmp = f'"{cfg["database"]}"."{schema}"."{tmp_table}"'
 
-        engine = self._engine(cfg)
-        for attempt in range(1, 4):
-            try:
-                with engine.begin() as _conn:
-                    df.to_sql(
-                        tmp_table.lower(), _conn,
-                        if_exists="replace", index=False, chunksize=500,
-                        method="multi",
-                    )
-                break
-            except Exception as exc:
-                if attempt == 3:
-                    raise
-                wait = 2 ** attempt
-                self.gov.retry_attempt(attempt, 3, float(wait), exc)
-                time.sleep(wait)
+        with self._engine_scope(cfg) as engine:
+            for attempt in range(1, 4):
+                try:
+                    with engine.begin() as _conn:
+                        df.to_sql(
+                            tmp_table.lower(), _conn,
+                            if_exists="replace", index=False, chunksize=500,
+                            method="multi",
+                        )
+                    break
+                except Exception as exc:
+                    if attempt == 3:
+                        raise
+                    wait = 2 ** attempt
+                    self.gov.retry_attempt(attempt, 3, float(wait), exc)
+                    time.sleep(wait)
 
         conn = self._connect(cfg)
         cur = conn.cursor()
         try:
+            # First upsert into a fresh destination must create the target,
+            # otherwise MERGE fails with "object does not exist".
+            self._ensure_table(cur, df, fqt, "append")
+
             non_key_cols = [c for c in df.columns if c not in natural_keys]
             on_clause = " AND ".join(
                 f't."{k}" = s."{k}"' for k in natural_keys
             )
-            update_clause = ", ".join(
-                f't."{c}" = s."{c}"' for c in non_key_cols
-            ) or "t.__NOOP__ = 0"
             all_cols = ", ".join(f'"{c}"' for c in df.columns)
             stage_cols = ", ".join(f's."{c}"' for c in df.columns)
+
+            # When every column is a key there is nothing to update, so the
+            # WHEN MATCHED clause is omitted entirely (a __NOOP__ column would
+            # not exist and the statement would fail).
+            if non_key_cols:
+                update_clause = ", ".join(
+                    f't."{c}" = s."{c}"' for c in non_key_cols
+                )
+                matched_part = f"WHEN MATCHED THEN\n                    UPDATE SET {update_clause}"
+            else:
+                matched_part = ""
 
             merge_sql = f"""
                 MERGE INTO {fqt} AS t
                 USING {fqt_tmp} AS s
                 ON ({on_clause})
-                WHEN MATCHED THEN
-                    UPDATE SET {update_clause}
+                {matched_part}
                 WHEN NOT MATCHED THEN
                     INSERT ({all_cols}) VALUES ({stage_cols})
             """
@@ -255,21 +273,21 @@ class SnowflakeLoader(BaseLoader):
     # ── SQLAlchemy fallback ───────────────────────────────────────────────
 
     def _sql_fallback(self, df, cfg, table, if_exists):
-        engine = self._engine(cfg)
-        for attempt in range(1, 4):
-            try:
-                with engine.begin() as conn:
-                    df.to_sql(
-                        table.lower(), conn,
-                        if_exists=if_exists, index=False,
-                        chunksize=500, method="multi",
-                    )
-                return
-            except Exception as exc:
-                if attempt == 3:
-                    raise
-                wait = 2 ** attempt
-                self.gov.retry_attempt(attempt, 3, float(wait), exc)
-                logger.warning("Attempt %d/3 failed. Retrying in %ds...",
-                               attempt, wait)
-                time.sleep(wait)
+        with self._engine_scope(cfg) as engine:
+            for attempt in range(1, 4):
+                try:
+                    with engine.begin() as conn:
+                        df.to_sql(
+                            table.lower(), conn,
+                            if_exists=if_exists, index=False,
+                            chunksize=500, method="multi",
+                        )
+                    return
+                except Exception as exc:
+                    if attempt == 3:
+                        raise
+                    wait = 2 ** attempt
+                    self.gov.retry_attempt(attempt, 3, float(wait), exc)
+                    logger.warning("Attempt %d/3 failed. Retrying in %ds...",
+                                   attempt, wait)
+                    time.sleep(wait)

@@ -11,6 +11,8 @@ Revision history
 1.2   2026-06-08   Fixed SQL injection: query() now rejects mutating statements.
 1.3   2026-06-09   Fix broken upsert: create a unique index on the natural keys
                    so ON CONFLICT has a target; DO NOTHING when no non-key cols.
+1.4   2026-06-11   if_exists='upsert' without natural_keys now raises instead
+                   of silently appending.
 """
 
 import logging
@@ -65,6 +67,12 @@ class DuckDBLoader(BaseLoader):
             raise ValueError("DuckDBLoader: table name is required.")
         if not cfg.get("db_path"):
             raise ValueError("DuckDBLoader: cfg must contain 'db_path'.")
+        if if_exists == "upsert" and not natural_keys:
+            # Silently appending here would duplicate rows the caller
+            # expected to be merged.
+            raise ValueError(
+                "DuckDBLoader: if_exists='upsert' requires natural_keys."
+            )
         validate_sql_identifier(table, "table")
         if self._dry_run_guard(table, len(df)):
             return 0
@@ -89,7 +97,7 @@ class DuckDBLoader(BaseLoader):
             if if_exists == "replace":
                 conn.execute(f"DROP TABLE IF EXISTS {table}")
                 conn.execute(f"CREATE TABLE {table} AS SELECT * FROM df")
-            elif if_exists == "upsert" and natural_keys:
+            elif if_exists == "upsert":
                 for k in natural_keys:
                     validate_sql_identifier(k, "natural_key")
                 missing = [k for k in natural_keys if k not in df.columns]

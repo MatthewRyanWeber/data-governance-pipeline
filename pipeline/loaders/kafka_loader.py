@@ -8,6 +8,11 @@ Revision history
 ────────────────
 1.0   2026-06-07   Extracted from pipeline_v3.py (class KafkaLoader).
 1.1   2026-06-07   Added Layer 4 docstring convention.
+1.2   2026-06-11   Topic supplied via the table arg no longer fails config
+                   validation; upsert requires natural_keys instead of
+                   silently appending; removed the pre-record tombstone sends
+                   that could delete data on partial failure (the keyed
+                   record alone wins log compaction).
 """
 
 import json
@@ -56,13 +61,19 @@ class KafkaLoader(BaseLoader):
             raise ValueError(
                 "KafkaLoader: cfg must contain 'bootstrap_servers'."
             )
+        if if_exists == "upsert" and not natural_keys:
+            raise ValueError(
+                "KafkaLoader: if_exists='upsert' requires natural_keys."
+            )
         if self._dry_run_guard(topic, len(df)):
             return 0
-        self._validate_config(cfg, ["bootstrap_servers", "topic"])
+        # Topic was already resolved from either source above, so only
+        # bootstrap_servers must come from cfg.
+        self._validate_config(cfg, ["bootstrap_servers"])
 
         producer = self._build_producer(cfg)
         try:
-            if if_exists == "upsert" and natural_keys:
+            if if_exists == "upsert":
                 rows = self._publish_upsert(df, producer, topic,
                                             natural_keys, cfg)
             else:
@@ -153,15 +164,18 @@ class KafkaLoader(BaseLoader):
         return sent
 
     def _publish_upsert(self, df, producer, topic, natural_keys, cfg) -> int:
-        """Upsert via tombstone + record for log-compacted topics."""
+        """Upsert via keyed records for log-compacted topics.
+
+        No tombstones: the keyed record alone wins compaction, and a
+        tombstone sent before a record that then fails delivery would
+        delete the previous value.
+        """
         key_col = (natural_keys[0] if len(natural_keys) == 1
                    else cfg.get("key_column"))
         records = df.to_dict(orient="records")
         futures = []
         for rec in records:
             key = str(rec[key_col]) if key_col and key_col in rec else None
-            if key:
-                producer.send(topic, key=key, value=None)
             futures.append(producer.send(topic, key=key, value=rec))
 
         sent = 0

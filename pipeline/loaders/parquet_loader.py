@@ -8,6 +8,8 @@ Revision history
 ────────────────
 1.0   2026-06-07   Extracted from pipeline_v3.py (class ParquetLoader).
 1.1   2026-06-07   Added Layer 4 docstring convention.
+1.2   2026-06-11   append to an existing single file now reads, concatenates,
+                   and rewrites it instead of silently overwriting.
 """
 
 import logging
@@ -77,12 +79,25 @@ class ParquetLoader(BaseLoader):
                 filesystem=self._filesystem(path, storage_opts),
             )
         else:
+            filesystem = self._filesystem(path, storage_opts)
+            if if_exists == "append" and self._target_exists(path, filesystem):
+                # A single Parquet file cannot be appended to in place:
+                # read + concat + rewrite, otherwise append silently
+                # overwrites the existing data.
+                existing_table = pq.read_table(path, filesystem=filesystem)
+                arrow_table = pa.concat_tables(
+                    [existing_table, arrow_table], promote_options="default"
+                )
+                logger.info(
+                    "[PARQUET] append: rewriting %s with %d existing + %d "
+                    "new rows.", path, existing_table.num_rows, len(df),
+                )
             pq.write_table(
                 arrow_table,
                 path,
                 compression=compression,
                 row_group_size=row_group_size,
-                filesystem=self._filesystem(path, storage_opts),
+                filesystem=filesystem,
             )
 
         self.gov._event(
@@ -96,6 +111,14 @@ class ParquetLoader(BaseLoader):
             },
         )
         return len(df)
+
+    @staticmethod
+    def _target_exists(path: str, filesystem) -> bool:
+        """Check target existence on local disk or the remote filesystem."""
+        if filesystem is not None:
+            return bool(filesystem.exists(path))
+        import pathlib
+        return pathlib.Path(path).exists()
 
     @staticmethod
     def _filesystem(path: str, storage_options: dict):

@@ -8,9 +8,16 @@ Revision history
 ────────────────
 1.0   2026-06-07   Extracted from pipeline_v3.py (class FireboltLoader).
 1.1   2026-06-07   Added Layer 4 docstring convention.
+1.2   2026-06-11   INSERT path uses chunked parameterized executemany instead
+                   of a whole-DataFrame VALUES literal; literal formatting
+                   (still used by the MERGE source) now handles numpy scalars;
+                   config validation accepts client_id/client_secret as an
+                   alternative to username/password; all-key MERGE omits
+                   WHEN MATCHED instead of referencing __noop__.
 """
 
 import logging
+import numbers
 from typing import TYPE_CHECKING
 
 import pandas as pd
@@ -69,7 +76,11 @@ class FireboltLoader(BaseLoader):
         validate_sql_identifier(table, "table")
         if self._dry_run_guard(table, len(df)):
             return
-        self._validate_config(cfg, ["username", "password", "database"])
+        # Firebolt supports two auth schemes; either satisfies validation.
+        self._validate_config(
+            cfg,
+            ["username|client_id", "database", "account_name", "engine_name"],
+        )
         if natural_keys:
             self._upsert(df, cfg, table, natural_keys)
         else:
@@ -82,20 +93,28 @@ class FireboltLoader(BaseLoader):
             table,
         )
 
+    _INSERT_CHUNK = 1_000
+
     def _insert(self, df, cfg, table, if_exists):
         conn = self._connect(cfg)
         cur = conn.cursor()
         try:
             self._ensure_table(cur, df, table, if_exists)
 
+            # Parameterized executemany: a whole-DataFrame VALUES literal
+            # serialized every value into one statement and mis-quoted
+            # numpy scalars.
             col_list = ", ".join(f'"{c}"' for c in df.columns)
-            values_rows = self._values_literal(df)
-
+            placeholders = ", ".join("?" * len(df.columns))
             insert_sql = (
                 f'INSERT INTO "{table}" ({col_list}) '
-                f"VALUES {values_rows}"
+                f"VALUES ({placeholders})"
             )
-            cur.execute(insert_sql)
+            rows = list(
+                df.where(df.notna(), None).itertuples(index=False, name=None)
+            )
+            for i in range(0, len(rows), self._INSERT_CHUNK):
+                cur.executemany(insert_sql, rows[i:i + self._INSERT_CHUNK])
             logger.info("[FIREBOLT] INSERT INTO %s -- %s rows", table, f"{len(df):,}")
         finally:
             cur.close()
@@ -121,9 +140,6 @@ class FireboltLoader(BaseLoader):
             on_clause = " AND ".join(
                 f't."{k}" = s."{k}"' for k in natural_keys
             )
-            update_clause = ", ".join(
-                f't."{c}" = s."{c}"' for c in non_key_cols
-            ) or '"__noop__" = 0'
             all_cols = ", ".join(f'"{c}"' for c in df.columns)
             stage_cols = ", ".join(f's."{c}"' for c in df.columns)
 
@@ -134,11 +150,21 @@ class FireboltLoader(BaseLoader):
                 f"AS s({col_typed}))"
             )
 
+            # When every column is a key there is nothing to update: omit
+            # WHEN MATCHED instead of referencing a non-existent __noop__.
+            if non_key_cols:
+                update_clause = ", ".join(
+                    f't."{c}" = s."{c}"' for c in non_key_cols
+                )
+                matched_part = f"WHEN MATCHED THEN UPDATE SET {update_clause} "
+            else:
+                matched_part = ""
+
             merge_sql = (
                 f'MERGE INTO "{table}" AS t '
                 f"USING {stage_subq} AS s "
                 f"ON ({on_clause}) "
-                f"WHEN MATCHED THEN UPDATE SET {update_clause} "
+                f"{matched_part}"
                 f"WHEN NOT MATCHED THEN INSERT ({all_cols}) VALUES ({stage_cols})"
             )
             cur.execute(merge_sql)
@@ -157,13 +183,21 @@ class FireboltLoader(BaseLoader):
         def _fmt(v):
             if v is None or (not isinstance(v, str) and pd.isna(v)):
                 return "NULL"
-            if isinstance(v, bool):
+            # pandas type check catches numpy.bool_, which is not a Python
+            # bool; without it booleans would fall through and be quoted.
+            if pd.api.types.is_bool(v):
                 return "TRUE" if v else "FALSE"
-            if isinstance(v, (int, float)):
+            # numbers.Integral/Real cover numpy scalars (int64, float64...)
+            # that fail a plain isinstance(int/float) check and would
+            # otherwise be emitted as quoted strings.
+            if isinstance(v, numbers.Integral):
+                return str(int(v))
+            if isinstance(v, numbers.Real):
                 import math
-                if math.isnan(v) or math.isinf(v):
+                value = float(v)
+                if math.isnan(value) or math.isinf(value):
                     return "NULL"
-                return str(v)
+                return repr(value)
             return "'" + str(v).replace("'", "''") + "'"
 
         return ", ".join(

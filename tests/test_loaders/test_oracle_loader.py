@@ -7,6 +7,8 @@ the MERGE upsert SQL (ON clause, UPDATE SET excludes keys, staging cleanup).
 Revision history
 ────────────────
 1.0   2026-06-09   Initial release: mocked array-insert and MERGE coverage.
+1.1   2026-06-11   INSERT now expected to carry an explicit column list;
+                   added rollback-before-retry and all-key MERGE coverage.
 """
 
 import unittest
@@ -47,8 +49,33 @@ class TestOracleLoader(unittest.TestCase):
     def test_array_insert_binds_positional(self):
         self._load(if_exists="append")
         sql = _executed_sql(self.cursor)
-        self.assertTrue(any('INSERT INTO "CUSTOMERS" VALUES (:1, :2)' in s for s in sql))
+        # Explicit column list guards against column-order drift on
+        # pre-existing tables.
+        self.assertTrue(any(
+            'INSERT INTO "CUSTOMERS" ("ID", "NAME") VALUES (:1, :2)' in s
+            for s in sql
+        ))
         self.cursor.executemany.assert_called()
+
+    def test_failed_batch_rolled_back_before_retry(self):
+        """A partial executemany must be rolled back before the retry,
+        otherwise already-inserted rows are duplicated."""
+        self.cursor.executemany.side_effect = [Exception("ORA-boom"), None]
+        with patch.object(self.loader, "_connect", return_value=self.conn), \
+             patch("pipeline.loaders.oracle_loader.time.sleep"):
+            self.loader.load(_DF, _CFG, "customers", if_exists="append")
+        self.conn.rollback.assert_called()
+
+    def test_all_key_upsert_omits_when_matched(self):
+        """When every column is a natural key the MERGE must omit
+        WHEN MATCHED entirely (ROWID is not updatable)."""
+        keys_only = pd.DataFrame({"id": [1, 2]})
+        with patch.object(self.loader, "_connect", return_value=self.conn):
+            self.loader.load(keys_only, _CFG, "customers", natural_keys=["id"])
+        merge = next(s for s in _executed_sql(self.cursor) if "MERGE INTO" in s)
+        self.assertNotIn("WHEN MATCHED", merge)
+        self.assertNotIn("ROWID", merge)
+        self.assertIn("WHEN NOT MATCHED THEN INSERT", merge)
 
     def test_replace_drops_table(self):
         self._load(if_exists="replace")

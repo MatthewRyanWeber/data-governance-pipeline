@@ -8,12 +8,19 @@ Revision history
 ────────────────
 1.0   2026-06-07   Extracted from pipeline_v3.py (class PostGISLoader).
 1.1   2026-06-07   Added Layer 4 docstring convention.
+1.2   2026-06-11   Geometry now written in the same INSERT as the row via
+                   ST_GeomFromText, replacing the ctid-offset UPDATE that
+                   mismatched geometries on concurrent writes and was O(n²).
 """
 
 import logging
 from typing import TYPE_CHECKING
 
-from pipeline.loaders.base import BaseLoader, validate_sql_identifier
+from pipeline.loaders.base import (
+    BaseLoader,
+    validate_column_names,
+    validate_sql_identifier,
+)
 
 if TYPE_CHECKING:
     from pipeline.governance_logger import GovernanceLogger
@@ -52,6 +59,7 @@ class PostGISLoader(BaseLoader):
 
         geom_col = cfg.get("geometry_col", "geometry")
         validate_sql_identifier(geom_col, "geometry_col")
+        validate_column_names(df, label="PostGISLoader")
         srid = int(cfg.get("srid", 4326))
         port = cfg.get("port", 5432)
         url = (
@@ -64,41 +72,13 @@ class PostGISLoader(BaseLoader):
                 conn.execute(sa_text("CREATE EXTENSION IF NOT EXISTS postgis"))
                 conn.commit()
 
-            df_meta = (df.drop(columns=[geom_col]) if geom_col in df.columns
-                       else df)
-            df_meta.to_sql(table, engine, if_exists=if_exists,
-                           index=False, method="multi", chunksize=500)
-
-            if geom_col in df.columns:
-                with engine.connect() as conn:
-                    conn.execute(sa_text(
-                        f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS "
-                        f"{geom_col} geometry"
-                    ))
-                    conn.commit()
-                    row_count = conn.execute(
-                        sa_text(f"SELECT COUNT(*) FROM {table}")
-                    ).scalar() or 0
-                    base_offset = row_count - len(df)
-                    if base_offset < 0:
-                        base_offset = 0
-
-                    params = [
-                        {"wkt": wkt, "srid": srid, "idx": base_offset + i}
-                        for i, wkt in enumerate(df[geom_col])
-                        if wkt is not None and wkt != ""
-                    ]
-                    if params:
-                        conn.execute(
-                            sa_text(
-                                f"UPDATE {table} SET {geom_col} = "
-                                f"ST_GeomFromText(:wkt, :srid) "
-                                f"WHERE ctid = (SELECT ctid FROM {table} "
-                                f"ORDER BY ctid OFFSET :idx LIMIT 1)"
-                            ),
-                            params,
-                        )
-                    conn.commit()
+            if geom_col not in df.columns:
+                df.to_sql(table, engine, if_exists=if_exists,
+                          index=False, method="multi", chunksize=500)
+            else:
+                self._load_with_geometry(
+                    df, engine, table, if_exists, geom_col, srid
+                )
         finally:
             engine.dispose()
 
@@ -114,3 +94,49 @@ class PostGISLoader(BaseLoader):
             },
         )
         return len(df)
+
+    @staticmethod
+    def _load_with_geometry(df, engine, table, if_exists, geom_col, srid):
+        """Insert rows and their geometry atomically in one INSERT per row.
+
+        The geometry is bound into the same statement via ST_GeomFromText,
+        so each geometry is guaranteed to land on its own row — matching
+        rows back by ctid offset after the fact corrupted spatial data
+        whenever another writer touched the table.
+        """
+        from sqlalchemy import text as sa_text
+
+        attribute_cols = [c for c in df.columns if c != geom_col]
+
+        # to_sql with zero rows creates/replaces the table shape only; the
+        # rows themselves go through the geometry-aware INSERT below.
+        df[attribute_cols].head(0).to_sql(
+            table, engine, if_exists=if_exists, index=False
+        )
+
+        quoted_cols = ", ".join(f'"{c}"' for c in attribute_cols)
+        value_binds = ", ".join(f":p{i}" for i in range(len(attribute_cols)))
+        insert_sql = sa_text(
+            f'INSERT INTO "{table}" ({quoted_cols}, "{geom_col}") '
+            f"VALUES ({value_binds}, ST_GeomFromText(:wkt, :srid))"
+        )
+
+        params = []
+        clean_df = df.where(df.notna(), None)
+        for row in clean_df.itertuples(index=False, name=None):
+            row_dict = dict(zip(clean_df.columns, row))
+            wkt = row_dict.pop(geom_col)
+            param = {f"p{i}": row_dict[c]
+                     for i, c in enumerate(attribute_cols)}
+            # ST_GeomFromText is strict, so a NULL wkt yields a NULL geometry.
+            param["wkt"] = wkt if wkt not in (None, "") else None
+            param["srid"] = srid
+            params.append(param)
+
+        with engine.connect() as conn:
+            conn.execute(sa_text(
+                f'ALTER TABLE "{table}" ADD COLUMN IF NOT EXISTS '
+                f'"{geom_col}" geometry'
+            ))
+            conn.execute(insert_sql, params)
+            conn.commit()

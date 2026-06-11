@@ -5,6 +5,10 @@ high-concurrency OLAP optimisations.
 Revision history
 ────────────────
 1.0   2026-06-07   Extracted from pipeline_v3.py (class ClickHouseLoader).
+1.1   2026-06-11   Nullable integer columns no longer cast to float64 (which
+                   silently corrupted values above 2^53); upsert refuses to
+                   run against a pre-existing table whose engine is not
+                   ReplacingMergeTree (plain MergeTree would duplicate rows).
 """
 
 import time
@@ -110,6 +114,20 @@ class ClickHouseLoader(BaseLoader):
     def _upsert(self, df, cfg, table, natural_keys):
         client = self._client(cfg)
         database = cfg.get("database", "default")
+        # Dedup-on-merge only works on ReplacingMergeTree; inserting into a
+        # pre-existing plain MergeTree would silently duplicate every row.
+        existing_engine = client.command(
+            "SELECT engine FROM system.tables "
+            "WHERE database = {db:String} AND name = {tbl:String}",
+            parameters={"db": database, "tbl": table},
+        )
+        if existing_engine and "ReplacingMergeTree" not in str(existing_engine):
+            raise ValueError(
+                f"ClickHouseLoader: cannot upsert into '{database}.{table}' — "
+                f"existing table engine is '{existing_engine}', but upsert "
+                "requires ReplacingMergeTree. Recreate the table with "
+                "ENGINE = ReplacingMergeTree or load with if_exists='append'."
+            )
         df_with_ts = df.copy()
         df_with_ts["_updated_at"] = int(time.time())
         self._ensure_table(
@@ -132,9 +150,19 @@ class ClickHouseLoader(BaseLoader):
 
     @staticmethod
     def _prepare_df(df):
+        import pandas as pd
+
         out = df.copy()
         for col in out.columns:
             dtype_str = str(out[col].dtype)
-            if dtype_str in ("Int64", "Int32", "UInt8", "boolean", "bool"):
-                out[col] = out[col].astype("float64")
+            if dtype_str in ("Int64", "Int32", "boolean"):
+                # Nullable extension dtypes: a float64 cast silently corrupts
+                # integers above 2^53, so keep exact ints in an object column
+                # with None for nulls.
+                out[col] = [
+                    None if pd.isna(value) else int(value)
+                    for value in out[col]
+                ]
+            elif dtype_str == "bool":
+                out[col] = out[col].astype("uint8")
         return out

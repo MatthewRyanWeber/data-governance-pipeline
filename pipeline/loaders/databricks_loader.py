@@ -5,12 +5,16 @@ and schema evolution.
 Revision history
 ────────────────
 1.0   2026-06-07   Extracted from pipeline_v3.py (class DatabricksLoader).
+1.1   2026-06-11   Bulk insert batches many rows per parameterized INSERT
+                   (executemany was one HTTP round-trip per row); upsert
+                   rewritten to stage into a real Delta staging table and
+                   MERGE from it (the VALUES-literal temp view was an
+                   injection risk, a Spark parse error, and unbounded in
+                   size); all-key MERGE omits WHEN MATCHED.
 """
 
 import logging
 from typing import TYPE_CHECKING
-
-import pandas as pd
 
 from pipeline.constants import HAS_DATABRICKS
 from pipeline.loaders.base import BaseLoader, validate_sql_identifier
@@ -99,6 +103,31 @@ class DatabricksLoader(BaseLoader):
             table,
         )
 
+    # Parameter budget per INSERT statement; keeps each request well under
+    # connector/endpoint limits while still batching hundreds of rows.
+    _PARAM_BUDGET = 2_000
+
+    def _insert_rows(self, cur, df, fqt) -> None:
+        """Insert df into fqt with multi-row parameterized INSERT statements.
+
+        executemany on this connector issues one HTTP round-trip per row;
+        packing many rows per statement turns N round-trips into
+        ceil(N / rows_per_statement).
+        """
+        col_list = ", ".join(f"`{c}`" for c in df.columns)
+        column_count = max(1, len(df.columns))
+        rows_per_statement = max(1, self._PARAM_BUDGET // column_count)
+        row_placeholder = "(" + ", ".join("?" * len(df.columns)) + ")"
+        rows = list(df.where(df.notna(), None).itertuples(index=False, name=None))
+        for i in range(0, len(rows), rows_per_statement):
+            chunk = rows[i:i + rows_per_statement]
+            placeholders = ", ".join([row_placeholder] * len(chunk))
+            insert_sql = (
+                f"INSERT INTO {fqt} ({col_list}) VALUES {placeholders}"
+            )
+            flat_params = [value for row in chunk for value in row]
+            cur.execute(insert_sql, flat_params)
+
     def _bulk_insert(self, df, cfg, table, if_exists, schema_evolution):
         fqt = self._fqt(cfg, table)
         conn = self._connect(cfg)
@@ -109,13 +138,7 @@ class DatabricksLoader(BaseLoader):
                     "SET spark.databricks.delta.schema.autoMerge.enabled = true"
                 )
             self._ensure_table(cur, df, fqt, if_exists)
-            col_list = ", ".join(f"`{c}`" for c in df.columns)
-            placeholders = ", ".join("?" * len(df.columns))
-            insert_sql = f"INSERT INTO {fqt} ({col_list}) VALUES ({placeholders})"
-            rows = list(df.where(df.notna(), None).itertuples(index=False, name=None))
-            batch_size = 1_000
-            for i in range(0, len(rows), batch_size):
-                cur.executemany(insert_sql, rows[i:i + batch_size])
+            self._insert_rows(cur, df, fqt)
             version = self._table_version(cur, fqt)
             logger.info("[DATABRICKS] INSERT INTO %s -- %s rows (Delta version %s)",
                         fqt, f"{len(df):,}", version)
@@ -140,7 +163,12 @@ class DatabricksLoader(BaseLoader):
     def _upsert(self, df, cfg, table, natural_keys, schema_evolution):
         fqt = self._fqt(cfg, table)
         import uuid
-        tmp_view = f"_pipeline_stage_{table}_{uuid.uuid4().hex[:8]}"
+        # Stage into a real Delta table, not a VALUES-literal temp view:
+        # literals are an injection/escaping hazard, serialize the whole frame
+        # into one statement, and the typed temp-view DDL was a Spark parse
+        # error in the first place.
+        stage_table = f"_pipeline_stage_{table}_{uuid.uuid4().hex[:8]}"
+        fqt_stage = self._fqt(cfg, stage_table)
         conn = self._connect(cfg)
         cur = conn.cursor()
         try:
@@ -149,43 +177,29 @@ class DatabricksLoader(BaseLoader):
                     "SET spark.databricks.delta.schema.autoMerge.enabled = true"
                 )
             self._ensure_table(cur, df, fqt, "append")
-            col_list = ", ".join(f"`{c}`" for c in df.columns)
+            self._ensure_table(cur, df, fqt_stage, "replace")
+            self._insert_rows(cur, df, fqt_stage)
+
             non_key_cols = [c for c in df.columns if c not in natural_keys]
-
-            def _fmt(v):
-                if v is None or (not isinstance(v, str) and pd.isna(v)):
-                    return "NULL"
-                if isinstance(v, bool):
-                    return "TRUE" if v else "FALSE"
-                if isinstance(v, (int, float)):
-                    return str(v)
-                return "'" + str(v).replace("'", "''") + "'"
-
-            value_rows = ", ".join(
-                "(" + ", ".join(_fmt(v) for v in row) + ")"
-                for row in df.itertuples(index=False, name=None)
-            )
             on_clause = " AND ".join(
                 f"t.`{k}` = s.`{k}`" for k in natural_keys
             )
-            update_clause = ", ".join(
-                f"t.`{c}` = s.`{c}`" for c in non_key_cols
-            ) or "`__noop__` = 0"
             all_cols = ", ".join(f"`{c}`" for c in df.columns)
             stage_cols = ", ".join(f"s.`{c}`" for c in df.columns)
-            col_typed = ", ".join(
-                f"`{c}` {self._DTYPE_MAP.get(str(df[c].dtype), 'STRING')}"
-                for c in df.columns
-            )
-            cur.execute(
-                f"CREATE OR REPLACE TEMPORARY VIEW `{tmp_view}` ({col_typed}) "
-                f"AS SELECT * FROM (VALUES {value_rows}) AS t({col_list})"
-            )
+            # When every column is a key there is nothing to update: omit
+            # WHEN MATCHED instead of referencing a non-existent __noop__.
+            if non_key_cols:
+                update_clause = ", ".join(
+                    f"t.`{c}` = s.`{c}`" for c in non_key_cols
+                )
+                matched_part = f"WHEN MATCHED THEN UPDATE SET {update_clause}"
+            else:
+                matched_part = ""
             merge_sql = f"""
                 MERGE INTO {fqt} AS t
-                USING `{tmp_view}` AS s
+                USING {fqt_stage} AS s
                 ON ({on_clause})
-                WHEN MATCHED THEN UPDATE SET {update_clause}
+                {matched_part}
                 WHEN NOT MATCHED THEN INSERT ({all_cols}) VALUES ({stage_cols})
             """
             cur.execute(merge_sql)
@@ -196,9 +210,9 @@ class DatabricksLoader(BaseLoader):
             conn.commit()
         finally:
             try:
-                cur.execute(f"DROP VIEW IF EXISTS `{tmp_view}`")
+                cur.execute(f"DROP TABLE IF EXISTS {fqt_stage}")
             except Exception as exc:
-                logger.debug("Cleanup failed: %s", exc)
+                logger.warning("[DATABRICKS] Staging table cleanup failed: %s", exc)
             cur.close()
             conn.close()
 

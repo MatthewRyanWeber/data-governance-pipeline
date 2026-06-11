@@ -8,6 +8,10 @@ Revision history
 ────────────────
 1.0   2026-06-07   Extracted from pipeline_v3.py (class AthenaLoader).
 1.1   2026-06-07   Added Layer 4 docstring convention.
+1.2   2026-06-11   if_exists='replace' now deletes the existing S3 objects
+                   under the data prefix before writing; the MSCK poll raises
+                   on FAILED/CANCELLED/timeout instead of reporting success;
+                   table and database are validated as SQL identifiers.
 """
 
 import time
@@ -15,7 +19,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from pipeline.constants import HAS_S3
-from pipeline.loaders.base import BaseLoader
+from pipeline.loaders.base import BaseLoader, validate_sql_identifier
 
 if TYPE_CHECKING:
     from pipeline.governance_logger import GovernanceLogger
@@ -49,9 +53,11 @@ class AthenaLoader(BaseLoader):
             )
         if not table:
             raise ValueError("AthenaLoader: table name is required.")
+        validate_sql_identifier(table, "table")
         if self._dry_run_guard(table, len(df)):
             return 0
         self._validate_config(cfg, ["database", "s3_data_dir", "s3_staging_dir"])
+        validate_sql_identifier(cfg["database"], "database")
 
         database = cfg.get("database")
         s3_data_dir = cfg.get("s3_data_dir", "")
@@ -89,6 +95,11 @@ class AthenaLoader(BaseLoader):
         prefix = "/".join(object_key.split("/")[1:]).rstrip("/")
         file_key = f"{prefix}/{_uuid.uuid4()}.parquet"
 
+        if if_exists == "replace":
+            # Athena tables are just files under a prefix: without deleting
+            # the old objects, 'replace' silently behaves like append.
+            self._delete_existing_objects(s3_client, bucket_name, prefix)
+
         s3_client.put_object(Bucket=bucket_name, Key=file_key,
                              Body=buf.getvalue())
 
@@ -102,13 +113,24 @@ class AthenaLoader(BaseLoader):
         )
         exec_id = resp["QueryExecutionId"]
 
+        status = "RUNNING"
         for _ in range(60):
-            status = athena.get_query_execution(
+            execution = athena.get_query_execution(
                 QueryExecutionId=exec_id
-            )["QueryExecution"]["Status"]["State"]
+            )["QueryExecution"]
+            status = execution["Status"]["State"]
             if status in ("SUCCEEDED", "FAILED", "CANCELLED"):
                 break
             time.sleep(2)
+
+        if status != "SUCCEEDED":
+            reason = ""
+            if status in ("FAILED", "CANCELLED"):
+                reason = execution["Status"].get("StateChangeReason", "")
+            raise RuntimeError(
+                f"AthenaLoader: MSCK REPAIR TABLE finished with state "
+                f"'{status}' for {database}.{table}. {reason}".rstrip()
+            )
 
         self.gov._event(
             "LOAD", "ATHENA_WRITE_COMPLETE",
@@ -121,3 +143,24 @@ class AthenaLoader(BaseLoader):
             },
         )
         return len(df)
+
+    @staticmethod
+    def _delete_existing_objects(s3_client, bucket_name: str, prefix: str) -> None:
+        """Delete every object under the table's data prefix (replace mode)."""
+        paginator = s3_client.get_paginator("list_objects_v2")
+        deleted = 0
+        for page in paginator.paginate(Bucket=bucket_name, Prefix=f"{prefix}/"):
+            contents = page.get("Contents", [])
+            if not contents:
+                continue
+            # delete_objects accepts at most 1,000 keys per call, which is
+            # exactly one list_objects_v2 page.
+            s3_client.delete_objects(
+                Bucket=bucket_name,
+                Delete={"Objects": [{"Key": obj["Key"]} for obj in contents]},
+            )
+            deleted += len(contents)
+        logger.info(
+            "[ATHENA] replace: deleted %d existing object(s) under s3://%s/%s/",
+            deleted, bucket_name, prefix,
+        )
