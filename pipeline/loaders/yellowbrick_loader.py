@@ -66,7 +66,7 @@ class YellowbrickLoader(BaseLoader):
             f"@{cfg['host']}:{port}/{cfg['database']}"
         )
 
-    def load(self, df, cfg, table, if_exists="append", natural_keys=None):
+    def load(self, df, cfg, table, if_exists="append", natural_keys=None) -> int:
         validate_sql_identifier(table, "table")
         if cfg.get("schema"):
             validate_sql_identifier(cfg["schema"], "schema")
@@ -86,6 +86,7 @@ class YellowbrickLoader(BaseLoader):
             f"/{cfg.get('schema', 'public')}",
             table,
         )
+        return len(df)
 
     def _copy_from_stdin(self, df, cfg, table, if_exists):
         """Stream CSV to Yellowbrick via copy_expert()."""

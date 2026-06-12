@@ -120,7 +120,7 @@ class HanaLoader(BaseLoader):
         finally:
             self._drop_table(cur, schema, stage)
 
-    def load(self, df, cfg, table, if_exists="append", natural_keys=None):
+    def load(self, df, cfg, table, if_exists="append", natural_keys=None) -> int:
         schema = cfg.get("schema", "PIPELINE")
         validate_sql_identifier(table, "table")
         validate_sql_identifier(schema, "schema")
@@ -156,3 +156,5 @@ class HanaLoader(BaseLoader):
             "schema": schema, "table": table, "rows": len(df),
             "mode": "upsert" if natural_keys else if_exists,
         })
+        return len(df)
+

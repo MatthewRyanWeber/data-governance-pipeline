@@ -49,17 +49,20 @@ class SynapseLoader(BaseLoader):
         host = cfg["host"]
         port = cfg.get("port", 1433)
         db = cfg["database"]
+        # Encrypt-by-default stays, but both knobs are configurable so the
+        # loader can reach test servers with self-signed certificates.
+        encrypt = cfg.get("encrypt", "yes")
+        trust_cert = cfg.get("trust_server_certificate", "no")
+        tls = f"Encrypt={encrypt};TrustServerCertificate={trust_cert}"
         if cfg.get("tenant_id"):
             return (
                 f"DRIVER={{{driver}}};SERVER={host},{port};DATABASE={db};"
                 "Authentication=ActiveDirectoryServicePrincipal;"
-                f"UID={cfg['client_id']};PWD={cfg['client_secret']};"
-                "Encrypt=yes;TrustServerCertificate=no"
+                f"UID={cfg['client_id']};PWD={cfg['client_secret']};{tls}"
             )
         return (
             f"DRIVER={{{driver}}};SERVER={host},{port};DATABASE={db};"
-            f"UID={cfg['user']};PWD={cfg['password']};"
-            "Encrypt=yes;TrustServerCertificate=no"
+            f"UID={cfg['user']};PWD={cfg['password']};{tls}"
         )
 
     def _engine(self, cfg: dict):
@@ -78,7 +81,7 @@ class SynapseLoader(BaseLoader):
         # chunk size must shrink as the frame gets wider (2000 leaves headroom).
         return max(1, 2000 // max(1, len(df.columns)))
 
-    def load(self, df, cfg, table, if_exists="append", natural_keys=None):
+    def load(self, df, cfg, table, if_exists="append", natural_keys=None) -> int:
         validate_sql_identifier(table, "table")
         if cfg.get("schema"):
             validate_sql_identifier(cfg["schema"], "schema")
@@ -98,6 +101,7 @@ class SynapseLoader(BaseLoader):
             f"{cfg['host']}/{cfg['database']}/{cfg.get('schema', 'dbo')}",
             table,
         )
+        return len(df)
 
     def _blob_copy(self, df, cfg, table, if_exists):
         import tempfile

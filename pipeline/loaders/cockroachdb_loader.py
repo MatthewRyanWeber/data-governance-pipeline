@@ -166,6 +166,19 @@ class CockroachDBLoader(BaseLoader):
             f"ON CONFLICT ({key_str}) DO UPDATE SET {update_str}"
         )
 
+        # ON CONFLICT requires a unique constraint on the key columns,
+        # which tables created by our own append path (to_sql) lack —
+        # without this the loader's upsert can never work on tables the
+        # loader itself created.  Separate transaction: CockroachDB
+        # cannot use an index created inside the same transaction.
+        safe_name = validate_sql_identifier(
+            f"uq_{table}_{'_'.join(natural_keys)}", "index")
+        with engine.begin() as conn:
+            conn.execute(sa_text(
+                f"CREATE UNIQUE INDEX IF NOT EXISTS {safe_name} "
+                f"ON {table} ({key_str})"
+            ))
+
         rows = 0
         with engine.begin() as conn:
             for batch_start in range(0, len(df), 500):

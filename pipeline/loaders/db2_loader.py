@@ -74,7 +74,7 @@ class Db2Loader(BaseLoader):
         )
         return _ce(url)
 
-    def load(self, df, cfg, table, if_exists="append", natural_keys=None):
+    def load(self, df, cfg, table, if_exists="append", natural_keys=None) -> int:
         table = table.upper()
         validate_sql_identifier(table, "table")
         if cfg.get("schema"):
@@ -95,6 +95,7 @@ class Db2Loader(BaseLoader):
             f"{cfg['host']}:{cfg.get('port', 50000)}/{cfg['database']}/{schema}",
             table,
         )
+        return len(df)
 
     def _bulk_insert(self, df, cfg, table, if_exists):
         """ibm_db.execute_many() array insert."""

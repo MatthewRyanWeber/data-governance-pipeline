@@ -88,7 +88,7 @@ class DatasphereLoader(BaseLoader):
                 f"Datasphere OData error {resp.status_code}: {resp.text[:400]}"
             )
 
-    def load(self, df, cfg, table=None, if_exists="append", natural_keys=None):
+    def load(self, df, cfg, table=None, if_exists="append", natural_keys=None) -> int:
         """Upload df to a SAP Datasphere Local Table via OData v4."""
         tbl = cfg.get("table", table or "")
         if self._dry_run_guard(tbl or "datasphere_table", len(df)):
@@ -120,3 +120,5 @@ class DatasphereLoader(BaseLoader):
             "space": cfg.get("space"), "table": tbl, "rows": len(df),
             "mode": if_exists,
         })
+        return len(df)
+

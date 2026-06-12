@@ -56,7 +56,7 @@ class ClickHouseLoader(BaseLoader):
             secure=bool(cfg.get("secure", False)),
         )
 
-    def load(self, df, cfg, table, if_exists="append", natural_keys=None):
+    def load(self, df, cfg, table, if_exists="append", natural_keys=None) -> int:
         validate_sql_identifier(table, "table")
         if cfg.get("database"):
             validate_sql_identifier(cfg["database"], "database")
@@ -74,6 +74,7 @@ class ClickHouseLoader(BaseLoader):
             f"/{cfg.get('database', 'default')}",
             table,
         )
+        return len(df)
 
     def _bulk_insert(self, df, cfg, table, if_exists):
         client = self._client(cfg)

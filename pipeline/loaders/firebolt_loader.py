@@ -73,7 +73,7 @@ class FireboltLoader(BaseLoader):
             kwargs["api_endpoint"] = cfg["api_endpoint"]
         return _firebolt_connect(**kwargs)
 
-    def load(self, df, cfg, table, if_exists="append", natural_keys=None):
+    def load(self, df, cfg, table, if_exists="append", natural_keys=None) -> int:
         validate_sql_identifier(table, "table")
         if self._dry_run_guard(table, len(df)):
             return 0
@@ -94,6 +94,7 @@ class FireboltLoader(BaseLoader):
             f"{cfg['account_name']}/{cfg['database']}/{cfg['engine_name']}",
             table,
         )
+        return len(df)
 
     _INSERT_CHUNK = 1_000
 

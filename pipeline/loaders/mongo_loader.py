@@ -24,7 +24,7 @@ class MongoLoader(BaseLoader):
     def __init__(self, gov: "GovernanceLogger", dry_run: bool = False) -> None:
         super().__init__(gov, dry_run=dry_run)
 
-    def load(self, df, cfg, collection):
+    def load(self, df, cfg, collection) -> int:
         if self._dry_run_guard(collection, len(df)):
             return 0
         self._validate_config(cfg, ["db_name"])
@@ -38,3 +38,5 @@ class MongoLoader(BaseLoader):
             client[cfg["db_name"]][collection].insert_many(records)
             self.gov.load_complete(len(records), collection)
             self.gov.destination_registered("mongodb", cfg["db_name"], collection)
+        return len(df)
+

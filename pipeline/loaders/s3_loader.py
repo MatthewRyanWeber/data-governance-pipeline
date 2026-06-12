@@ -99,6 +99,10 @@ class S3Loader(BaseLoader):
             if cfg.get("aws_access_key"):
                 kwargs["aws_access_key_id"] = cfg["aws_access_key"]
                 kwargs["aws_secret_access_key"] = cfg["aws_secret_key"]
+            # S3-compatible stores (MinIO, Cloudflare R2, Ceph) and local
+            # test servers are reached via a custom endpoint
+            if cfg.get("endpoint_url"):
+                kwargs["endpoint_url"] = cfg["endpoint_url"]
             client = _b3.client("s3", **kwargs)
             client.put_object(Bucket=bucket, Key=key, Body=body)
 

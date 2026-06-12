@@ -15,6 +15,7 @@ Revision history
 
 import time
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from pipeline.constants import HAS_SNOWFLAKE
@@ -38,7 +39,13 @@ class SQLLoader(BaseLoader):
         from urllib.parse import quote_plus as _qp
         t = self.db_type
         if t == "sqlite":
-            return create_engine(f"sqlite:///{cfg['db_name']}.db")
+            db_name = str(cfg["db_name"])
+            # Append .db only when no extension was given — silently
+            # rewriting an explicit path like "data.db" to "data.db.db"
+            # writes somewhere the caller never asked for.
+            if "." not in Path(db_name).name:
+                db_name += ".db"
+            return create_engine(f"sqlite:///{db_name}")
         if t == "postgresql":
             return create_engine(
                 f"postgresql+psycopg2://{_qp(cfg['user'])}:{_qp(cfg['password'])}"
@@ -48,10 +55,21 @@ class SQLLoader(BaseLoader):
                 f"mysql+pymysql://{_qp(cfg['user'])}:{_qp(cfg['password'])}"
                 f"@{cfg['host']}:{cfg.get('port', 3306)}/{cfg['db_name']}")
         if t == "mssql":
-            return create_engine(
+            # host may carry "server,port" (SQL Server convention) — don't
+            # append :port twice in that case
+            host = str(cfg["host"])
+            host_part = host if "," in host else f"{host}:{cfg.get('port', 1433)}"
+            url = (
                 f"mssql+pyodbc://{_qp(cfg['user'])}:{_qp(cfg['password'])}"
-                f"@{cfg['host']}:{cfg.get('port', 1433)}/{cfg['db_name']}"
+                f"@{host_part}/{cfg['db_name']}"
                 f"?driver={cfg.get('driver', 'ODBC+Driver+17+for+SQL+Server')}")
+            # Modern MS drivers encrypt by default; allow reaching servers
+            # with self-signed certificates (test containers, dev boxes).
+            if cfg.get("encrypt"):
+                url += f"&Encrypt={cfg['encrypt']}"
+            if cfg.get("trust_server_certificate"):
+                url += f"&TrustServerCertificate={cfg['trust_server_certificate']}"
+            return create_engine(url)
         if t == "snowflake":
             if not HAS_SNOWFLAKE:
                 raise RuntimeError("snowflake-connector-python not installed")
@@ -79,7 +97,7 @@ class SQLLoader(BaseLoader):
             return schema, table_name
         return None, table
 
-    def load(self, df, cfg, table, if_exists="append", natural_keys=None):
+    def load(self, df, cfg, table, if_exists="append", natural_keys=None) -> int:
         validate_sql_identifier(table, "table")
         schema, table_name = self._split_table_name(table)
         if self._dry_run_guard(table, len(df)):
@@ -94,6 +112,7 @@ class SQLLoader(BaseLoader):
         self.gov.load_complete(len(df), table)
         db_identifier = cfg.get("database") or cfg.get("db_name", "")
         self.gov.destination_registered(self.db_type, db_identifier, table)
+        return len(df)
 
     def _load_with_retry(self, df, engine, table, if_exists, schema=None):
         for attempt in range(1, 4):

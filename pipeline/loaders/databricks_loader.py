@@ -83,7 +83,7 @@ class DatabricksLoader(BaseLoader):
         return f"`{catalog}`.`{schema}`.`{table}`"
 
     def load(self, df, cfg, table, if_exists="append", natural_keys=None,
-             schema_evolution=True):
+             schema_evolution=True) -> int:
         validate_sql_identifier(table, "table")
         if cfg.get("catalog"):
             validate_sql_identifier(cfg["catalog"], "catalog")
@@ -104,6 +104,7 @@ class DatabricksLoader(BaseLoader):
             f"/{cfg.get('schema', 'default')}",
             table,
         )
+        return len(df)
 
     # Parameter budget per INSERT statement; keeps each request well under
     # connector/endpoint limits while still batching hundreds of rows.
