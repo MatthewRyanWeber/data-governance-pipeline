@@ -9,9 +9,16 @@ Revision history
 1.0   2026-06-07   Extracted from pipeline_v3.py (class SnowflakeVectorLoader).
 1.1   2026-06-08   Fixed SQL injection: validate table, vector_col, and
                    select_cols in search() and load().
+1.2   2026-06-11   Rewrite of load(): Snowflake forbids ALTER VARCHAR->VECTOR,
+                   so the loader could never produce a working vector table.
+                   The target table is now created up front with the
+                   VECTOR(FLOAT, n) column and rows are inserted via
+                   INSERT ... SELECT with an explicit conversion from a staged
+                   table.  Failures propagate; engines are disposed.
 """
 
 import logging
+import re
 from typing import TYPE_CHECKING
 
 import pandas as pd
@@ -29,9 +36,11 @@ class SnowflakeVectorLoader(BaseLoader):
     """
     Snowflake vector loader with VECTOR(FLOAT, N) and similarity search.
 
-    Stores vectors as ARRAY type and casts to VECTOR for similarity
-    functions (VECTOR_COSINE_SIMILARITY, VECTOR_L2_DISTANCE,
-    VECTOR_INNER_PRODUCT).
+    Creates the target table up front with a native VECTOR(FLOAT, N) column,
+    stages rows via to_sql, and inserts with an explicit conversion
+    (PARSE_JSON -> ARRAY -> VECTOR) because Snowflake does not allow altering
+    a VARCHAR column to VECTOR.  Similarity functions supported:
+    VECTOR_COSINE_SIMILARITY, VECTOR_L2_DISTANCE, VECTOR_INNER_PRODUCT.
 
     Quick-start
     ───────────
@@ -39,6 +48,19 @@ class SnowflakeVectorLoader(BaseLoader):
         loader = SnowflakeVectorLoader(gov)
         loader.load(df, cfg, "vectors_table")
     """
+
+    # Pandas dtype -> Snowflake column type for the non-vector columns of
+    # the explicitly created target table.
+    _DTYPE_TO_SQL: dict[str, str] = {
+        "int64":               "BIGINT",
+        "Int64":               "BIGINT",
+        "float64":             "DOUBLE",
+        "Float64":             "DOUBLE",
+        "bool":                "BOOLEAN",
+        "boolean":             "BOOLEAN",
+        "datetime64[ns]":      "TIMESTAMP",
+        "datetime64[ns, UTC]": "TIMESTAMP",
+    }
 
     def __init__(self, gov: "GovernanceLogger", dry_run: bool = False) -> None:
         super().__init__(gov, dry_run=dry_run)
@@ -48,6 +70,18 @@ class SnowflakeVectorLoader(BaseLoader):
                 "Install with:  pip install snowflake-sqlalchemy "
                 "snowflake-connector-python"
             )
+
+    @staticmethod
+    def _sf_identifier(name: str) -> str:
+        """
+        Quote an identifier the same way snowflake-sqlalchemy does, so the
+        hand-written INSERT ... SELECT matches the staging table that
+        to_sql created: all-lowercase names stay unquoted (Snowflake folds
+        them to uppercase), anything else is double-quoted exactly.
+        """
+        if re.fullmatch(r"[a-z_][a-z0-9_$]*", name):
+            return name
+        return '"' + name.replace('"', '""') + '"'
 
     def load(self, df, cfg, table="", if_exists="append",
              natural_keys=None) -> int:
@@ -94,7 +128,7 @@ class SnowflakeVectorLoader(BaseLoader):
         first_vec = df[vector_col].iloc[0]
         if isinstance(first_vec, _np.ndarray):
             first_vec = first_vec.tolist()
-        vector_size = cfg.get("vector_size", len(first_vec))
+        vector_size = int(cfg.get("vector_size", len(first_vec)))
 
         engine = create_engine(_sfurl(
             account=cfg["account"],
@@ -106,6 +140,8 @@ class SnowflakeVectorLoader(BaseLoader):
             role=cfg.get("role", ""),
         ))
 
+        # JSON array literals survive the VARCHAR staging table and convert
+        # cleanly via PARSE_JSON -> ARRAY -> VECTOR
         out = df.copy()
         out[vector_col] = out[vector_col].apply(
             lambda v: "[" + ",".join(
@@ -114,22 +150,62 @@ class SnowflakeVectorLoader(BaseLoader):
             ) + "]"
         )
 
-        out.to_sql(table.lower(), engine, if_exists=if_exists,
-                   index=False, method="multi", chunksize=500)
+        target = self._sf_identifier(table.lower())
+        staging_table = f"{table.lower()}__vector_stage"
+        staging = self._sf_identifier(staging_table)
 
-        with engine.connect() as conn:
-            try:
-                conn.execute(sa_text(
-                    f"ALTER TABLE {table} ALTER COLUMN {vector_col} "
-                    f"SET DATA TYPE VECTOR(FLOAT, {vector_size})"
-                ))
-                conn.commit()
-            except Exception as exc:
-                logger.warning(
-                    "SnowflakeVectorLoader: could not set VECTOR type on "
-                    "%s.%s: %s", table, vector_col, exc,
+        column_definitions = []
+        for col in out.columns:
+            identifier = self._sf_identifier(col)
+            if col == vector_col:
+                column_definitions.append(
+                    f"{identifier} VECTOR(FLOAT, {vector_size})"
                 )
-                conn.rollback()
+            else:
+                sql_type = self._DTYPE_TO_SQL.get(str(df[col].dtype), "VARCHAR")
+                column_definitions.append(f"{identifier} {sql_type}")
+
+        insert_columns = ", ".join(
+            self._sf_identifier(c) for c in out.columns
+        )
+        select_expressions = []
+        for col in out.columns:
+            identifier = self._sf_identifier(col)
+            if col == vector_col:
+                # Snowflake forbids ALTER VARCHAR -> VECTOR, so the
+                # conversion must happen at insert time
+                select_expressions.append(
+                    f"PARSE_JSON({identifier})::ARRAY"
+                    f"::VECTOR(FLOAT, {vector_size})"
+                )
+            else:
+                select_expressions.append(identifier)
+
+        create_statement = (
+            f"CREATE OR REPLACE TABLE {target} "
+            if if_exists == "replace"
+            else f"CREATE TABLE IF NOT EXISTS {target} "
+        ) + "(" + ", ".join(column_definitions) + ")"
+
+        # No exception handling around the SQL: a load that cannot produce
+        # the vector table must fail loudly, not report success
+        try:
+            out.to_sql(staging_table, engine, if_exists="replace",
+                       index=False, method="multi", chunksize=500)
+            with engine.connect() as conn:
+                try:
+                    conn.execute(sa_text(create_statement))
+                    conn.execute(sa_text(
+                        f"INSERT INTO {target} ({insert_columns}) "
+                        f"SELECT {', '.join(select_expressions)} "
+                        f"FROM {staging}"
+                    ))
+                    conn.commit()
+                finally:
+                    conn.execute(sa_text(f"DROP TABLE IF EXISTS {staging}"))
+                    conn.commit()
+        finally:
+            engine.dispose()
 
         self.gov.load_complete(len(df), table)
         self.gov.destination_registered("snowflake_vector", cfg["database"], table)
@@ -149,6 +225,7 @@ class SnowflakeVectorLoader(BaseLoader):
         query_vector = validate_float_vector(query_vector, "query_vector")
         validate_sql_identifier(table, "table")
         validate_sql_identifier(vector_col, "vector_col")
+        limit = int(limit)
 
         fn_map = {
             "cosine": "VECTOR_COSINE_SIMILARITY",
@@ -183,8 +260,11 @@ class SnowflakeVectorLoader(BaseLoader):
             warehouse=cfg["warehouse"],
             role=cfg.get("role", ""),
         ))
-        with engine.connect() as conn:
-            result = pd.read_sql(sa_text(sql), conn)
+        try:
+            with engine.connect() as conn:
+                result = pd.read_sql(sa_text(sql), conn)
+        finally:
+            engine.dispose()
 
         logger.info(
             "Snowflake vector search on %s returned %d results.",

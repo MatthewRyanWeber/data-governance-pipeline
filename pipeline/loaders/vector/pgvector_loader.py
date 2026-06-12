@@ -9,6 +9,12 @@ Revision history
 1.0   2026-06-07   Extracted from pipeline_v3.py (class PgvectorLoader).
 1.1   2026-06-08   Fixed SQL injection: validate select_cols and where clause
                    in search().
+1.2   2026-06-11   First load now actually produces a vector column: the table
+                   is created via to_sql first, THEN the embedding column is
+                   converted to vector(n) with a USING cast, and the ALTER
+                   failure propagates instead of being swallowed.  Config
+                   validation now requires user/password, search() coerces
+                   limit to int, and every engine is disposed via try/finally.
 """
 
 import logging
@@ -87,7 +93,9 @@ class PgvectorLoader(BaseLoader):
         validate_sql_identifier(table, "table")
         if self._dry_run_guard(table, len(df)):
             return 0
-        self._validate_config(cfg, ["host", "db_name"])
+        # user/password are interpolated into the URL below — a missing key
+        # must fail config validation, not KeyError mid-load
+        self._validate_config(cfg, ["host", "db_name", "user", "password"])
         validate_sql_identifier(
             cfg.get("vector_column", "embedding"), "vector_column"
         )
@@ -120,39 +128,71 @@ class PgvectorLoader(BaseLoader):
                f"@{cfg['host']}:{port}/{cfg['db_name']}")
         engine = create_engine(url, pool_pre_ping=True)
 
-        with engine.connect() as conn:
-            conn.execute(sa_text("CREATE EXTENSION IF NOT EXISTS vector"))
-            conn.commit()
-            try:
-                conn.execute(sa_text(
-                    f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS "
-                    f"{vector_col} vector({vector_size})"
-                ))
+        try:
+            with engine.connect() as conn:
+                conn.execute(sa_text("CREATE EXTENSION IF NOT EXISTS vector"))
                 conn.commit()
-            except Exception as exc:
-                logger.warning(
-                    "PgvectorLoader: could not alter table %s: %s", table, exc,
-                )
-                conn.rollback()
 
-        out = df.copy()
-        out[vector_col] = out[vector_col].apply(
-            lambda v: v.tolist() if isinstance(v, _np.ndarray) else list(v)
-        )
+            # pgvector's text input format is '[1,2,3]' — staging the vectors
+            # as that literal lets the USING cast below parse them directly
+            out = df.copy()
+            out[vector_col] = out[vector_col].apply(
+                lambda v: "[" + ",".join(
+                    str(x) for x in (v.tolist() if isinstance(v, _np.ndarray)
+                                     else list(v))
+                ) + "]"
+            )
 
-        pg_if_exists = "replace" if if_exists == "replace" else "append"
-        out.to_sql(table, engine, if_exists=pg_if_exists,
-                   index=False, method="multi", chunksize=500)
+            # Create/replace the table FIRST — altering before to_sql failed
+            # on first load (no table yet) and after a replace (column reset)
+            pg_if_exists = "replace" if if_exists == "replace" else "append"
+            out.to_sql(table, engine, if_exists=pg_if_exists,
+                       index=False, method="multi", chunksize=500)
 
-        index_type = cfg.get("index_type")
-        if index_type:
-            self.create_index(cfg, table, vector_col,
-                              index_type=index_type,
-                              distance=cfg.get("distance", "cosine"))
+            self._ensure_vector_type(engine, table, vector_col, int(vector_size))
+
+            index_type = cfg.get("index_type")
+            if index_type:
+                self.create_index(cfg, table, vector_col,
+                                  index_type=index_type,
+                                  distance=cfg.get("distance", "cosine"))
+        finally:
+            engine.dispose()
 
         self.gov.load_complete(len(df), table)
         self.gov.destination_registered("pgvector", cfg["db_name"], table)
         return len(df)
+
+    @staticmethod
+    def _ensure_vector_type(engine, table, vector_col, vector_size: int) -> None:
+        """
+        Convert the staged embedding column to vector(n) if it is not already.
+
+        Raises on failure — a load that silently leaves the column as text
+        produces a table on which similarity search can never work.
+        """
+        from sqlalchemy import text as sa_text
+
+        with engine.connect() as conn:
+            current_type = conn.execute(
+                sa_text(
+                    "SELECT udt_name FROM information_schema.columns "
+                    "WHERE table_name = :tbl AND column_name = :col"
+                ),
+                {"tbl": table, "col": vector_col},
+            ).scalar()
+            if current_type == "vector":
+                return
+            conn.execute(sa_text(
+                f"ALTER TABLE {table} ALTER COLUMN {vector_col} "
+                f"TYPE vector({vector_size}) "
+                f"USING {vector_col}::vector({vector_size})"
+            ))
+            conn.commit()
+        logger.info(
+            "PgvectorLoader: column %s.%s converted to vector(%d).",
+            table, vector_col, vector_size,
+        )
 
     def create_index(self, cfg, table, vector_col="embedding",
                      index_type="ivfflat", distance="cosine",
@@ -172,26 +212,29 @@ class PgvectorLoader(BaseLoader):
 
         idx_name = f"idx_{table}_{vector_col}_{index_type}"
 
-        with engine.connect() as conn:
-            row_count = conn.execute(
-                sa_text(f"SELECT COUNT(*) FROM {table}")
-            ).scalar() or 0
-            if row_count == 0:
-                logger.warning(
-                    "PgvectorLoader.create_index(): table '%s' is empty -- "
-                    "load data before creating IVFFlat/HNSW indexes.", table,
-                )
-                return
-            if index_type == "hnsw":
-                sql = (f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table} "
-                       f"USING hnsw ({vector_col} {ops}) "
-                       f"WITH (m={m}, ef_construction={ef_construction})")
-            else:
-                sql = (f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table} "
-                       f"USING ivfflat ({vector_col} {ops}) "
-                       f"WITH (lists={lists})")
-            conn.execute(sa_text(sql))
-            conn.commit()
+        try:
+            with engine.connect() as conn:
+                row_count = conn.execute(
+                    sa_text(f"SELECT COUNT(*) FROM {table}")
+                ).scalar() or 0
+                if row_count == 0:
+                    logger.warning(
+                        "PgvectorLoader.create_index(): table '%s' is empty -- "
+                        "load data before creating IVFFlat/HNSW indexes.", table,
+                    )
+                    return
+                if index_type == "hnsw":
+                    sql = (f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table} "
+                           f"USING hnsw ({vector_col} {ops}) "
+                           f"WITH (m={m}, ef_construction={ef_construction})")
+                else:
+                    sql = (f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table} "
+                           f"USING ivfflat ({vector_col} {ops}) "
+                           f"WITH (lists={lists})")
+                conn.execute(sa_text(sql))
+                conn.commit()
+        finally:
+            engine.dispose()
 
         logger.info(
             "pgvector %s index created on %s.%s.", index_type, table, vector_col,
@@ -211,6 +254,7 @@ class PgvectorLoader(BaseLoader):
         query_vector = validate_float_vector(query_vector, "query_vector")
         validate_sql_identifier(table, "table")
         validate_sql_identifier(vector_col, "vector_col")
+        limit = int(limit)
 
         op = self._DIST_OPS.get(distance, "<=>")
         if select_cols:
@@ -226,14 +270,17 @@ class PgvectorLoader(BaseLoader):
                 f"@{cfg['host']}:{port}/{cfg['db_name']}"
             )
             probe_engine = create_engine(probe_url)
-            with probe_engine.connect() as probe_conn:
-                col_rows = probe_conn.execute(
-                    sa_text(
-                        "SELECT column_name FROM information_schema.columns "
-                        "WHERE table_name = :tbl ORDER BY ordinal_position"
-                    ),
-                    {"tbl": table},
-                ).fetchall()
+            try:
+                with probe_engine.connect() as probe_conn:
+                    col_rows = probe_conn.execute(
+                        sa_text(
+                            "SELECT column_name FROM information_schema.columns "
+                            "WHERE table_name = :tbl ORDER BY ordinal_position"
+                        ),
+                        {"tbl": table},
+                    ).fetchall()
+            finally:
+                probe_engine.dispose()
             all_cols = [r[0] for r in col_rows if r[0] != vector_col]
             cols = ", ".join(all_cols) if all_cols else "*"
         vec_str = "[" + ",".join(str(v) for v in query_vector) + "]"
@@ -253,8 +300,11 @@ class PgvectorLoader(BaseLoader):
         url = (f"postgresql+psycopg2://{_qp(cfg['user'])}:{_qp(cfg['password'])}"
                f"@{cfg['host']}:{port}/{cfg['db_name']}")
         engine = create_engine(url)
-        with engine.connect() as conn:
-            result = pd.read_sql(sa_text(sql), conn)
+        try:
+            with engine.connect() as conn:
+                result = pd.read_sql(sa_text(sql), conn)
+        finally:
+            engine.dispose()
 
         logger.info(
             "pgvector search on %s returned %d results.", table, len(result),

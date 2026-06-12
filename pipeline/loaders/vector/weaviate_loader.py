@@ -9,6 +9,10 @@ Revision history
 1.0   2026-06-07   Extracted from pipeline_v3.py (class WeaviateLoader).
 1.1   2026-06-07   Full rewrite: search, delete_class, v4 client API,
                    validate_float_vector, gov.load_complete integration.
+1.2   2026-06-11   Batch failures are now checked after the import: failed
+                   objects are logged as errors and only true successes are
+                   reported to gov.load_complete.  _ensure_class uses
+                   collections.exists() instead of the lazy collections.get().
 """
 
 import logging
@@ -139,16 +143,28 @@ class WeaviateLoader(BaseLoader):
                     )
                     total += 1
 
+            # The batch context swallows per-object failures — a fully
+            # failed import would otherwise be reported as complete
+            failed_count = self._count_batch_failures(client)
+            successful = max(total - failed_count, 0)
+            if failed_count:
+                logger.error(
+                    "WeaviateLoader: %d of %d objects FAILED to import into "
+                    "class %s — only %d succeeded. First failures: %s",
+                    failed_count, total, class_name, successful,
+                    self._format_batch_failures(client),
+                )
+
         finally:
             client.close()
 
-        self.gov.load_complete(total, class_name)
+        self.gov.load_complete(successful, class_name)
         self.gov.destination_registered("weaviate", url, class_name)
         logger.info(
-            "WeaviateLoader: imported %d objects to class %s.",
-            total, class_name,
+            "WeaviateLoader: imported %d objects to class %s (%d failed).",
+            successful, class_name, failed_count,
         )
-        return total
+        return successful
 
     def search(self, cfg, query_vector, table="", limit=10,
                return_properties=None, where_filter=None) -> list:
@@ -252,6 +268,27 @@ class WeaviateLoader(BaseLoader):
         )
 
     @staticmethod
+    def _count_batch_failures(client) -> int:
+        """Return the number of objects the last batch failed to import."""
+        failed_objects = getattr(client.batch, "failed_objects", None)
+        try:
+            return len(failed_objects) if failed_objects is not None else 0
+        except TypeError:
+            return 0
+
+    @staticmethod
+    def _format_batch_failures(client, max_shown: int = 3) -> str:
+        """Summarise the first few batch failures for the error log."""
+        failed_objects = getattr(client.batch, "failed_objects", None) or []
+        try:
+            samples = list(failed_objects)[:max_shown]
+        except TypeError:
+            return "<unavailable>"
+        return "; ".join(
+            str(getattr(obj, "message", obj))[:200] for obj in samples
+        ) or "<unavailable>"
+
+    @staticmethod
     def _delete_class_if_exists(client, class_name):
         """Delete a class if it exists, logging any failure."""
         try:
@@ -265,9 +302,9 @@ class WeaviateLoader(BaseLoader):
     @staticmethod
     def _ensure_class(client, class_name):
         """Create the class if it does not exist."""
-        try:
-            client.collections.get(class_name)
-        except Exception:
+        # collections.get() is lazy and never raises for a missing class,
+        # so the create branch was unreachable — exists() actually checks
+        if not client.collections.exists(class_name):
             client.collections.create(name=class_name)
 
     @staticmethod

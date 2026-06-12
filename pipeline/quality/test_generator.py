@@ -11,6 +11,10 @@ Revision history
 1.0   2026-06-08   Initial release.
 1.1   2026-06-08   Taste fixes: dry_run support, guard clause for None
                    profile, clearer variable names, warn on empty suite.
+1.2   2026-06-11   In-set expectation only generated when top_values actually
+                   captures every distinct value — previously columns with up
+                   to 20 uniques got an in-set built from the top 10, causing
+                   false failures on the other values.
 """
 
 import json
@@ -123,12 +127,20 @@ class TestGenerator:
                 "meta": meta,
             })
 
-        if column_profile.get("top_values") and column_profile["unique_count"] <= self.CARDINALITY_LOW_THRESHOLD:
+        # The value set must be complete: top_values is truncated (top N),
+        # so an in-set built from a partial capture would fail on every
+        # legitimate value outside the top N
+        top_values = column_profile.get("top_values") or {}
+        captures_all_values = (
+            len(top_values) > 0
+            and column_profile.get("unique_count", 0) <= len(top_values)
+        )
+        if captures_all_values and column_profile["unique_count"] <= self.CARDINALITY_LOW_THRESHOLD:
             expectations.append({
                 "expectation_type": "expect_column_values_to_be_in_set",
                 "kwargs": {
                     "column": name,
-                    "value_set": list(column_profile["top_values"].keys()),
+                    "value_set": list(top_values.keys()),
                 },
                 "meta": meta,
             })

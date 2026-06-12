@@ -12,6 +12,10 @@ Drivers are installed in this environment, so construction is real.
 Revision history
 ────────────────
 1.0   2026-06-09   Initial release: chroma, milvus, pinecone, qdrant, weaviate.
+1.1   2026-06-11   Regression tests: qdrant auto-ids offset by existing point
+                   count (append no longer overwrites), non-integer float ids
+                   rejected; milvus create_collection field names; weaviate
+                   batch-failure accounting; lancedb upsert requires keys.
 """
 
 import unittest
@@ -149,6 +153,17 @@ class TestMilvusLoader(unittest.TestCase):
         self.assertEqual(n, 0)
         mc.assert_not_called()
 
+    def test_create_collection_uses_configured_field_names(self):
+        """Regression: the schema hardcoded "vector"/"id" while inserts used
+        cfg's vector_column/id_column, so inserts missed the schema fields."""
+        cfg = {"uri": "http://localhost:19530", "vector_column": "embedding",
+               "id_column": "id"}
+        with patch("pymilvus.MilvusClient", return_value=self.client):
+            self.loader.load(_vec_df(), cfg, "coll", if_exists="append")
+        create_kwargs = self.client.create_collection.call_args.kwargs
+        self.assertEqual(create_kwargs["vector_field_name"], "embedding")
+        self.assertEqual(create_kwargs["primary_field_name"], "id")
+
 
 # ── Pinecone ──────────────────────────────────────────────────────────────
 
@@ -238,12 +253,67 @@ class TestQdrantLoader(unittest.TestCase):
         self.assertEqual(n, 0)
         bc.assert_not_called()
 
+    def test_auto_ids_offset_by_existing_point_count(self):
+        """Regression: without id_column, point ids restarted at 0 so a
+        second append overwrote prior points."""
+        cfg_no_id = {"url": "http://localhost:6333", "vector_column": "embedding"}
+        self.client.collection_exists.return_value = True
+        self.client.get_collection.return_value.points_count = 7
+        with patch.object(self.loader, "_build_client", return_value=self.client):
+            self.loader.load(_vec_df(), cfg_no_id, "coll", if_exists="append")
+        points = self.client.upsert.call_args.kwargs["points"]
+        self.assertEqual([p.id for p in points], [7, 8])
+
+    def test_auto_ids_start_at_zero_for_new_collection(self):
+        cfg_no_id = {"url": "http://localhost:6333", "vector_column": "embedding"}
+        self.client.collection_exists.return_value = False
+        self.client.get_collection.return_value.points_count = 0
+        with patch.object(self.loader, "_build_client", return_value=self.client):
+            self.loader.load(_vec_df(), cfg_no_id, "coll", if_exists="append")
+        points = self.client.upsert.call_args.kwargs["points"]
+        self.assertEqual([p.id for p in points], [0, 1])
+
+    def test_non_integer_float_id_rejected(self):
+        """Regression: int(raw_id) truncated 1.5 and 1.7 to the same id."""
+        df = pd.DataFrame({
+            "id": [1.5, 1.7],
+            "embedding": [[0.1, 0.2], [0.3, 0.4]],
+        })
+        with patch.object(self.loader, "_build_client", return_value=self.client):
+            with self.assertRaises(ValueError):
+                self.loader.load(df, self.cfg, "coll")
+
+    def test_integral_float_id_accepted(self):
+        """Pandas upcasts int columns with NaNs to float — 2.0 is a valid id."""
+        df = pd.DataFrame({
+            "id": [1.0, 2.0],
+            "embedding": [[0.1, 0.2], [0.3, 0.4]],
+        })
+        with patch.object(self.loader, "_build_client", return_value=self.client):
+            self.loader.load(df, self.cfg, "coll")
+        points = self.client.upsert.call_args.kwargs["points"]
+        self.assertEqual([p.id for p in points], [1, 2])
+
+    def test_string_id_maps_to_deterministic_uuid(self):
+        df = pd.DataFrame({
+            "id": ["doc-a", "doc-a"],
+            "embedding": [[0.1, 0.2], [0.3, 0.4]],
+        })
+        with patch.object(self.loader, "_build_client", return_value=self.client):
+            self.loader.load(df, self.cfg, "coll")
+        points = self.client.upsert.call_args.kwargs["points"]
+        self.assertEqual(points[0].id, points[1].id)
+        self.assertIsInstance(points[0].id, str)
+
 
 # ── Weaviate ──────────────────────────────────────────────────────────────
 
 @unittest.skipUnless(HAS_WEAVIATE, "weaviate-client not installed")
 class TestWeaviateLoader(unittest.TestCase):
     def setUp(self):
+        # Undo logging.disable pollution so assertLogs works in combined runs
+        import logging
+        logging.disable(logging.NOTSET)
         self.gov = MagicMock()
         self.loader = WeaviateLoader(self.gov)
         self.client = MagicMock()
@@ -288,6 +358,29 @@ class TestWeaviateLoader(unittest.TestCase):
             n = loader.load(_vec_df(), self.cfg, "Docs")
         self.assertEqual(n, 0)
         bc.assert_not_called()
+
+    def test_batch_failures_reduce_reported_success(self):
+        """Regression: batch failures were never checked, so a fully failed
+        import was reported as complete."""
+        failure = MagicMock()
+        failure.message = "vector dimension mismatch"
+        self.client.batch.failed_objects = [failure]
+        import logging
+        with self.assertLogs("pipeline.loaders.vector.weaviate_loader",
+                             level=logging.ERROR):
+            n = self._load()
+        self.assertEqual(n, 1)
+        self.gov.load_complete.assert_called_once_with(1, "Docs")
+
+    def test_fully_failed_batch_reports_zero(self):
+        failures = [MagicMock(message="boom"), MagicMock(message="boom")]
+        self.client.batch.failed_objects = failures
+        import logging
+        with self.assertLogs("pipeline.loaders.vector.weaviate_loader",
+                             level=logging.ERROR):
+            n = self._load()
+        self.assertEqual(n, 0)
+        self.gov.load_complete.assert_called_once_with(0, "Docs")
 
 
 if __name__ == "__main__":

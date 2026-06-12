@@ -12,6 +12,7 @@ Revision history
 1.1   2026-06-08   Taste fixes: dry_run support, thread-safe file writes,
                    empty-DataFrame guard, clearer variable names, log
                    corrupt JSONL lines instead of silent pass.
+1.2   2026-06-11   nunique() computed once per column instead of twice.
 """
 
 import json
@@ -80,14 +81,16 @@ class ColumnProfiler:
         column_profiles = []
         for col in df.columns:
             series = df[col]
+            # nunique() scans the whole column — compute once and reuse
+            unique_count = int(series.nunique())
             column_profile: dict = {
                 "name": col,
                 "dtype": str(series.dtype),
                 "null_count": int(series.isna().sum()),
                 "null_rate": round(series.isna().mean(), 4),
-                "unique_count": int(series.nunique()),
+                "unique_count": unique_count,
                 "cardinality_rate": round(
-                    series.nunique() / len(df), 4
+                    unique_count / len(df), 4
                 ) if len(df) > 0 else 0.0,
             }
 

@@ -1,6 +1,7 @@
 """
 QuickBooks Online loader -- writes DataFrames to QBO via the REST API v3
-with per-row create/update and rate-limit handling.
+using the $batch endpoint (30 operations per request) with SyncToken-aware
+sparse updates and rate-limit handling.
 
 Layer 4 — imports from Layer 0 (constants), Layer 1 (governance_logger).
 
@@ -8,6 +9,12 @@ Revision history
 ────────────────
 1.0   2026-06-07   Extracted from pipeline_v3.py (class QuickBooksLoader).
 1.1   2026-06-07   Added Layer 4 docstring convention.
+1.2   2026-06-11   Rewrote the write path to use QBO's $batch endpoint
+                   (30 ops per request) instead of one POST + 0.1s sleep per
+                   row.  Updates now fetch the entity's SyncToken and send
+                   sparse updates (previously every update was rejected).
+                   Only true successes are reported to gov.load_complete;
+                   per-item faults are logged as errors.
 """
 
 import time
@@ -29,6 +36,9 @@ class QuickBooksLoader(BaseLoader):
     _PROD_BASE = "https://quickbooks.api.intuit.com"
     _SANDBOX_BASE = "https://sandbox-quickbooks.api.intuit.com"
     _TOKEN_URL = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer"
+
+    # QBO's $batch endpoint accepts at most 30 operations per request
+    _BATCH_SIZE = 30
 
     _REQUIRED_FIELDS: dict[str, list[str]] = {
         "Customer": ["DisplayName"],
@@ -113,22 +123,98 @@ class QuickBooksLoader(BaseLoader):
         required = self._REQUIRED_FIELDS.get(entity, [])
         return [f for f in required if not body.get(f)]
 
-    def _post_entity(self, session, base_url, entity, body, timeout) -> dict:
-        """POST a single QBO entity body via a shared session."""
-        url = f"{base_url}/{entity.lower()}?minorversion=70"
-        resp = session.post(url, json=body, timeout=timeout)
+    def _fetch_sync_token(self, session, base_url, entity, entity_id, timeout) -> str:
+        """
+        Fetch the current SyncToken for an existing entity.
+
+        QBO rejects every update that lacks the entity's current SyncToken,
+        so an update without it can never succeed.
+        """
+        url = f"{base_url}/{entity.lower()}/{entity_id}?minorversion=70"
+        resp = session.get(url, timeout=timeout)
         if not resp.ok:
             raise RuntimeError(
-                f"QuickBooks POST {entity} failed {resp.status_code}: "
+                f"QuickBooks GET {entity}/{entity_id} for SyncToken failed "
+                f"{resp.status_code}: {resp.text[:300]}"
+            )
+        payload = resp.json()
+        sync_token = payload.get(entity, {}).get("SyncToken")
+        if sync_token is None:
+            raise RuntimeError(
+                f"QuickBooks response for {entity}/{entity_id} did not "
+                f"contain a SyncToken: {str(payload)[:300]}"
+            )
+        return str(sync_token)
+
+    def _post_batch(self, session, base_url, entity, items, timeout) -> tuple[int, int, int]:
+        """
+        POST up to _BATCH_SIZE operations to QBO's $batch endpoint.
+
+        Returns (created, updated, errors) based on per-item responses —
+        a 200 on the envelope does not mean every item succeeded.
+        """
+        url = f"{base_url}/batch?minorversion=70"
+        request_body = {
+            "BatchItemRequest": [
+                {
+                    "bId": str(item["bId"]),
+                    "operation": item["operation"],
+                    entity: item["body"],
+                }
+                for item in items
+            ],
+        }
+        resp = session.post(url, json=request_body, timeout=timeout)
+        if not resp.ok:
+            raise RuntimeError(
+                f"QuickBooks $batch POST failed {resp.status_code}: "
                 f"{resp.text[:400]}"
             )
-        return dict(resp.json())
 
-    def load(self, df, cfg, table=None, if_exists="append", natural_keys=None):
-        """Write df rows to QuickBooks Online as the specified entity type."""
+        operations_by_bid = {str(item["bId"]): item["operation"] for item in items}
+        created = updated = errors = 0
+        responses = resp.json().get("BatchItemResponse", [])
+        answered_bids = set()
+
+        for item_response in responses:
+            bid = str(item_response.get("bId", ""))
+            answered_bids.add(bid)
+            fault = item_response.get("Fault")
+            if fault:
+                errors += 1
+                logger.error(
+                    "[QUICKBOOKS] Batch item %s FAILED: %s",
+                    bid, json.dumps(fault)[:400],
+                )
+                continue
+            if operations_by_bid.get(bid) == "update":
+                updated += 1
+            else:
+                created += 1
+
+        # Items QBO never answered are failures, not successes
+        unanswered = set(operations_by_bid) - answered_bids
+        if unanswered:
+            errors += len(unanswered)
+            logger.error(
+                "[QUICKBOOKS] %d batch item(s) missing from the response: %s",
+                len(unanswered), sorted(unanswered),
+            )
+
+        return created, updated, errors
+
+    def load(self, df, cfg, table=None, if_exists="append", natural_keys=None) -> int:
+        """
+        Write df rows to QuickBooks Online as the specified entity type.
+
+        Rows are sent through the $batch endpoint, 30 operations per
+        request.  Rows carrying an Id become sparse updates with a freshly
+        fetched SyncToken; all other rows are creates.  Returns the number
+        of rows QBO actually accepted.
+        """
         entity = cfg.get("entity", table or "Customer")
         if self._dry_run_guard(entity, len(df)):
-            return
+            return 0
         self._validate_config(cfg, ["client_id", "client_secret", "refresh_token", "realm_id"])
         sparse = cfg.get("sparse", True)
         timeout = cfg.get("timeout", 30)
@@ -153,6 +239,8 @@ class QuickBooksLoader(BaseLoader):
         records = df.to_dict(orient="records")
         with requests.Session() as session:
             session.headers.update(headers)
+
+            pending: list[dict] = []
             for idx, rec in enumerate(records):
                 try:
                     if callable(custom_transform):
@@ -169,21 +257,52 @@ class QuickBooksLoader(BaseLoader):
                         skipped += 1
                         continue
 
-                    had_id = bool(body.get("Id"))
-                    self._post_entity(session, base_url, entity, body, timeout)
-
-                    if had_id:
-                        updated += 1
+                    if body.get("Id"):
+                        body["SyncToken"] = self._fetch_sync_token(
+                            session, base_url, entity, body["Id"], timeout,
+                        )
+                        if sparse:
+                            body["sparse"] = True
+                        operation = "update"
                     else:
-                        created += 1
+                        operation = "create"
 
-                    if delay > 0:
-                        time.sleep(delay)
-
+                    pending.append({
+                        "bId": idx,
+                        "operation": operation,
+                        "body": body,
+                    })
                 except Exception as exc:
                     logger.error("[QUICKBOOKS] Row %s: %s", idx, exc)
                     errors += 1
 
+            for start in range(0, len(pending), self._BATCH_SIZE):
+                chunk = pending[start: start + self._BATCH_SIZE]
+                try:
+                    chunk_created, chunk_updated, chunk_errors = self._post_batch(
+                        session, base_url, entity, chunk, timeout,
+                    )
+                    created += chunk_created
+                    updated += chunk_updated
+                    errors += chunk_errors
+                except Exception as exc:
+                    logger.error(
+                        "[QUICKBOOKS] Batch of %d item(s) FAILED: %s",
+                        len(chunk), exc,
+                    )
+                    errors += len(chunk)
+
+                # Pause between batch requests, not per row, to respect
+                # QBO rate limits without serialising every record
+                if delay > 0 and start + self._BATCH_SIZE < len(pending):
+                    time.sleep(delay)
+
+        if errors:
+            logger.error(
+                "[QUICKBOOKS] %s: %d row(s) FAILED to load (%d created, "
+                "%d updated, %d skipped).",
+                entity, errors, created, updated, skipped,
+            )
         logger.info(
             "[QUICKBOOKS] %s: %d created  %d updated  %d skipped  %d errors",
             entity, created, updated, skipped, errors,
@@ -203,3 +322,4 @@ class QuickBooksLoader(BaseLoader):
             "skipped": skipped,
             "errors": errors,
         })
+        return created + updated

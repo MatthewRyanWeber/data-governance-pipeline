@@ -11,6 +11,9 @@ Layer 3 — imports from pipeline.constants and pipeline.governance_logger.
 Revision history
 ────────────────
 1.0   2026-06-07   Extracted from pipeline_v3.py into standalone module.
+1.1   2026-06-11   Script-injection fix: embedded JSON is post-processed with
+                   "</" -> "<\\/" so ledger data cannot close the script tag,
+                   and the tooltip now escapes node metadata before innerHTML.
 """
 
 import json
@@ -428,8 +431,10 @@ class LineageGraphGenerator:
         path  = output_path or str(self.gov.log_dir / f"lineage_{ts}.html")
         run_ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
-        nodes_json = json.dumps(nodes, default=str)
-        edges_json = json.dumps(edges, default=str)
+        # "</" inside a string literal would close the <script> tag and let
+        # ledger-sourced data inject markup — escape it for safe embedding
+        nodes_json = json.dumps(nodes, default=str).replace("</", "<\\/")
+        edges_json = json.dumps(edges, default=str).replace("</", "<\\/")
 
         html = self._render_html(ts, run_ts, nodes_json, edges_json)
 
@@ -742,10 +747,16 @@ node.style("opacity",0);
 
 // ── Tooltip ──────────────────────────────────────────────────────────────
 const tip = document.getElementById("tip");
+// Node metadata comes from the audit ledger (user-controlled) — must be
+// escaped before being written via innerHTML
+function escapeHtml(s){{
+  return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;")
+    .replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+}}
 function showTip(e,d){{
   document.getElementById("tip-title").textContent = (d.icon?d.icon+" ":"")+d.label.replace("\\n"," ");
   const rows = Object.entries(d.meta||{{}}).map(([k,v])=>
-    `<tr><td>${{k}}</td><td>${{String(v).slice(0,80)}}</td></tr>`).join("");
+    `<tr><td>${{escapeHtml(k)}}</td><td>${{escapeHtml(String(v).slice(0,80))}}</td></tr>`).join("");
   document.getElementById("tip-body").innerHTML = rows||"<tr><td>No metadata</td></tr>";
   tip.style.display = "block";
   moveTip(e);

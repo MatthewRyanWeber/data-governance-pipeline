@@ -9,6 +9,11 @@ Layer 3 — imports from Layer 1 (governance_logger).
 Revision history
 ────────────────
 1.0   2026-06-08   Initial release.
+1.1   2026-06-11   Retry only 429/5xx/connection errors (non-retryable 4xx
+                   raises immediately), record 429 responses as the failure
+                   cause, stop sleeping after the final attempt, and break
+                   cursor pagination with a warning when the API returns the
+                   same cursor twice.
 """
 
 import logging
@@ -154,11 +159,20 @@ class RESTExtractor:
                     yield records
                     page_count += 1
 
-                    cursor = self._extract_data(data, cursor_path)
-                    if isinstance(cursor, list):
-                        cursor = cursor[0] if cursor else None
-                    if not cursor:
+                    next_cursor: Any = self._extract_data(data, cursor_path)
+                    if isinstance(next_cursor, list):
+                        next_cursor = next_cursor[0] if next_cursor else None
+                    if not next_cursor:
                         break
+                    if next_cursor == cursor:
+                        # A repeated cursor would loop on the same page forever
+                        logger.warning(
+                            "[REST_EXTRACT] API returned the same cursor twice "
+                            "(%r) — stopping pagination to avoid an infinite loop.",
+                            next_cursor,
+                        )
+                        break
+                    cursor = next_cursor
 
                     if rate_limit_delay > 0:
                         time.sleep(rate_limit_delay)
@@ -212,33 +226,72 @@ class RESTExtractor:
         return resp.json()
 
     def _raw_fetch_with_retry(self, session, url, params, timeout, max_retries):
-        """GET with retry, returning the raw Response object."""
-        last_exc = None
+        """
+        GET with retry, returning the raw Response object.
+
+        Only transient failures are retried: 429, 5xx, and connection
+        errors.  Other 4xx responses are client errors that will never
+        succeed on retry, so they raise immediately.  No sleep happens
+        after the final attempt.
+        """
+        import requests
+
+        last_exc: Exception | None = None
         for attempt in range(max_retries):
+            is_last_attempt = attempt >= max_retries - 1
             try:
                 resp = session.get(url, params=params, timeout=timeout)
-                if resp.status_code == 429:
-                    raw_retry = resp.headers.get("Retry-After", str(2 ** attempt))
-                    try:
-                        retry_after = int(raw_retry)
-                    except ValueError:
-                        retry_after = 2 ** attempt
-                    logger.warning(
-                        "[REST_EXTRACT] Rate limited (429) — waiting %ds", retry_after,
-                    )
-                    time.sleep(retry_after)
-                    continue
-                resp.raise_for_status()
-                return resp
-            except Exception as exc:
+            except requests.RequestException as exc:
                 last_exc = exc
                 wait = 2 ** attempt
                 logger.warning(
-                    "[REST_EXTRACT] Attempt %d/%d failed: %s — retrying in %ds",
-                    attempt + 1, max_retries, exc, wait,
+                    "[REST_EXTRACT] Attempt %d/%d failed: %s%s",
+                    attempt + 1, max_retries, exc,
+                    "" if is_last_attempt else f" — retrying in {wait}s",
                 )
                 self.gov.retry_attempt(attempt + 1, max_retries, wait, exc)
-                time.sleep(wait)
+                if not is_last_attempt:
+                    time.sleep(wait)
+                continue
+
+            if resp.status_code == 429:
+                # Keep the 429 as the failure cause so an all-429 run does
+                # not raise "from None"
+                last_exc = requests.HTTPError(
+                    "429 Too Many Requests", response=resp,
+                )
+                raw_retry = resp.headers.get("Retry-After", str(2 ** attempt))
+                try:
+                    retry_after = int(raw_retry)
+                except ValueError:
+                    retry_after = 2 ** attempt
+                logger.warning(
+                    "[REST_EXTRACT] Rate limited (429) — attempt %d/%d%s",
+                    attempt + 1, max_retries,
+                    "" if is_last_attempt else f", waiting {retry_after}s",
+                )
+                if not is_last_attempt:
+                    time.sleep(retry_after)
+                continue
+
+            if 500 <= resp.status_code < 600:
+                last_exc = requests.HTTPError(
+                    f"{resp.status_code} Server Error", response=resp,
+                )
+                wait = 2 ** attempt
+                logger.warning(
+                    "[REST_EXTRACT] Attempt %d/%d failed: HTTP %d%s",
+                    attempt + 1, max_retries, resp.status_code,
+                    "" if is_last_attempt else f" — retrying in {wait}s",
+                )
+                self.gov.retry_attempt(attempt + 1, max_retries, wait, last_exc)
+                if not is_last_attempt:
+                    time.sleep(wait)
+                continue
+
+            # Non-retryable 4xx raises here and propagates immediately
+            resp.raise_for_status()
+            return resp
 
         raise RuntimeError(
             f"REST extraction failed after {max_retries} attempts: {last_exc}"

@@ -2,14 +2,20 @@
 Google Cloud Pub/Sub extractor — pulls messages from a subscription.
 
 Reads JSON-encoded messages from a Pub/Sub subscription and yields each
-micro-batch as a pandas DataFrame. Messages are acknowledged after the
-batch is yielded to the caller.
+micro-batch as a pandas DataFrame. Parseable messages are acknowledged
+after the batch is yielded to the caller; malformed messages are nacked
+(ack deadline set to 0) so they stay visible for inspection or dead-letter
+routing instead of being silently lost.
 
 Layer 3 — imports from Layer 1 (governance_logger).
 
 Revision history
 ----------------
 1.0   2026-06-07   Initial extraction from monolith.
+1.1   2026-06-11   Empty subscription no longer raises DeadlineExceeded —
+                   pull timeouts are treated as "no messages".  Malformed
+                   messages are nacked (modify_ack_deadline 0) instead of
+                   acknowledged, so they are no longer permanently lost.
 """
 
 import json
@@ -22,6 +28,28 @@ if TYPE_CHECKING:
     from pipeline.governance_logger import GovernanceLogger
 
 logger = logging.getLogger(__name__)
+
+
+def _pull_timeout_errors() -> tuple[type[BaseException], ...]:
+    """
+    Return the google-api-core timeout exception classes, if available.
+
+    Imported lazily because google-api-core may not be installed (tests
+    mock the Pub/Sub client) — an empty tuple in an except clause simply
+    catches nothing.
+    """
+    try:
+        from google.api_core import exceptions as gax_exceptions
+    except ImportError:
+        return ()
+    candidates = (
+        getattr(gax_exceptions, "DeadlineExceeded", None),
+        getattr(gax_exceptions, "RetryError", None),
+    )
+    return tuple(
+        c for c in candidates
+        if isinstance(c, type) and issubclass(c, BaseException)
+    )
 
 
 class PubSubStreamExtractor:
@@ -76,16 +104,27 @@ class PubSubStreamExtractor:
         Pull messages and yield micro-batches as DataFrames.
 
         Each batch contains up to ``batch_size`` deserialized JSON records.
-        Stops when a pull returns zero messages.
+        Stops when a pull returns zero messages or times out (an empty
+        subscription raises DeadlineExceeded — treated as "no messages").
+
+        Malformed messages are nacked (ack deadline 0) rather than
+        acknowledged, so they remain on the subscription for inspection or
+        dead-letter routing instead of being permanently lost.
         """
+        timeout_errors = _pull_timeout_errors()
+
         while True:
-            response = self._subscriber.pull(  # type: ignore[union-attr]
-                request={
-                    "subscription": self._subscription_path,
-                    "max_messages": self.batch_size,
-                },
-                timeout=self.timeout,
-            )
+            try:
+                response = self._subscriber.pull(  # type: ignore[union-attr]
+                    request={
+                        "subscription": self._subscription_path,
+                        "max_messages": self.batch_size,
+                    },
+                    timeout=self.timeout,
+                )
+            except timeout_errors as exc:
+                logger.info("Pub/Sub pull timed out (%s) — treating as empty subscription.", exc)
+                break
 
             received_messages = response.received_messages
             if not received_messages:
@@ -94,21 +133,23 @@ class PubSubStreamExtractor:
 
             records: list[dict] = []
             ack_ids: list[str] = []
+            nack_ids: list[str] = []
 
             for message in received_messages:
-                ack_ids.append(message.ack_id)
                 try:
                     value = json.loads(message.message.data.decode("utf-8"))
-                    records.append(value)
                 except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-                    logger.warning("Skipping malformed Pub/Sub message %s: %s", message.message.message_id, exc)
+                    logger.warning("Nacking malformed Pub/Sub message %s: %s", message.message.message_id, exc)
+                    nack_ids.append(message.ack_id)
                     continue
+                records.append(value)
+                ack_ids.append(message.ack_id)
 
             if records:
                 logger.info("Yielding Pub/Sub batch of %d records.", len(records))
                 yield pd.DataFrame(records)
 
-            # Acknowledge all pulled messages (including malformed ones)
+            # Acknowledge only the messages that parsed successfully
             if ack_ids:
                 self._subscriber.acknowledge(  # type: ignore[union-attr]
                     request={
@@ -117,6 +158,17 @@ class PubSubStreamExtractor:
                     },
                 )
                 logger.info("Acknowledged %d Pub/Sub messages.", len(ack_ids))
+
+            # Nack malformed messages so they redeliver / dead-letter
+            if nack_ids:
+                self._subscriber.modify_ack_deadline(  # type: ignore[union-attr]
+                    request={
+                        "subscription": self._subscription_path,
+                        "ack_ids": nack_ids,
+                        "ack_deadline_seconds": 0,
+                    },
+                )
+                logger.warning("Nacked %d malformed Pub/Sub messages.", len(nack_ids))
 
     def close(self) -> None:
         """Close the Pub/Sub subscriber client."""

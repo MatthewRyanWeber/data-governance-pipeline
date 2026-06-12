@@ -11,6 +11,9 @@ Revision history
 1.0   2026-06-08   Initial release.
 1.1   2026-06-08   Add dry_run, thread lock, stricter sanitization, atomic
                    manifest writes, input validation.
+1.2   2026-06-11   Next version is max(existing)+1 instead of len()+1, so a
+                   snapshot taken after delete_version can never overwrite an
+                   existing immutable snapshot file.
 """
 
 import hashlib
@@ -97,7 +100,12 @@ class SnapshotStore:
 
         with self._lock:
             manifest = self._load_manifest(dataset)
-            version = len(manifest["versions"]) + 1
+            # len()+1 would collide after delete_version and overwrite an
+            # immutable snapshot — version numbers are never reused
+            if manifest["versions"]:
+                version = int(max(v["version"] for v in manifest["versions"])) + 1
+            else:
+                version = 1
 
             csv_data = df.to_csv(index=False, encoding="utf-8")
             content_hash = hashlib.sha256(csv_data.encode("utf-8")).hexdigest()

@@ -5,6 +5,9 @@ CostEstimator, and LineageGraphGenerator.
 Revision history
 ────────────────
 1.0   2026-06-08   Initial release: 17 tests across 4 classes.
+1.1   2026-06-11   Regression tests: run metadata and column names are
+                   html-escaped in the HTML report; lineage JSON escapes "</"
+                   and the tooltip escapes node metadata.
 """
 
 import json
@@ -122,6 +125,47 @@ class TestHTMLReportGenerator(unittest.TestCase):
         content = Path(path).read_text(encoding="utf-8")
         self.assertIn("5", content)
 
+    def test_run_meta_is_html_escaped(self):
+        """Regression: source/destination were interpolated unescaped,
+        allowing stored XSS in the run report."""
+        df = self.pd.DataFrame({"x": [1]})
+        gen = HTMLReportGenerator(self.gov)
+        payload = '<script>alert("xss")</script>'
+        path = gen.generate(
+            df, run_meta={"source": payload, "destination": payload,
+                          "duration_s": payload},
+        )
+        content = Path(path).read_text(encoding="utf-8")
+        self.assertNotIn(payload, content)
+        self.assertIn("&lt;script&gt;", content)
+
+    def test_quality_dimension_and_column_names_escaped(self):
+        """Regression: quality dimension names and diff column names were
+        interpolated unescaped."""
+        df = self.pd.DataFrame({"x": [1]})
+        gen = HTMLReportGenerator(self.gov)
+        evil_name = '<img src=x onerror=alert(1)>'
+        quality = {"score": 85, "dimensions": {evil_name: 90.0}}
+        diff = {
+            "rows_changed": 1, "rows_added": 0, "rows_deleted": 0,
+            "column_change_counts": {evil_name: 3},
+        }
+        path = gen.generate(
+            df, run_meta={"source": "x.csv", "destination": "sqlite"},
+            quality=quality, diff=diff,
+        )
+        content = Path(path).read_text(encoding="utf-8")
+        self.assertNotIn(evil_name, content)
+        self.assertIn("&lt;img src=x onerror=alert(1)&gt;", content)
+
+    def test_status_badge_still_rendered_raw(self):
+        """The trusted status badge must survive the escaping fix."""
+        df = self.pd.DataFrame({"x": [1]})
+        gen = HTMLReportGenerator(self.gov)
+        path = gen.generate(df, run_meta={"source": "x.csv", "destination": "sqlite"})
+        content = Path(path).read_text(encoding="utf-8")
+        self.assertIn('<span class="badge success">Success</span>', content)
+
 
 class TestCostEstimator(unittest.TestCase):
     """CostEstimator computes per-run cost breakdowns."""
@@ -227,6 +271,29 @@ class TestLineageGraphGenerator(unittest.TestCase):
         nodes, edges = gen._build_graph()
         source_nodes = [n for n in nodes if n["type"] == "source"]
         self.assertEqual(len(source_nodes), 1)
+
+    def test_embedded_json_cannot_close_script_tag(self):
+        """Regression: a ledger value containing </script> could break out
+        of the embedded JSON and inject markup."""
+        self.gov.transformation_applied("SOURCE_REGISTERED", {
+            "source_path": "</script><script>alert(1)</script>",
+            "file_type": "csv", "row_count": 1, "col_count": 1,
+            "sha256": "abc123",
+        })
+        gen = LineageGraphGenerator(self.gov)
+        path = gen.generate(output_path=str(Path(self.tmp) / "lineage.html"))
+        content = Path(path).read_text(encoding="utf-8")
+        self.assertNotIn("</script><script>alert(1)", content)
+        self.assertIn("<\\/script>", content)
+
+    def test_tooltip_escapes_node_metadata(self):
+        """The tooltip renderer must escape metadata before innerHTML."""
+        gen = LineageGraphGenerator(self.gov)
+        path = gen.generate(output_path=str(Path(self.tmp) / "lineage.html"))
+        content = Path(path).read_text(encoding="utf-8")
+        self.assertIn("function escapeHtml", content)
+        self.assertIn("escapeHtml(k)", content)
+        self.assertIn("escapeHtml(String(v).slice(0,80))", content)
 
 
 if __name__ == "__main__":

@@ -4,6 +4,8 @@ Tests for the circuit breaker pattern.
 Revision history
 ────────────────
 1.0   2026-06-09   Initial release.
+1.1   2026-06-11   Tests for HALF_OPEN single-probe behaviour (no thundering
+                   herd against a recovering backend).
 """
 
 import threading
@@ -93,6 +95,35 @@ class TestCircuitBreakerTransitions(unittest.TestCase):
         self.cb.reset()
         self.assertEqual(self.cb.to_dict()["state"], "closed")
         self.assertTrue(self.cb.allow_request())
+
+    def test_half_open_allows_exactly_one_probe(self):
+        """Concurrent callers in HALF_OPEN are rejected while a probe is
+        outstanding — no thundering herd against a recovering backend."""
+        for _ in range(3):
+            self.cb.record_failure()
+        time.sleep(0.15)
+        self.assertTrue(self.cb.allow_request())   # the single probe
+        self.assertFalse(self.cb.allow_request())  # rejected: probe in flight
+        self.assertFalse(self.cb.allow_request())
+
+    def test_next_probe_allowed_after_probe_success(self):
+        for _ in range(3):
+            self.cb.record_failure()
+        time.sleep(0.15)
+        self.assertTrue(self.cb.allow_request())
+        self.cb.record_success()
+        # success_threshold=2: still HALF_OPEN, a new probe is now allowed
+        self.assertTrue(self.cb.allow_request())
+        self.assertFalse(self.cb.allow_request())
+
+    def test_probe_failure_reopens_and_rejects(self):
+        for _ in range(3):
+            self.cb.record_failure()
+        time.sleep(0.15)
+        self.assertTrue(self.cb.allow_request())
+        self.cb.record_failure()
+        self.assertEqual(self.cb.to_dict()["state"], "open")
+        self.assertFalse(self.cb.allow_request())
 
 
 class TestCircuitBreakerCustomThresholds(unittest.TestCase):

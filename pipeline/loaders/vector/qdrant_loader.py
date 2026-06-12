@@ -9,6 +9,11 @@ Revision history
 1.0   2026-06-07   Extracted from pipeline_v3.py (class QdrantLoader).
 1.1   2026-06-07   Full rewrite: collection_info, validate_float_vector,
                    gov.load_complete integration, improved _build_client.
+1.2   2026-06-11   Without id_column, point ids are offset by the collection's
+                   current point count so a second append no longer overwrites
+                   prior points.  Non-integral float id values are rejected
+                   with a clear error instead of being truncated into
+                   colliding ids.
 """
 
 import logging
@@ -149,6 +154,12 @@ class QdrantLoader(BaseLoader):
             payload_cols = [c for c in df.columns
                             if c not in (id_col, vector_col)]
 
+            # Auto-generated ids must start above the existing points,
+            # otherwise a second append restarts at 0 and overwrites them
+            id_offset = 0
+            if not (id_col and id_col in df.columns):
+                id_offset = self._existing_point_count(client, collection_name)
+
             all_records = df.to_dict(orient="records")
             total = 0
             for i in range(0, len(all_records), batch_size):
@@ -163,20 +174,9 @@ class QdrantLoader(BaseLoader):
                         vec = list(vec)
 
                     if id_col and id_col in df.columns:
-                        raw_id = rec[id_col]
-                        point_id: int | str
-                        try:
-                            point_id = int(raw_id)
-                        except (ValueError, TypeError):
-                            import hashlib
-                            import uuid as _uuid
-                            point_id = str(_uuid.UUID(
-                                hashlib.sha256(
-                                    str(raw_id).encode()
-                                ).hexdigest()[:32]
-                            ))
+                        point_id = self._point_id(rec[id_col], id_col)
                     else:
-                        point_id = i + row_idx
+                        point_id = id_offset + i + row_idx
 
                     payload = {}
                     for col in payload_cols:
@@ -266,6 +266,59 @@ class QdrantLoader(BaseLoader):
             "vectors_count": info.vectors_count,
             "status": info.status.value,
         }
+
+    @staticmethod
+    def _existing_point_count(client, collection_name) -> int:
+        """Return the collection's current point count (0 if unknown)."""
+        info = client.get_collection(collection_name)
+        points_count = getattr(info, "points_count", None)
+        if isinstance(points_count, int):
+            return points_count
+        logger.warning(
+            "QdrantLoader: could not determine point count for %s — "
+            "auto-generated ids start at 0.", collection_name,
+        )
+        return 0
+
+    @staticmethod
+    def _point_id(raw_id, id_col) -> int | str:
+        """
+        Convert an id-column value to a valid Qdrant point id.
+
+        Integers (and integral floats — pandas upcasts int columns with
+        NaNs) pass through; non-integral floats are rejected because
+        truncating them collides distinct ids; everything else is hashed
+        to a deterministic UUID string.
+        """
+        import numpy as _np
+
+        if isinstance(raw_id, bool):
+            raise ValueError(
+                f"QdrantLoader: id column '{id_col}' contains boolean "
+                f"value {raw_id!r} — point ids must be integers or strings."
+            )
+        if isinstance(raw_id, (int, _np.integer)):
+            return int(raw_id)
+        if isinstance(raw_id, (float, _np.floating)):
+            if not float(raw_id).is_integer():
+                raise ValueError(
+                    f"QdrantLoader: id column '{id_col}' contains "
+                    f"non-integer value {raw_id!r} — truncating it would "
+                    "collide distinct ids. Use integer or string ids."
+                )
+            return int(raw_id)
+        if isinstance(raw_id, str):
+            # Numeric strings keep their historical integer mapping so
+            # existing collections stay addressable
+            try:
+                return int(raw_id)
+            except ValueError:
+                pass
+        import hashlib
+        import uuid as _uuid
+        return str(_uuid.UUID(
+            hashlib.sha256(str(raw_id).encode()).hexdigest()[:32]
+        ))
 
     @staticmethod
     def _build_client(cfg):

@@ -11,6 +11,8 @@ Revision history
 1.0   2026-06-09   Initial release.
 1.1   2026-06-10   Fix: stub optional SDK modules in sys.modules so lazy
                     imports inside load() don't raise ModuleNotFoundError.
+1.2   2026-06-11   Regression test: LanceDB upsert without natural_keys
+                    raises instead of silently appending.
 """
 
 import sys
@@ -505,6 +507,13 @@ class TestLanceDBLoader(unittest.TestCase):
         loader = self._make()
         with self.assertRaises(ValueError):
             loader.load(_DF, {"uri": "/tmp/lance"}, table="t", if_exists="invalid")
+
+    def test_upsert_without_natural_keys_raises(self):
+        """Regression: upsert with no natural_keys silently appended."""
+        loader = self._make()
+        with self.assertRaises(ValueError) as ctx:
+            loader.load(_DF, {"uri": "/tmp/lance"}, table="t", if_exists="upsert")
+        self.assertIn("natural_keys", str(ctx.exception))
 
 
 # ── BigQuery Vector ─────────────────────────────────────────────────────────

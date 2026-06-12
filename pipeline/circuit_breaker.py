@@ -11,6 +11,9 @@ Revision history
 ────────────────
 1.0   2026-06-09   Initial release.
 1.1   2026-06-09   Added unregister() for cleanup, documented lock hierarchy.
+1.2   2026-06-11   HALF_OPEN now allows exactly one in-flight probe at a time;
+                   concurrent callers are rejected until the probe resolves
+                   (prevents a thundering herd against a recovering backend).
 """
 
 import enum
@@ -66,6 +69,8 @@ class CircuitBreaker:
         self._failure_count = 0
         self._success_count = 0
         self._last_failure_time: float = 0.0
+        # True while a single HALF_OPEN probe request is outstanding
+        self._probe_in_flight = False
 
         with _registry_lock:
             _active_breakers[name] = self
@@ -82,17 +87,23 @@ class CircuitBreaker:
                 if time.monotonic() - self._last_failure_time >= self._recovery_timeout:
                     self._state = CircuitState.HALF_OPEN
                     self._success_count = 0
+                    self._probe_in_flight = True
                     logger.info("[CIRCUIT] '%s' OPEN -> HALF_OPEN (testing recovery)",
                                 self.name)
                     return True
                 return False
 
-            # HALF_OPEN — allow test requests
+            # HALF_OPEN — allow exactly one probe at a time so concurrent
+            # callers cannot stampede a backend that is still recovering
+            if self._probe_in_flight:
+                return False
+            self._probe_in_flight = True
             return True
 
     def record_success(self) -> None:
         with self._lock:
             if self._state == CircuitState.HALF_OPEN:
+                self._probe_in_flight = False
                 self._success_count += 1
                 if self._success_count >= self._success_threshold:
                     self._state = CircuitState.CLOSED
@@ -110,6 +121,7 @@ class CircuitBreaker:
             if self._state == CircuitState.HALF_OPEN:
                 self._state = CircuitState.OPEN
                 self._success_count = 0
+                self._probe_in_flight = False
                 logger.warning("[CIRCUIT] '%s' HALF_OPEN -> OPEN (recovery failed)",
                                self.name)
 
@@ -126,6 +138,7 @@ class CircuitBreaker:
             self._failure_count = 0
             self._success_count = 0
             self._last_failure_time = 0.0
+            self._probe_in_flight = False
         logger.info("[CIRCUIT] '%s' reset to CLOSED", self.name)
 
     def to_dict(self) -> dict:

@@ -10,6 +10,11 @@ Layer 3 — imports from Layer 1 (governance_logger).
 Revision history
 ----------------
 1.0   2026-06-07   Initial extraction from monolith.
+1.1   2026-06-11   Fix offset loss: consume() now commits the previous batch's
+                   offsets when the caller resumes after a yield (at-least-once),
+                   bounds consecutive broker error polls, and closes the
+                   consumer via try/finally so caller break/exception still
+                   releases it.
 """
 
 import json
@@ -84,45 +89,69 @@ class KafkaStreamExtractor:
 
         Each batch contains up to ``batch_size`` deserialized JSON records.
         Stops when no messages are received within ``timeout_ms``.
+
+        Offsets are committed when the caller resumes iteration after a
+        yield — resuming proves the caller finished processing the batch,
+        giving at-least-once delivery. If the caller breaks or raises, the
+        last batch is not committed and will be re-read on restart.
+
+        Raises RuntimeError after ``max_consecutive_errors`` error polls in
+        a row so a persistently broken broker cannot loop forever.
         """
         records: list[dict] = []
         empty_polls = 0
         max_empty_polls = 3
+        consecutive_errors = 0
+        max_consecutive_errors = 10
 
-        while True:
-            assert self._consumer is not None
-            message = self._consumer.poll(timeout=self.timeout_ms / 1000.0)
+        try:
+            while True:
+                assert self._consumer is not None
+                message = self._consumer.poll(timeout=self.timeout_ms / 1000.0)
 
-            if message is None:
-                empty_polls += 1
-                if empty_polls >= max_empty_polls:
-                    if records:
-                        yield pd.DataFrame(records)
-                        records = []
-                    logger.info("No messages after %d empty polls — stopping.", max_empty_polls)
-                    break
-                continue
+                if message is None:
+                    empty_polls += 1
+                    if empty_polls >= max_empty_polls:
+                        logger.info("No messages after %d empty polls — stopping.", max_empty_polls)
+                        break
+                    continue
 
-            if message.error():
-                logger.warning("Kafka consumer error: %s", message.error())
-                continue
+                if message.error():
+                    consecutive_errors += 1
+                    logger.warning("Kafka consumer error (%d/%d consecutive): %s",
+                                   consecutive_errors, max_consecutive_errors,
+                                   message.error())
+                    if consecutive_errors >= max_consecutive_errors:
+                        raise RuntimeError(
+                            f"Kafka consumer returned {consecutive_errors} "
+                            f"consecutive error polls — giving up. "
+                            f"Last error: {message.error()}"
+                        )
+                    continue
 
-            empty_polls = 0
-            try:
-                value = json.loads(message.value().decode("utf-8"))
-                records.append(value)
-            except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-                logger.warning("Skipping malformed message at offset %s: %s", message.offset(), exc)
-                continue
+                consecutive_errors = 0
+                empty_polls = 0
+                try:
+                    value = json.loads(message.value().decode("utf-8"))
+                    records.append(value)
+                except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+                    logger.warning("Skipping malformed message at offset %s: %s", message.offset(), exc)
+                    continue
 
-            if len(records) >= self.batch_size:
-                logger.info("Yielding Kafka batch of %d records.", len(records))
+                if len(records) >= self.batch_size:
+                    logger.info("Yielding Kafka batch of %d records.", len(records))
+                    yield pd.DataFrame(records)
+                    # Caller resumed -> previous batch fully processed
+                    self.commit()
+                    records = []
+
+            if records:
+                logger.info("Yielding final Kafka batch of %d records.", len(records))
                 yield pd.DataFrame(records)
-                records = []
-
-        if records:
-            logger.info("Yielding final Kafka batch of %d records.", len(records))
-            yield pd.DataFrame(records)
+                self.commit()
+        finally:
+            # Guarantees release even when the caller breaks or raises
+            self.close()
 
     def commit(self) -> None:
         """Commit current consumer offsets to Kafka."""

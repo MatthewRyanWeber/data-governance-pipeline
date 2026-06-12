@@ -7,6 +7,10 @@ Layer 4 — imports from Layer 0 (constants), Layer 1 (governance_logger).
 Revision history
 ────────────────
 1.0   2026-06-07   Extracted from pipeline_v3.py (class MilvusLoader).
+1.1   2026-06-11   create_collection now passes cfg's vector_column/id_column
+                   as vector_field_name/primary_field_name — previously the
+                   schema hardcoded "vector"/"id" while inserts used the
+                   configured names, so every insert missed the schema fields.
 """
 
 import logging
@@ -109,11 +113,15 @@ class MilvusLoader(BaseLoader):
                     client.drop_collection(collection)
 
             if not client.has_collection(collection):
+                # Schema field names must match the keys used at insert
+                # time, or every insert misses the schema fields
                 client.create_collection(
                     collection_name=collection,
                     dimension=vector_size,
                     metric_type=metric_type,
                     auto_id=(id_col not in df.columns),
+                    primary_field_name=id_col,
+                    vector_field_name=vector_col,
                 )
 
             all_records = df.to_dict(orient="records")

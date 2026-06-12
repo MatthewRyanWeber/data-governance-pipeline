@@ -21,8 +21,17 @@ import logging
 import unittest
 from unittest.mock import MagicMock, patch
 
-logging.disable(logging.CRITICAL)
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+
+
+def setUpModule():
+    # Silence loader noise for this module only — a module-level
+    # logging.disable leaks into every later module and breaks assertLogs.
+    logging.disable(logging.CRITICAL)
+
+
+def tearDownModule():
+    logging.disable(logging.NOTSET)
 
 import pandas as pd
 

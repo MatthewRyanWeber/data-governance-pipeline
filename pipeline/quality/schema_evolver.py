@@ -6,6 +6,10 @@ Layer 3 — imports from Layer 1 (governance_logger).
 Revision history
 ────────────────
 1.0   2026-06-07   Initial extraction from pipeline_v3.py.
+1.1   2026-06-11   Per-call engine override no longer leaks into the shared
+                   instance on exception (restored in finally).  Docstring no
+                   longer claims type widening — dtype drift is detected and
+                   logged as a warning but not acted on.
 """
 
 import logging
@@ -28,7 +32,8 @@ class SchemaEvolver:
     Handles:
       - New columns added  -> ALTER TABLE ... ADD COLUMN
       - Columns removed    -> logged as warning (not dropped by default)
-      - Type widening      -> ALTER TABLE ... ALTER COLUMN (where supported)
+      - Type drift         -> detected and logged as a warning only; the
+                              column type is NOT altered automatically
 
     Supports: SQLite, PostgreSQL, MySQL, SQL Server, Snowflake, Redshift
 
@@ -55,9 +60,39 @@ class SchemaEvolver:
         "object":             "TEXT",
     }
 
+    # Maps vendor type spellings to one canonical name so dtype-drift
+    # detection does not warn on harmless synonyms (INTEGER vs BIGINT).
+    _TYPE_SYNONYMS: dict[str, str] = {
+        "INT":              "BIGINT",
+        "INTEGER":          "BIGINT",
+        "SMALLINT":         "BIGINT",
+        "BIGINT":           "BIGINT",
+        "REAL":             "DOUBLE PRECISION",
+        "FLOAT":            "DOUBLE PRECISION",
+        "DOUBLE":           "DOUBLE PRECISION",
+        "DOUBLE PRECISION": "DOUBLE PRECISION",
+        "NUMERIC":          "DOUBLE PRECISION",
+        "DECIMAL":          "DOUBLE PRECISION",
+        "VARCHAR":          "TEXT",
+        "NVARCHAR":         "TEXT",
+        "CHAR":             "TEXT",
+        "STRING":           "TEXT",
+        "TEXT":             "TEXT",
+        "DATETIME":         "TIMESTAMP",
+        "TIMESTAMP":        "TIMESTAMP",
+        "BOOL":             "BOOLEAN",
+        "BOOLEAN":          "BOOLEAN",
+    }
+
     def __init__(self, gov: "GovernanceLogger", engine) -> None:
         self.gov    = gov
         self.engine = engine
+
+    @classmethod
+    def _normalise_sql_type(cls, sql_type: str) -> str:
+        """Strip length qualifiers and collapse vendor synonyms."""
+        base = sql_type.split("(")[0].strip().upper()
+        return cls._TYPE_SYNONYMS.get(base, base)
 
     def _get_existing_columns(self, table: str, schema: str | None = None) -> dict[str, str]:
         """Return {column_name: data_type} for the existing table."""
@@ -96,9 +131,27 @@ class SchemaEvolver:
         dict  Evolution report: columns_added, columns_dropped, columns_unchanged.
         """
         active_engine = engine if engine is not None else self.engine
-        _orig_engine = self.engine
+        original_engine = self.engine
         if engine is not None:
             self.engine = engine
+        try:
+            return self._evolve_with_engine(
+                df, table_name, schema, drop_missing, active_engine,
+            )
+        finally:
+            # Restore even on exception so the override never leaks into
+            # the shared instance
+            self.engine = original_engine
+
+    def _evolve_with_engine(
+        self,
+        df:            "pd.DataFrame",
+        table_name:    str,
+        schema:        str | None,
+        drop_missing:  bool,
+        active_engine,
+    ) -> dict:
+        """Run the evolution against the resolved engine."""
         existing = self._get_existing_columns(table_name, schema)
         incoming = {
             col: self.DTYPE_TO_SQL.get(str(df[col].dtype), "TEXT")
@@ -134,6 +187,21 @@ class SchemaEvolver:
                                        table_name, col, exc)
                 else:
                     unchanged.append(col)
+                    existing_type = self._normalise_sql_type(existing[col])
+                    incoming_type = self._normalise_sql_type(sql_type)
+                    if existing_type != incoming_type:
+                        # Drift is reported but never auto-altered — changing
+                        # a column type can destroy data and needs a human
+                        self.gov.transformation_applied("SCHEMA_TYPE_DRIFT_DETECTED", {
+                            "table": table_name, "column": col,
+                            "existing_type": existing[col],
+                            "incoming_type": sql_type,
+                        })
+                        logger.warning(
+                            "Type drift on %s.%s: table has %s, incoming data "
+                            "maps to %s — not altered (manual migration required).",
+                            table_name, col, existing[col], sql_type,
+                        )
 
             # Optionally drop removed columns
             if drop_missing:
@@ -176,6 +244,4 @@ class SchemaEvolver:
         })
         logger.info("[SchemaEvolver] %s: +%d added, -%d dropped, %d unchanged",
                     table_name, len(added), len(dropped), len(unchanged))
-        if engine is not None:
-            self.engine = _orig_engine
         return report

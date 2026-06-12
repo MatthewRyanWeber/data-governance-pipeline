@@ -7,6 +7,8 @@ Layer 4 — imports from Layer 0 (constants), Layer 1 (governance_logger).
 Revision history
 ────────────────
 1.0   2026-06-07   Extracted from pipeline_v3.py (class BigQueryVectorLoader).
+1.1   2026-06-11   search() now validates vector_col as a SQL identifier and
+                   coerces limit to int before interpolation.
 """
 
 import re
@@ -132,6 +134,8 @@ class BigQueryVectorLoader(BaseLoader):
                 "BigQueryVectorLoader: cfg must contain 'dataset'."
             )
         validate_sql_identifier(table, "table")
+        validate_sql_identifier(vector_col, "vector_col")
+        limit = int(limit)
 
         if options and not re.fullmatch(r"[\w=.,\s]+", options):
             raise ValueError(

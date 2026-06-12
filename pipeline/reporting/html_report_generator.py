@@ -10,9 +10,13 @@ Layer 3 — imports from pipeline.constants and pipeline.governance_logger.
 Revision history
 ────────────────
 1.0   2026-06-07   Extracted from pipeline_v3.py into standalone module.
+1.1   2026-06-11   XSS fix: run metadata, quality dimension names, and column
+                   names are now html.escape()d before interpolation, matching
+                   the existing escaping of audit ledger entries.
 """
 
 import logging
+from html import escape
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -99,9 +103,12 @@ class HTMLReportGenerator:
         if hasattr(self.gov, "ledger_entries"):
             ledger_entries = self.gov.ledger_entries[-20:]
 
-        def _row(k: str, v: str, highlight: bool = False) -> str:
+        def _row(k: str, v: str, highlight: bool = False, raw: bool = False) -> str:
+            # raw=True is reserved for trusted, code-built HTML (status badge);
+            # everything else is escaped to block stored XSS via run metadata
             bg = 'style="background:#fffde7"' if highlight else ""
-            return f"<tr {bg}><td><b>{k}</b></td><td>{v}</td></tr>"
+            value = v if raw else escape(str(v))
+            return f"<tr {bg}><td><b>{escape(str(k))}</b></td><td>{value}</td></tr>"
 
         score_color = (
             "#4caf50" if isinstance(score, (int, float)) and score >= 80
@@ -110,14 +117,15 @@ class HTMLReportGenerator:
         )
 
         dim_rows = "".join(
-            f"<tr><td>{d}</td><td>{v:.1f}</td></tr>" for d, v in q_details.items()
+            f"<tr><td>{escape(str(d))}</td><td>{v:.1f}</td></tr>"
+            for d, v in q_details.items()
         ) if q_details else "<tr><td colspan=2>Not available</td></tr>"
 
         col_change_rows = "".join(
-            f"<tr><td>{c}</td><td>{n}</td></tr>" for c, n in top_cols
+            f"<tr><td>{escape(str(c))}</td><td>{escape(str(n))}</td></tr>"
+            for c, n in top_cols
         ) if top_cols else "<tr><td colspan=2>No changes detected</td></tr>"
 
-        from html import escape
         ledger_html = ""
         for entry in reversed(ledger_entries):
             action  = escape(str(entry.get("action", "")))
@@ -170,7 +178,7 @@ class HTMLReportGenerator:
       {_row("Rows loaded", f"{len(df):,}")}
       {_row("Columns",     str(len(df.columns)))}
       {_row("Duration",    f"{run_meta.get('duration_s','—')}s")}
-      {_row("Status",      '<span class="badge success">Success</span>')}
+      {_row("Status",      '<span class="badge success">Success</span>', raw=True)}
     </table>
   </div>
   <div class="card">

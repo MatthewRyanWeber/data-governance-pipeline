@@ -11,6 +11,8 @@ Revision history
 1.0   2026-06-09   Initial release: 32 tests across snapshot creation,
                    checkout, diff, listing, deletion, dry-run, dedup,
                    persistence, error handling, and thread safety.
+1.1   2026-06-11   Regression tests: snapshot after delete_version must not
+                   reuse a version number or overwrite an existing snapshot.
 """
 
 import json
@@ -398,6 +400,43 @@ class TestDeleteVersion(unittest.TestCase):
 
     def test_delete_nonexistent_dataset_returns_false(self):
         self.assertFalse(self.store.delete_version("ghost", 1))
+
+    def test_snapshot_after_delete_does_not_reuse_version(self):
+        """Regression: len(versions)+1 collided after delete_version and
+        overwrote an existing immutable snapshot."""
+        df1 = pd.DataFrame({"x": [1]})
+        df2 = pd.DataFrame({"x": [1, 2]})
+        df3 = pd.DataFrame({"x": [1, 2, 3]})
+        self.store.snapshot(df1, "immutable")
+        self.store.snapshot(df2, "immutable")
+        self.store.delete_version("immutable", 1)
+
+        new_version = self.store.snapshot(df3, "immutable")
+        self.assertEqual(new_version, 3, "version numbers must never be reused")
+
+        # v2 must be untouched by the new snapshot
+        v2_df = self.store.checkout("immutable", version=2)
+        self.assertEqual(len(v2_df), 2)
+        v3_df = self.store.checkout("immutable", version=3)
+        self.assertEqual(len(v3_df), 3)
+
+    def test_snapshot_after_mid_delete_preserves_all_existing_files(self):
+        """Deleting a middle version then snapshotting twice must never
+        touch the surviving snapshot files."""
+        df1 = pd.DataFrame({"x": [1]})
+        df2 = pd.DataFrame({"x": [1, 2]})
+        df3 = pd.DataFrame({"x": [1, 2, 3]})
+        df4 = pd.DataFrame({"x": [1, 2, 3, 4]})
+        self.store.snapshot(df1, "mid_delete")
+        self.store.snapshot(df2, "mid_delete")
+        self.store.snapshot(df3, "mid_delete")
+        self.store.delete_version("mid_delete", 2)
+
+        new_version = self.store.snapshot(df4, "mid_delete")
+        self.assertEqual(new_version, 4)
+        self.assertEqual(len(self.store.checkout("mid_delete", version=1)), 1)
+        self.assertEqual(len(self.store.checkout("mid_delete", version=3)), 3)
+        self.assertEqual(len(self.store.checkout("mid_delete", version=4)), 4)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

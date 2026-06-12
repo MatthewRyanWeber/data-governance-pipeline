@@ -8,6 +8,8 @@ Layer 4 — imports from Layer 0 (constants), Layer 1 (governance_logger).
 Revision history
 ────────────────
 1.0   2026-06-07   Extracted from pipeline_v3.py (class LanceDBLoader).
+1.1   2026-06-11   if_exists='upsert' without natural_keys now raises
+                   ValueError instead of silently appending (duplicates).
 """
 
 import logging
@@ -54,6 +56,11 @@ class LanceDBLoader(BaseLoader):
                 f"LanceDBLoader: if_exists must be 'append', 'overwrite', or "
                 f"'upsert', got '{if_exists}'."
             )
+        if if_exists == "upsert" and not natural_keys:
+            # Falling through to append would silently duplicate rows
+            raise ValueError(
+                "LanceDBLoader: if_exists='upsert' requires natural_keys."
+            )
         if self._dry_run_guard(table, len(df)):
             return 0
         self._validate_config(cfg, ["db_path|uri"])
@@ -80,7 +87,7 @@ class LanceDBLoader(BaseLoader):
 
         if if_exists == "overwrite":
             total_rows = self._write_overwrite(db, table, df, vector_column)
-        elif if_exists == "upsert" and natural_keys:
+        elif if_exists == "upsert":
             total_rows = self._write_upsert(db, table, df,
                                             natural_keys, vector_column)
         else:

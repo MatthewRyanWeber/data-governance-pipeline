@@ -10,6 +10,9 @@ Revision history
 1.0   2026-06-08   Initial release — comprehensive coverage for all four modules.
 1.1   2026-06-11   Tests for the referential-integrity step (now validated
                    against a cached reference frame) and rules-file caching.
+1.2   2026-06-11   REST retry regression tests: non-retryable 4xx raises
+                   immediately, no sleep after the final attempt, all-429 run
+                   raises with the 429 as cause, repeated cursor breaks.
 """
 
 import hashlib
@@ -453,6 +456,10 @@ class TestRESTExtractorRetry(unittest.TestCase):
     """Tests for retry and rate-limit handling."""
 
     def setUp(self):
+        # test_loader_dispatch.py calls logging.disable(CRITICAL) at module
+        # level, which would break assertLogs here in combined runs
+        import logging
+        logging.disable(logging.NOTSET)
         from pipeline.extractors.rest_extractor import RESTExtractor
         self.gov = MagicMock()
         self.ext = RESTExtractor(self.gov)
@@ -506,6 +513,94 @@ class TestRESTExtractorRetry(unittest.TestCase):
         df = self.ext.extract(cfg)
         self.assertEqual(len(df), 1)
         mock_sleep.assert_any_call(1)
+
+    @patch("pipeline.extractors.rest_extractor.time.sleep")
+    @patch("requests.Session")
+    def test_non_retryable_4xx_raises_immediately(self, mock_session_cls, mock_sleep):
+        """Regression: a 404 will never succeed on retry — it must raise on
+        the first attempt with no retries and no sleeping."""
+        import requests as real_requests
+
+        not_found = MagicMock()
+        not_found.status_code = 404
+        not_found.headers = {}
+        not_found.raise_for_status.side_effect = real_requests.HTTPError(
+            response=not_found,
+        )
+
+        session = MagicMock()
+        session.headers = {}
+        session.get.return_value = not_found
+        mock_session_cls.return_value = session
+
+        cfg = {
+            "url": "https://api.example.com/missing",
+            "max_retries": 3,
+            "rate_limit_delay": 0,
+        }
+        with self.assertRaises(real_requests.HTTPError):
+            self.ext.extract(cfg)
+        self.assertEqual(session.get.call_count, 1)
+        mock_sleep.assert_not_called()
+
+    @patch("pipeline.extractors.rest_extractor.time.sleep")
+    @patch("requests.Session")
+    def test_all_429_raises_with_429_as_cause(self, mock_session_cls, mock_sleep):
+        """Regression: an all-429 run used to raise 'from None' — the 429
+        must be recorded as the failure cause, with no sleep after the
+        final attempt."""
+        rate_resp = MagicMock()
+        rate_resp.status_code = 429
+        rate_resp.headers = {"Retry-After": "1"}
+
+        session = MagicMock()
+        session.headers = {}
+        session.get.return_value = rate_resp
+        mock_session_cls.return_value = session
+
+        cfg = {
+            "url": "https://api.example.com/limited",
+            "max_retries": 3,
+            "rate_limit_delay": 0,
+        }
+        with self.assertRaises(RuntimeError) as ctx:
+            self.ext.extract(cfg)
+        self.assertIsNotNone(ctx.exception.__cause__)
+        self.assertIn("429", str(ctx.exception.__cause__))
+        # 3 attempts but only 2 sleeps — none after the final attempt
+        self.assertEqual(mock_sleep.call_count, 2)
+
+    @patch("requests.Session")
+    def test_repeated_cursor_breaks_pagination(self, mock_session_cls):
+        """Regression: an API returning the same next-cursor twice looped
+        until max_pages — it must break with a warning instead."""
+        import logging
+
+        page = {
+            "results": [{"id": 1}],
+            "next_cursor": "stuck-cursor",
+        }
+        session = MagicMock()
+        session.headers = {}
+        session.get.return_value = _mock_response(page)
+        mock_session_cls.return_value = session
+
+        cfg = {
+            "url": "https://api.example.com/items",
+            "data_path": "results",
+            "pagination": {
+                "type": "cursor",
+                "cursor_param": "cursor",
+                "cursor_path": "next_cursor",
+            },
+            "rate_limit_delay": 0,
+        }
+        with self.assertLogs("pipeline.extractors.rest_extractor",
+                             level=logging.WARNING):
+            df = self.ext.extract(cfg)
+        # First page (no cursor) + second page (cursor) then break
+        self.assertEqual(len(df), 2)
+        self.assertEqual(session.get.call_count, 2)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
