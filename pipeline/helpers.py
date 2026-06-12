@@ -9,6 +9,8 @@ Revision history
 1.1   2026-06-11   read_jsonl_tail: rejoin lines split across chunk boundaries;
                    flatten_record: optional max_depth; load_file_cached for
                    (path, mtime)-keyed lookup/rules caching.
+1.2   2026-06-12   interactive_prompt/confirm_yes_no moved to
+                   pipeline.prompts (re-exported here until v5.0).
 """
 
 import hashlib
@@ -106,18 +108,17 @@ def mask_value(value: Any) -> str | None:
     return "MASKED_" + hashlib.sha256(str(value).encode()).hexdigest()[:12]
 
 
-def interactive_prompt(message: str, default: str = "") -> str:
-    """Interactive prompt with optional default shown in brackets."""
-    display = f"{message} [{default}]: " if default else f"{message}: "
-    response = input(display).strip()
-    return response if response else default
+# Prompting moved to pipeline.prompts so this module stays free of user
+# I/O; re-exported here until v5.0 for backward compatibility.
+from pipeline.prompts import confirm_yes_no, interactive_prompt
 
-
-def confirm_yes_no(message: str, default: bool = True) -> bool:
-    """Yes/No prompt. Returns bool; accepts default on empty input."""
-    suffix = "[Y/n]" if default else "[y/N]"
-    response = input(f"{message} {suffix}: ").strip().lower()
-    return default if not response else response in ("y", "yes")
+__all__ = [
+    "file_hash", "detect_pii", "flatten_record", "mask_value",
+    "atomic_json_write", "read_jsonl_tail", "load_file_cached",
+    "is_present",
+    # Re-exported from pipeline.prompts until v5.0
+    "interactive_prompt", "confirm_yes_no",
+]
 
 
 def atomic_json_write(path: Path, data: str) -> None:

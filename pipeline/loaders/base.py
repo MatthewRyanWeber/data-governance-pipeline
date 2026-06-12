@@ -5,6 +5,11 @@ Provides SQL-injection-safe identifier validation, float-vector validation,
 DataFrame column name validation, and a BaseLoader class with dry_run support,
 config validation, and engine lifecycle management used by all loader subclasses.
 
+Note: loaders resolved through pipeline.loaders.resolve_loader() get
+validate_column_names() applied to every load() call automatically — the
+dispatch installs a guard wrapper, so individual loaders never call it
+themselves.  See pipeline/loaders/__init__.py:_install_column_name_guard.
+
 Revision history
 ────────────────
 1.0   2026-06-07   Initial extraction from pipeline_v3.py.

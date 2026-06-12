@@ -170,6 +170,27 @@ _LAZY_DISPATCH: dict[str, tuple[str, str, bool, bool]] = {
 
 For new loaders, both booleans are almost always `False`.
 
+Also add your db_type to `_VERIFICATION_TIER` in the same file — every
+dispatch entry must declare how it is verified (`core` = real engine in
+CI, `emulator`, or `cloud`); a lockstep test fails the build otherwise.
+New loaders should ship with an integration test in `tests/integration/`
+that earns their tier.
+
+### What dispatch does to your load()
+
+`resolve_loader()` wraps your `load()` with a column-name guard before
+returning the class: every DataFrame's column names are validated against
+SQL-injection characters (quotes, backticks, semicolons, comment markers)
+**before your code runs**. You do not need to validate column names
+yourself — but be aware the wrap exists when debugging: the traceback's
+outermost frame inside `load` is `load_with_column_validation` in
+`pipeline/loaders/__init__.py`.
+
+Your loader is also subject to the family contract
+(`tests/test_loaders/test_loader_contract.py`), which runs automatically
+against every registry entry: dry-run returns 0, keyless upsert raises,
+empty config raises, injection column names rejected.
+
 ### Required keys (optional)
 
 If your loader has mandatory config keys, add an entry to `_REQUIRED_KEYS`

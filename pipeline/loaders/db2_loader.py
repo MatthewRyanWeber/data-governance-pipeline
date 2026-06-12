@@ -68,8 +68,11 @@ class Db2Loader(BaseLoader):
         from urllib.parse import quote_plus
         ssl_str = "?Security=SSL" if cfg.get("ssl") else ""
         port = cfg.get("port", 50000)
+        # db2+ibm_db is the canonical dialect scheme; the old
+        # "ibm_db_sa+ibm_db" alias is gone from modern ibm-db-sa, so the
+        # upsert path could never load its engine.
         url = (
-            f"ibm_db_sa+ibm_db://{quote_plus(cfg['user'])}:{quote_plus(cfg['password'])}"
+            f"db2+ibm_db://{quote_plus(cfg['user'])}:{quote_plus(cfg['password'])}"
             f"@{cfg['host']}:{port}/{cfg['database']}{ssl_str}"
         )
         return _ce(url)

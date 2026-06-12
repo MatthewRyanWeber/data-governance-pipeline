@@ -17,8 +17,7 @@ import time
 import unittest
 from unittest.mock import MagicMock
 
-sys.path.insert(0, str(pathlib.Path(__file__).parent))
-from grafana_extensions import (
+from pipeline.extensions.grafana_extensions import (
     MetricsSink,
     PrometheusExporter,
     GrafanaDashboardGenerator,

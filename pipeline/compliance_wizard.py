@@ -10,7 +10,7 @@ Layer 6 — imports from Layer 0 (helpers), Layer 1 (governance_logger).
 import logging
 from typing import TYPE_CHECKING
 
-from pipeline.helpers import interactive_prompt, confirm_yes_no
+from pipeline.prompts import interactive_prompt, confirm_yes_no
 
 if TYPE_CHECKING:
     from pipeline.governance_logger import GovernanceLogger

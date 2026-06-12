@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING
 import pandas as pd
 
 from pipeline.constants import BASE_DIR, HAS_YAML
-from pipeline.helpers import confirm_yes_no
+from pipeline.prompts import confirm_yes_no
 
 if TYPE_CHECKING:
     from pipeline.governance_logger import GovernanceLogger

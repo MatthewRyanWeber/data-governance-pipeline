@@ -17,8 +17,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
-sys.path.insert(0, str(pathlib.Path(__file__).parent))
-from compliance_extensions import (
+from pipeline.extensions.compliance_extensions import (
     ComplianceMonitor,
     VendorRiskTracker,
     TrustReportGenerator,

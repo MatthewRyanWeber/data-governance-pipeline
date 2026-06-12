@@ -19,8 +19,7 @@ from unittest.mock import MagicMock
 
 import pandas as pd
 
-sys.path.insert(0, str(pathlib.Path(__file__).parent))
-from epic_extensions import (
+from pipeline.extensions.epic_extensions import (
     HIPAASafeHarborFilter,
     BAATracker,
     IRBApprovalGate,
@@ -918,8 +917,8 @@ class TestClarityExtractorNoDB(_TmpMixin):
 
     def test_import_error_without_sqlalchemy(self):
         """ClarityExtractor raises ImportError when SQLAlchemy is not available."""
-        from epic_extensions import ClarityExtractor
-        import epic_extensions as em
+        from pipeline.extensions.epic_extensions import ClarityExtractor
+        import pipeline.extensions.epic_extensions as em
         orig = em._SA_AVAILABLE
         em._SA_AVAILABLE = False
         try:
@@ -933,7 +932,7 @@ class TestClarityExtractorNoDB(_TmpMixin):
 
     def test_refresh_window_blocked(self):
         """Queries are blocked during the configured refresh window."""
-        from epic_extensions import ClarityExtractor
+        from pipeline.extensions.epic_extensions import ClarityExtractor
         from unittest.mock import patch
 
         cx = ClarityExtractor(
@@ -947,13 +946,13 @@ class TestClarityExtractorNoDB(_TmpMixin):
         # Mock datetime.now() to return a time inside the window (hour=2)
         mock_dt = MagicMock()
         mock_dt.now.return_value.hour = 2
-        with patch("epic_extensions.datetime", mock_dt):
+        with patch("pipeline.extensions.epic_extensions.datetime", mock_dt):
             with self.assertRaises(RuntimeError) as ctx:
                 cx._check_refresh_window()
         self.assertIn("ETL refresh window", str(ctx.exception))
 
     def test_refresh_window_not_blocked_when_disabled(self):
-        from epic_extensions import ClarityExtractor
+        from pipeline.extensions.epic_extensions import ClarityExtractor
 
         cx = ClarityExtractor(
             self.gov,

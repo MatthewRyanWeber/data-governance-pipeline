@@ -5,7 +5,6 @@ import json, logging, pathlib, shutil, sqlite3
 import sys, tempfile, time, unittest
 from datetime import datetime, timedelta
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 
 def setUpModule():
@@ -18,8 +17,8 @@ def tearDownModule():
     logging.disable(logging.NOTSET)
 
 import pandas as pd
-from pipeline_v3 import GovernanceLogger
-from governance_extensions import (
+from pipeline.governance_logger import GovernanceLogger
+from pipeline.extensions.governance_extensions import (
     RoPAGenerator, RetentionEnforcer, DSARResponder,
     BreachDetector, ConsentManager, ConsentRequiredError, ConsentExpiredError,
     DifferentialPrivacyTransformer, BudgetExhaustedError,
