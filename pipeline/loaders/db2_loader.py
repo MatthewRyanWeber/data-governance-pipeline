@@ -13,6 +13,7 @@ Revision history
                    emits an explicit column list; all-key MERGE omits
                    WHEN MATCHED instead of referencing __NOOP__; staging
                    engine disposed via _engine_scope.
+1.3   2026-06-12   Loader contract: dry-run returns 0 (was None); keyless upsert raises via _require_upsert_keys (was silent append).
 """
 
 import time
@@ -79,7 +80,8 @@ class Db2Loader(BaseLoader):
         if cfg.get("schema"):
             validate_sql_identifier(cfg["schema"], "schema")
         if self._dry_run_guard(table, len(df)):
-            return
+            return 0
+        self._require_upsert_keys(if_exists, natural_keys)
         self._validate_config(cfg, ["host", "user", "password", "database"])
         if natural_keys:
             self._upsert(df, cfg, table, natural_keys)

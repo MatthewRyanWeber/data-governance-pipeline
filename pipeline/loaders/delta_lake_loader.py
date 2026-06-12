@@ -12,6 +12,7 @@ Revision history
                    plain write instead of crashing; natural_keys validated
                    as SQL identifiers before interpolation into the merge
                    predicate.
+1.3   2026-06-12   Keyless upsert raises via _require_upsert_keys instead of silently appending (loader contract).
 """
 
 import logging
@@ -53,6 +54,7 @@ class DeltaLakeLoader(BaseLoader):
             raise ValueError("DeltaLakeLoader: cfg must contain 'path'.")
         if self._dry_run_guard(path, len(df)):
             return 0
+        self._require_upsert_keys(if_exists, natural_keys)
         self._validate_config(cfg, ["path"])
 
         if df.empty:

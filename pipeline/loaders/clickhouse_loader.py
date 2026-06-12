@@ -9,6 +9,7 @@ Revision history
                    silently corrupted values above 2^53); upsert refuses to
                    run against a pre-existing table whose engine is not
                    ReplacingMergeTree (plain MergeTree would duplicate rows).
+1.2   2026-06-12   Loader contract: dry-run returns 0 (was None); keyless upsert raises via _require_upsert_keys (was silent append).
 """
 
 import time
@@ -60,7 +61,8 @@ class ClickHouseLoader(BaseLoader):
         if cfg.get("database"):
             validate_sql_identifier(cfg["database"], "database")
         if self._dry_run_guard(table, len(df)):
-            return
+            return 0
+        self._require_upsert_keys(if_exists, natural_keys)
         if natural_keys:
             self._upsert(df, cfg, table, natural_keys)
         else:

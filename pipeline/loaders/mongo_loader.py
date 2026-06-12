@@ -4,6 +4,7 @@ MongoDB loader — writes DataFrames to MongoDB collections.
 Revision history
 ────────────────
 1.0   2026-06-07   Extracted from pipeline_v3.py (class MongoLoader).
+1.1   2026-06-12   Dry-run path returns 0 instead of None (loader contract).
 """
 
 import logging
@@ -25,7 +26,7 @@ class MongoLoader(BaseLoader):
 
     def load(self, df, cfg, collection):
         if self._dry_run_guard(collection, len(df)):
-            return
+            return 0
         self._validate_config(cfg, ["db_name"])
         from pymongo import MongoClient
         uri = cfg.get("uri") or (

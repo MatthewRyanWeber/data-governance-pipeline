@@ -9,6 +9,7 @@ Revision history
                    MERGE omits WHEN MATCHED instead of referencing __NOOP__;
                    temp CSV no longer leaks when _connect fails; SQLAlchemy
                    engines disposed via _engine_scope.
+1.2   2026-06-12   Loader contract: dry-run returns 0 (was None); keyless upsert raises via _require_upsert_keys (was silent append).
 """
 
 import time
@@ -96,12 +97,13 @@ class SnowflakeLoader(BaseLoader):
         table:        str,
         if_exists:    str = "append",
         natural_keys: list[str] | None = None,
-    ) -> None:
+    ) -> int:
         validate_sql_identifier(table, "table")
         if cfg.get("schema"):
             validate_sql_identifier(cfg["schema"], "schema")
         if self._dry_run_guard(table, len(df)):
-            return
+            return 0
+        self._require_upsert_keys(if_exists, natural_keys)
         self._validate_config(cfg, ["account", "user", "password", "database", "warehouse"])
         if natural_keys:
             self._upsert(df, cfg, table, natural_keys)
@@ -114,6 +116,7 @@ class SnowflakeLoader(BaseLoader):
             f"{cfg['account']}/{cfg['database']}/{cfg.get('schema', 'PUBLIC')}",
             table,
         )
+        return len(df)
 
     # ── Bulk load (PUT -> internal stage -> COPY INTO) ────────────────────
 

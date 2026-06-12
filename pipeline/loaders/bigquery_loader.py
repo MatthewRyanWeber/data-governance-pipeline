@@ -10,6 +10,7 @@ Revision history
                    calls _ensure_table so the first upsert into a new table
                    works; all-key MERGE omits WHEN MATCHED instead of
                    referencing a non-existent __noop__ column.
+1.2   2026-06-12   Dry-run path returns 0 instead of None (loader contract).
 """
 
 import time
@@ -99,10 +100,10 @@ class BigQueryLoader(BaseLoader):
         table:        str,
         if_exists:    str = "append",
         natural_keys: list[str] | None = None,
-    ) -> None:
+    ) -> int:
         validate_sql_identifier(table, "table")
         if self._dry_run_guard(table, len(df)):
-            return
+            return 0
         # Validate before reading cfg['dataset'] so a missing key surfaces
         # as ConfigValidationError instead of an opaque KeyError.
         self._validate_config(cfg, ["project", "dataset"])
@@ -119,6 +120,7 @@ class BigQueryLoader(BaseLoader):
             f"{cfg['project']}/{cfg['dataset']}@{location}",
             table,
         )
+        return len(df)
         self._log_gdpr_transfer(location)
 
     def _bulk_load(self, df, cfg, table, if_exists):

@@ -15,6 +15,7 @@ Revision history
 1.5   2026-06-09   Added field-level encryption helpers for transparent encrypt-on-load.
 1.6   2026-06-11   Added backtick to _BAD_CHARS_RE so column names cannot break
                    out of backtick-quoted DDL (BigQuery, Databricks, ClickHouse).
+1.7   2026-06-12   Added _require_upsert_keys shared guard; dry-run docstring examples return 0.
 """
 
 import contextlib
@@ -107,7 +108,7 @@ class BaseLoader:
 
     Subclasses call super().__init__(gov, dry_run) and use:
         self._validate_config(cfg, ["host", "user", "password"])
-        if self._dry_run_guard(table, len(df)): return
+        if self._dry_run_guard(table, len(df)): return 0
     """
 
     def __init__(self, gov: "GovernanceLogger", dry_run: bool = False) -> None:
@@ -138,11 +139,27 @@ class BaseLoader:
                 missing_keys=missing,
             )
 
+    def _require_upsert_keys(self, if_exists: str, natural_keys) -> None:
+        """
+        Reject if_exists='upsert' with no natural_keys.
+
+        Without keys an upsert silently degrades to append — duplicated
+        data with no warning.  Loaders whose backend upserts by a native
+        id (Qdrant, Chroma, ...) simply don't call this.
+        """
+        if if_exists == "upsert" and not natural_keys:
+            raise ValueError(
+                f"{self.__class__.__name__}: if_exists='upsert' requires "
+                f"natural_keys — without them the load would silently "
+                f"append duplicates."
+            )
+
     def _dry_run_guard(self, table: str, row_count: int) -> bool:
         """
         Log what would happen and return True if dry_run is active.
 
-        Callers should short-circuit: ``if self._dry_run_guard(...): return``
+        Callers should short-circuit: ``if self._dry_run_guard(...): return 0``
+        (0, not bare return — load() returns the row count in every path)
         """
         if not self.dry_run:
             return False

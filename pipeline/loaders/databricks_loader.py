@@ -11,6 +11,7 @@ Revision history
                    MERGE from it (the VALUES-literal temp view was an
                    injection risk, a Spark parse error, and unbounded in
                    size); all-key MERGE omits WHEN MATCHED.
+1.2   2026-06-12   Loader contract: dry-run returns 0 (was None); keyless upsert raises via _require_upsert_keys (was silent append).
 """
 
 import logging
@@ -89,7 +90,8 @@ class DatabricksLoader(BaseLoader):
         if cfg.get("schema"):
             validate_sql_identifier(cfg["schema"], "schema")
         if self._dry_run_guard(table, len(df)):
-            return
+            return 0
+        self._require_upsert_keys(if_exists, natural_keys)
         self._validate_config(cfg, ["server_hostname", "http_path"])
         if natural_keys:
             self._upsert(df, cfg, table, natural_keys, schema_evolution)

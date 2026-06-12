@@ -10,6 +10,7 @@ Revision history
 1.1   2026-06-07   Added Layer 4 docstring convention.
 1.2   2026-06-11   Upsert staging table is dropped in a finally block so a
                    failed MERGE no longer leaks the stage table.
+1.3   2026-06-12   Loader contract: dry-run returns 0 (was None); keyless upsert raises via _require_upsert_keys (was silent append).
 """
 
 import logging
@@ -124,7 +125,8 @@ class HanaLoader(BaseLoader):
         validate_sql_identifier(table, "table")
         validate_sql_identifier(schema, "schema")
         if self._dry_run_guard(table, len(df)):
-            return
+            return 0
+        self._require_upsert_keys(if_exists, natural_keys)
         self._validate_config(cfg, ["host", "user", "password"])
         conn = self._connect(cfg)
         cur = conn.cursor()

@@ -14,6 +14,7 @@ Revision history
                    config validation accepts client_id/client_secret as an
                    alternative to username/password; all-key MERGE omits
                    WHEN MATCHED instead of referencing __noop__.
+1.3   2026-06-12   Loader contract: dry-run returns 0 (was None); keyless upsert raises via _require_upsert_keys (was silent append).
 """
 
 import logging
@@ -75,7 +76,8 @@ class FireboltLoader(BaseLoader):
     def load(self, df, cfg, table, if_exists="append", natural_keys=None):
         validate_sql_identifier(table, "table")
         if self._dry_run_guard(table, len(df)):
-            return
+            return 0
+        self._require_upsert_keys(if_exists, natural_keys)
         # Firebolt supports two auth schemes; either satisfies validation.
         self._validate_config(
             cfg,

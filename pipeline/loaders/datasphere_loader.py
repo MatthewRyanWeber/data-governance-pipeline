@@ -8,6 +8,7 @@ Revision history
 ────────────────
 1.0   2026-06-07   Extracted from pipeline_v3.py (class DatasphereLoader).
 1.1   2026-06-07   Added Layer 4 docstring convention.
+1.2   2026-06-12   Loader contract: dry-run returns 0 (was None); keyless upsert raises via _require_upsert_keys (was silent append).
 """
 
 import logging
@@ -91,7 +92,8 @@ class DatasphereLoader(BaseLoader):
         """Upload df to a SAP Datasphere Local Table via OData v4."""
         tbl = cfg.get("table", table or "")
         if self._dry_run_guard(tbl or "datasphere_table", len(df)):
-            return
+            return 0
+        self._require_upsert_keys(if_exists, natural_keys)
         self._validate_config(cfg, ["tenant_url", "token|token_url"])
         timeout = cfg.get("timeout", 30)
         batch = cfg.get("batch_size", 1_000)

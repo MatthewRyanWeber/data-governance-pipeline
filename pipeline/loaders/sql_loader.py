@@ -10,6 +10,7 @@ Revision history
 1.2   2026-06-11   Dotted table names are split into schema + table (passed as
                    schema= to to_sql and quoted separately in upsert SQL)
                    instead of creating a literal "schema.table" table.
+1.3   2026-06-12   Loader contract: dry-run returns 0 (was None); keyless upsert raises via _require_upsert_keys (was silent append).
 """
 
 import time
@@ -82,7 +83,8 @@ class SQLLoader(BaseLoader):
         validate_sql_identifier(table, "table")
         schema, table_name = self._split_table_name(table)
         if self._dry_run_guard(table, len(df)):
-            return
+            return 0
+        self._require_upsert_keys(if_exists, natural_keys)
         with self._engine_scope(cfg) as engine:
             if natural_keys:
                 self._upsert(df, engine, table_name, natural_keys, schema)
