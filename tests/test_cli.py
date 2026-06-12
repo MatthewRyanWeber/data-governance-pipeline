@@ -152,6 +152,36 @@ class TestSubcommandHandlers(unittest.TestCase):
                     main(["explode"])
                 self.assertEqual(cm.exception.code, 1)
 
+    def test_destinations_lists_all_tiers(self):
+        import contextlib
+        import io
+        from pipeline.cli import _cmd_destinations
+        from pipeline.loaders import _LAZY_DISPATCH
+
+        buffer = io.StringIO()
+        ns = argparse.Namespace(tier=None)
+        with contextlib.redirect_stdout(buffer):
+            _cmd_destinations(ns)
+        output = buffer.getvalue()
+        self.assertIn("CORE", output)
+        self.assertIn("EMULATOR-VERIFIED", output)
+        self.assertIn("CLOUD-CREDENTIAL", output)
+        self.assertIn(f"{len(_LAZY_DISPATCH)} destination(s)", output)
+
+    def test_destinations_tier_filter(self):
+        import contextlib
+        import io
+        from pipeline.cli import _cmd_destinations
+
+        buffer = io.StringIO()
+        ns = argparse.Namespace(tier="cloud")
+        with contextlib.redirect_stdout(buffer):
+            _cmd_destinations(ns)
+        output = buffer.getvalue()
+        self.assertIn("CLOUD-CREDENTIAL", output)
+        self.assertNotIn("EMULATOR-VERIFIED", output)
+        self.assertIn("redshift", output)
+
     @patch("pipeline.logging_setup.setup_logging")
     def test_main_run_checks_crash_recovery(self, _):
         mock_crm = MagicMock()

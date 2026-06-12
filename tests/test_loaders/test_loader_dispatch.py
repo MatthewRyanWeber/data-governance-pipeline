@@ -2542,6 +2542,55 @@ class TestNewDestinationLoaders(unittest.TestCase):
         mock_to_sql.assert_called_once()
         self.assertIn("POSTGIS_WRITE_COMPLETE", str(self.gov._event.call_args))
 
+class TestVerificationTiers(unittest.TestCase):
+    """The tier registry must stay in lockstep with the dispatch registry."""
+
+    def test_every_dispatch_key_has_a_tier(self):
+        from pipeline.loaders import _LAZY_DISPATCH, _VERIFICATION_TIER
+        missing = set(_LAZY_DISPATCH) - set(_VERIFICATION_TIER)
+        self.assertEqual(missing, set(),
+                         f"db_types without a verification tier: {missing}")
+
+    def test_no_orphan_tier_entries(self):
+        from pipeline.loaders import _LAZY_DISPATCH, _VERIFICATION_TIER
+        orphans = set(_VERIFICATION_TIER) - set(_LAZY_DISPATCH)
+        self.assertEqual(orphans, set(),
+                         f"tier entries without a dispatch entry: {orphans}")
+
+    def test_tiers_are_valid_values(self):
+        from pipeline.loaders import (
+            _VERIFICATION_TIER, TIER_CORE, TIER_EMULATOR, TIER_CLOUD,
+        )
+        valid = {TIER_CORE, TIER_EMULATOR, TIER_CLOUD}
+        for db_type, tier in _VERIFICATION_TIER.items():
+            self.assertIn(tier, valid, f"{db_type} has invalid tier {tier!r}")
+
+    def test_loader_tier_lookup(self):
+        from pipeline.loaders import loader_tier
+        self.assertEqual(loader_tier("sqlite"), "core")
+        self.assertEqual(loader_tier("snowflake"), "emulator")
+        self.assertEqual(loader_tier("redshift"), "cloud")
+        self.assertEqual(loader_tier("  SQLite "), "core")
+
+    def test_loader_tier_unknown_raises(self):
+        from pipeline.loaders import loader_tier
+        with self.assertRaises(ValueError):
+            loader_tier("not_a_database")
+
+    def test_destination_catalog_complete_and_ordered(self):
+        from pipeline.loaders import _LAZY_DISPATCH, destination_catalog
+        catalog = destination_catalog()
+        self.assertEqual(len(catalog), len(_LAZY_DISPATCH))
+        tiers = [e["tier"] for e in catalog]
+        # core block first, then emulator, then cloud — no interleaving
+        boundaries = [tiers.index(t) for t in ("core", "emulator", "cloud")]
+        self.assertEqual(boundaries, sorted(boundaries))
+        for entry in catalog:
+            self.assertIn("db_type", entry)
+            self.assertIn("loader_class", entry)
+            self.assertIn("tier", entry)
+
+
 if __name__ == "__main__":
     loader = unittest.TestLoader()
     suite  = loader.loadTestsFromModule(sys.modules[__name__])

@@ -2,7 +2,8 @@
 Command-line interface — arg parser and main() orchestrator.
 
 Entry point for running the data-governance pipeline from the terminal.
-Supports subcommands: run, validate, profile, replay-dlq, schedule.
+Supports subcommands: run, validate, profile, replay-dlq, schedule,
+resume, service, destinations.
 
 Layer 6 — imports from everything.
 
@@ -18,6 +19,8 @@ Revision history
 1.5   2026-06-11   Resumed runs carry forward the previously-loaded row total so
                    --verify compares the true cumulative count; --skip-pii now
                    passes None so flatten-time PII detection is also skipped.
+1.6   2026-06-12   New 'destinations' subcommand: lists every destination with
+                   its verification tier (core / emulator / cloud).
 """
 
 import argparse
@@ -105,6 +108,16 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # ── resume ────────────────────────────────────────────────────────────
     subparsers.add_parser("resume", help="Resume any interrupted pipeline runs from last checkpoint")
+
+    # ── destinations ─────────────────────────────────────────────────────
+    dest_parser = subparsers.add_parser(
+        "destinations",
+        help="List every supported destination and its verification tier",
+    )
+    dest_parser.add_argument(
+        "--tier", choices=["core", "emulator", "cloud"],
+        help="Show only destinations in this tier",
+    )
 
     # ── service ──────────────────────────────────────────────────────────
     svc_parser = subparsers.add_parser("service", help="Manage the Windows Service")
@@ -544,6 +557,32 @@ def _cmd_service(args: argparse.Namespace) -> None:
         print(result.stdout or result.stderr)
 
 
+def _cmd_destinations(args: argparse.Namespace) -> None:
+    """List every supported destination grouped by verification tier."""
+    from pipeline.loaders import destination_catalog
+
+    tier_headlines = {
+        "core": "CORE — tested against a real engine in CI on every push",
+        "emulator": "EMULATOR-VERIFIED — mechanics proven against an emulator; "
+                    "vendor-specific behaviour is not covered",
+        "cloud": "CLOUD-CREDENTIAL — verified against the live service only "
+                 "when credentials are configured",
+    }
+
+    entries = destination_catalog()
+    if args.tier:
+        entries = [e for e in entries if e["tier"] == args.tier]
+
+    current_tier = None
+    for entry in entries:
+        if entry["tier"] != current_tier:
+            current_tier = entry["tier"]
+            print(f"\n{tier_headlines[current_tier]}")
+            print("-" * 72)
+        print(f"  {entry['db_type']:<20} {entry['loader_class']}")
+    print(f"\n{len(entries)} destination(s).")
+
+
 # ── Entry point ──────────────────────────────────────────────────────────────
 
 _COMMAND_DISPATCH = {
@@ -554,6 +593,7 @@ _COMMAND_DISPATCH = {
     "schedule": _cmd_schedule,
     "resume": _cmd_resume,
     "service": _cmd_service,
+    "destinations": _cmd_destinations,
 }
 
 

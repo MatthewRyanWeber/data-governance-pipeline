@@ -16,6 +16,11 @@ Revision history
                    match what each loader actually reads (snowflake: account,
                    databricks: server_hostname, firebolt: username|client_id,
                    datasphere: tenant_url, mongodb: db_name, etc.).
+1.4   2026-06-12   Added verification tiers (core / emulator / cloud) so the
+                   catalog states honestly which destinations are exercised
+                   against real engines in CI, which against emulators, and
+                   which require live credentials.  destination_catalog() and
+                   loader_tier() expose the tier to the CLI and REST API.
 """
 
 import functools
@@ -86,6 +91,100 @@ _LAZY_DISPATCH: dict[str, tuple[str, str, bool, bool]] = {
 }
 
 
+# Verification tier per db_type — the honesty layer of the catalog:
+#   core     — exercised against a real engine in CI on every push
+#   emulator — mechanics verified against an emulator; vendor-specific
+#              behaviour is NOT covered (see tests/integration docs)
+#   cloud    — verified only when live credentials are provided via the
+#              integration-cloud workflow; otherwise mock-tested only
+TIER_CORE = "core"
+TIER_EMULATOR = "emulator"
+TIER_CLOUD = "cloud"
+
+_VERIFICATION_TIER: dict[str, str] = {
+    # Real engine in CI (testcontainers or embedded)
+    "sqlite":           TIER_CORE,
+    "postgresql":       TIER_CORE,
+    "postgres":         TIER_CORE,
+    "mysql":            TIER_CORE,
+    "mssql":            TIER_CORE,       # real SQL Server container
+    "mongodb":          TIER_CORE,
+    "duckdb":           TIER_CORE,
+    "parquet":          TIER_CORE,
+    "deltalake":        TIER_CORE,
+    "iceberg":          TIER_CORE,       # pyiceberg + SQLite catalog, fully local
+    "s3":               TIER_CORE,       # MinIO
+    "gcs":              TIER_CORE,       # MinIO (S3-compatible API path)
+    "azure_blob":       TIER_CORE,       # Azurite
+    "kafka":            TIER_CORE,       # Redpanda
+    "clickhouse":       TIER_CORE,
+    "pgvector":         TIER_CORE,
+    "postgis":          TIER_CORE,
+    "cockroachdb":      TIER_CORE,
+    "sftp":             TIER_CORE,
+    "chroma":           TIER_CORE,       # embedded client
+    "lancedb":          TIER_CORE,       # embedded
+    "qdrant":           TIER_CORE,
+    "weaviate":         TIER_CORE,
+    "milvus":           TIER_CORE,
+    "oracle":           TIER_CORE,       # gvenzl/oracle-free
+    "db2":              TIER_CORE,       # db2 community container
+    "synapse":          TIER_CORE,       # T-SQL path via real SQL Server
+    "yellowbrick":      TIER_CORE,       # PostgreSQL wire-compatible engine
+    # Emulator-verified — mechanics proven, vendor quirks not
+    "snowflake":        TIER_EMULATOR,   # fakesnow
+    "bigquery":         TIER_EMULATOR,   # goccy/bigquery-emulator
+    "pinecone":         TIER_EMULATOR,   # pinecone-local
+    "fabric":           TIER_EMULATOR,   # Azurite covers the storage path
+    "athena":           TIER_EMULATOR,   # MinIO covers the S3 half
+    # Cloud-credential — verified when secrets are provided
+    "redshift":         TIER_CLOUD,
+    "databricks":       TIER_CLOUD,
+    "firebolt":         TIER_CLOUD,
+    "hana":             TIER_CLOUD,      # HANA Express needs ~8GB locally
+    "datasphere":       TIER_CLOUD,
+    "motherduck":       TIER_CLOUD,
+    "quickbooks":       TIER_CLOUD,      # Intuit developer sandbox
+    "snowflake_vector": TIER_CLOUD,
+    "bigquery_vector":  TIER_CLOUD,
+}
+
+
+def loader_tier(db_type: str) -> str:
+    """
+    Return the verification tier ('core', 'emulator', 'cloud') for a db_type.
+
+    Raises ValueError if db_type is not recognised.
+    """
+    key = db_type.strip().lower()
+    if key not in _LAZY_DISPATCH:
+        raise ValueError(
+            f"Unknown db_type '{db_type}'. "
+            f"Known types: {sorted(_LAZY_DISPATCH.keys())}"
+        )
+    return _VERIFICATION_TIER[key]
+
+
+def destination_catalog() -> list[dict]:
+    """
+    Return every supported destination with its verification tier,
+    sorted by tier (core first) then name.
+
+    Each entry: {"db_type": str, "loader_class": str, "tier": str}.
+    """
+    tier_order = {TIER_CORE: 0, TIER_EMULATOR: 1, TIER_CLOUD: 2}
+    entries = [
+        {
+            "db_type": key,
+            "loader_class": class_name,
+            "tier": _VERIFICATION_TIER[key],
+        }
+        for key, (_, class_name, _, _) in _LAZY_DISPATCH.items()
+    ]
+    entries.sort(key=lambda e: (tier_order[e["tier"]], e["db_type"]))
+    return entries
+
+
 def _install_column_name_guard(loader_class: type) -> type:
     """
     Wrap loader_class.load so DataFrame column names are validated before
@@ -135,6 +234,19 @@ def resolve_loader(db_type: str) -> tuple[type, bool, bool]:
     module = importlib.import_module(module_path)
     loader_class = getattr(module, class_name)
     _install_column_name_guard(loader_class)
+    tier = _VERIFICATION_TIER[key]
+    if tier == TIER_EMULATOR:
+        logger.info(
+            "Destination '%s' is emulator-verified: loader mechanics are "
+            "tested against an emulator in CI; vendor-specific behaviour "
+            "is not.", key,
+        )
+    elif tier == TIER_CLOUD:
+        logger.info(
+            "Destination '%s' is cloud-credential tier: it is verified "
+            "against the live service only when credentials are configured "
+            "in the integration-cloud workflow.", key,
+        )
     return loader_class, needs_db_type, uses_mongo
 
 

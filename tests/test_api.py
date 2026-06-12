@@ -151,6 +151,47 @@ class TestAPINoAuth:
             assert resp.status_code == 200
 
 
+class TestDestinationsEndpoint:
+    """GET /destinations exposes the catalog with verification tiers."""
+
+    def setup_method(self):
+        os.environ.pop("PIPELINE_API_KEYS", None)
+        os.environ.pop("PIPELINE_JWT_SECRET", None)
+        from pipeline.api import create_app
+        self.app = create_app(pipeline_fn=lambda s, d, c: None)
+
+    @pytest.mark.asyncio
+    async def test_lists_all_destinations_with_tiers(self):
+        from pipeline.loaders import _LAZY_DISPATCH
+        async with self.app.test_client() as client:
+            resp = await client.get("/destinations")
+            assert resp.status_code == 200
+            body = await resp.get_json()
+            assert body["count"] == len(_LAZY_DISPATCH)
+            tiers = {e["tier"] for e in body["destinations"]}
+            assert tiers == {"core", "emulator", "cloud"}
+
+    @pytest.mark.asyncio
+    async def test_tier_filter(self):
+        async with self.app.test_client() as client:
+            resp = await client.get("/destinations?tier=cloud")
+            body = await resp.get_json()
+            assert body["count"] > 0
+            assert all(e["tier"] == "cloud" for e in body["destinations"])
+
+    @pytest.mark.asyncio
+    async def test_requires_auth_when_keys_configured(self):
+        os.environ["PIPELINE_API_KEYS"] = "k1"
+        try:
+            from pipeline.api import create_app
+            app = create_app(pipeline_fn=lambda s, d, c: None)
+            async with app.test_client() as client:
+                resp = await client.get("/destinations")
+                assert resp.status_code == 401
+        finally:
+            os.environ.pop("PIPELINE_API_KEYS", None)
+
+
 class TestJWTOnlyBootstrap:
     """JWT-only deployments (no static keys) must be able to obtain a first
     token via X-Bootstrap-Secret — previously /auth/token demanded a JWT,

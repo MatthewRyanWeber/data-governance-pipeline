@@ -30,6 +30,8 @@ Revision history
                    scheme (RFC 7235), /auth/revoke accepts the token itself so
                    the revocation lives as long as the token, X-Bootstrap-Secret
                    path for /auth/token in JWT-only deployments.
+2.6   2026-06-12   GET /destinations: catalog of destinations with verification
+                   tiers (core / emulator / cloud), optional ?tier= filter.
 """
 
 import functools
@@ -519,6 +521,23 @@ def create_app(pipeline_fn=None, max_queue_size: int | None = None, prometheus_e
                 logger.debug("[API] Could not load run progress: %s", exc)
 
         return jsonify(result)
+
+    @app.route("/destinations", methods=["GET"])
+    @require_auth
+    async def list_destinations():
+        """List every supported destination with its verification tier.
+
+        Tiers: core (real engine in CI), emulator (mechanics verified
+        against an emulator), cloud (verified only when credentials are
+        configured).  Optional ?tier= filter.
+        """
+        from pipeline.loaders import destination_catalog
+
+        entries = destination_catalog()
+        tier_filter = request.args.get("tier")
+        if tier_filter:
+            entries = [e for e in entries if e["tier"] == tier_filter]
+        return jsonify({"destinations": entries, "count": len(entries)})
 
     @app.route("/runs", methods=["GET"])
     @require_auth
