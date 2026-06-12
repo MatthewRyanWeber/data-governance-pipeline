@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "data-governance-pipeline"
-version = "4.25.0"
+version = "4.26.0"
 description = "Production-grade Python ETL pipeline with built-in GDPR, CCPA, HIPAA, and OMOP healthcare governance"
 readme = "README.md"
 license = { text = "MIT" }

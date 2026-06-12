@@ -206,15 +206,63 @@ The CLI processes data in chunks (default 50,000 rows). After each chunk:
 | `advanced/` | 5 | `ReversibleLoader`, `TableCopier`, `DLQReplayer`, `NLPipelineBuilder` | Reversible loads, DLQ replay, natural language pipeline builder |
 | `extensions/` | -- | (namespace package) | Extension point for governance, compliance, epic, grafana modules |
 
-### Top-level extension modules
+### Extension modules (pipeline/extensions/)
 
-| File | Purpose |
-|------|---------|
-| `governance_extensions.py` | 8 GDPR/CCPA classes: RoPA, retention, DSAR, breach detection, consent, differential privacy, purpose limitation, pseudonym vault |
-| `epic_extensions.py` | 6 HIPAA/healthcare classes: Safe Harbor filter, Clarity extractor, BAA tracker, IRB gate, OMOP transformer, k-anonymity checker |
-| `compliance_extensions.py` | 3 continuous compliance classes: ComplianceMonitor, TrustReportGenerator, VendorRiskTracker |
-| `grafana_extensions.py` | 3 Grafana classes: MetricsSink, PrometheusExporter, GrafanaDashboardGenerator |
-| `pipeline_v3.py` | Backward-compatibility shim -- re-exports all public names |
+| Module | Purpose |
+|--------|---------|
+| `pipeline.extensions.governance_extensions` | 8 GDPR/CCPA classes: RoPA, retention, DSAR, breach detection, consent, differential privacy, purpose limitation, pseudonym vault |
+| `pipeline.extensions.epic_extensions` | 6 HIPAA/healthcare classes: Safe Harbor filter, Clarity extractor, BAA tracker, IRB gate, OMOP transformer, k-anonymity checker |
+| `pipeline.extensions.compliance_extensions` | 3 continuous compliance classes: ComplianceMonitor, TrustReportGenerator, VendorRiskTracker |
+| `pipeline.extensions.grafana_extensions` | 3 Grafana classes: MetricsSink, PrometheusExporter, GrafanaDashboardGenerator |
+
+Root-level shims with the original filenames remain until v5.0;
+`pipeline_v3.py` re-exports all public names for monolith-era callers.
+
+---
+
+## Decision Log
+
+The major architectural bets, why they were made, and what would cause a
+revisit. New entries go at the top.
+
+**Tiered destination catalog (2026-06).** Every destination declares how
+it is verified — core (real engine in CI), emulator, or cloud-credential —
+enforced by a lockstep test against the dispatch registry. Chosen because
+mocked tests had allowed loaders to ship that could never work against
+their real engine. Revisit if: a CI-runnable emulator appears for a cloud
+tier service (promote it).
+
+**Column-injection guard at dispatch, not per loader (2026-06).**
+`resolve_loader()` wraps every loader's `load()` with column-name
+validation. One chokepoint instead of ~40 call sites; the cost is
+action-at-a-distance (documented in base.py and EXTENDING.md). Revisit
+if: loaders gain a shared template-method `load()` in BaseLoader, which
+would give the guard a natural home.
+
+**Family contract as a parameterized suite (2026-06).** Behavioral rules
+(dry-run returns 0, keyless upsert raises, …) are enforced by one test
+iterating the registry, because sibling drift — a fix applied to one
+loader and missed in seven copies — was the dominant defect class.
+Revisit: never; extend the contract instead.
+
+**Layered monolith over services (2026-06).** One deployable, seven
+import layers, layer declared in every module docstring. A single
+maintainer gets monolith debuggability; the layer DAG keeps the
+boundaries honest. Revisit if: an operational need appears for
+independent scaling of the API vs. pipeline runs.
+
+**Governance via one shared `gov` object (2026-06).** Every class takes a
+`GovernanceLogger` first argument rather than emitting events to a bus.
+Explicit, synchronous, crash-durable (per-event fsync via
+AppendOnlyWriter). The cost is coupling to one class — mitigated by
+extracting ReportWriter (4.1) and RunArtifacts (4.4). Revisit if: event
+volume makes per-event fsync the bottleneck (buffer per checkpoint
+interval; the hook is documented in governance_logger.py).
+
+**Per-record streaming with checkpoints, never batch (2026-06).** Chunked
+processing with a checkpoint after every chunk; resume must continue from
+the next unprocessed record. Non-negotiable: batch pipelines with no
+mid-phase resume have repeatedly cost multi-day reruns.
 
 ---
 

@@ -76,6 +76,52 @@ pipeline run <source> <destination>
 
 For healthcare data from Epic EHR systems, `pipeline.extensions.epic_extensions` adds a complete HIPAA compliance layer on top.
 
+### Watch the governance happen
+
+Everything below is the **actual output** of one run — not an illustration.
+Load a CSV containing PII into SQLite:
+
+```bash
+$ cat customers.csv
+id,name,email,phone,ssn,city
+1,Alice Larsen,alice.larsen@example.com,555-0101,123-45-6789,Oslo
+2,Bob Chen,bob.chen@example.com,555-0102,987-65-4321,Austin
+3,Carol Diaz,carol.diaz@example.com,555-0103,555-12-3456,Madrid
+
+$ pipeline run customers.csv sqlite --table customers --config cfg.json --verify
+```
+
+What lands in the destination — PII pseudonymized, lineage stamped:
+
+```
+sqlite> SELECT id, name, email, ssn, _pipeline_id FROM customers;
+1 | Alice Larsen | MASKED_f37b65a9fd59 | MASKED_01a54629efb9 | 7b99aefd-74ab-...
+2 | Bob Chen     | MASKED_3c994d9355c7 | MASKED_ecdbc061a36d | 7b99aefd-74ab-...
+3 | Carol Diaz   | MASKED_f12699088c27 | MASKED_175dbb7c6c96 | 7b99aefd-74ab-...
+```
+
+What lands in the audit ledger — every action chained by SHA-256, each
+event's `prev_hash` binding it to the one before:
+
+```json
+{"action": "PII_MASKED", "category": "PRIVACY", "detail": {"field": "ssn"},
+ "prev_hash": "d155955232d2f17d…", "self_hash": "bbf4efa9dc778bc8…"}
+{"action": "LOAD_COMPLETE", "category": "LINEAGE",
+ "detail": {"destination_table": "customers", "rows_written": 3},
+ "prev_hash": "83c59e3b29dc937b…", "self_hash": "1019f0d26535b7ae…"}
+```
+
+And the anchor sidecar that makes deleting or truncating the ledger
+detectable:
+
+```json
+{"last_hash": "d62a8bb0cc21d352…", "entry_count": 15,
+ "ledger_file": "audit_ledger_20260612_142451.jsonl"}
+```
+
+The full regulation-to-code map — which GDPR/CCPA/HIPAA article each of
+these artifacts answers — is in [docs/GOVERNANCE.md](docs/GOVERNANCE.md).
+
 ---
 
 ## Architecture

@@ -5,6 +5,79 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [4.26.0] — 2026-06-12
+
+The reference-quality release: every claim the project makes is now
+verified against a real engine, an emulator, or honestly labeled as
+awaiting credentials.
+
+### Added
+- **Verification tiers** — every destination declares how it is tested:
+  core (real engine in CI on every push), emulator, or cloud-credential.
+  New `pipeline destinations` CLI command and `GET /destinations` API
+  endpoint expose the catalog; a lockstep test keeps the tier registry
+  and the dispatch registry in sync.
+- **Loader family contract** (`tests/test_loaders/test_loader_contract.py`)
+  — one parameterized suite enforcing the same behavior on every registry
+  entry, present and future: dry-run returns 0, keyless upsert raises,
+  empty config raises, injection column names rejected.
+- **Real-engine integration suite** (`tests/integration/`, 60+ tests) —
+  every core-tier destination runs append/replace/upsert against its
+  live engine via testcontainers or an embedded runtime, with read-back
+  through the engine's own client: Postgres, MySQL, MongoDB, SQLite,
+  DuckDB, Parquet, Delta Lake, Iceberg, ClickHouse, CockroachDB,
+  pgvector, PostGIS, SQL Server (mssql + Synapse T-SQL path),
+  Yellowbrick (PG wire), Kafka/Redpanda, SFTP, MinIO, Azurite, Chroma,
+  LanceDB, Qdrant, Weaviate, Milvus, Oracle Free, DB2.
+- **Emulator tier** — fakesnow (Snowflake), goccy/bigquery-emulator,
+  pinecone-local, each documenting what the emulator does NOT verify.
+- **Cloud-tier verification workflow** (`integration-cloud.yml`) —
+  weekly + manual; each service upgrades to live-verified the moment its
+  repository secrets exist.
+- **docs/GOVERNANCE.md** — regulation → code → artifact map with real
+  ledger output; **decision log** in docs/ARCHITECTURE.md; README
+  "watch the governance happen" walkthrough showing actual run output.
+- Loader features the live engines demanded: BigQuery
+  `load_method="streaming"` + `api_endpoint`, S3 `endpoint_url`
+  (MinIO/R2), Pinecone host override + create-index-if-missing,
+  SQL Server/Synapse `encrypt`/`trust_server_certificate` config.
+
+### Fixed — found by driving the real engines
+- **CockroachDB** upsert could never work on tables the loader itself
+  created: `ON CONFLICT` requires a unique constraint the append path
+  never made. Now ensured in its own transaction.
+- **DB2** upsert could never load its SQLAlchemy engine — the legacy
+  `ibm_db_sa+ibm_db` dialect URL is gone from modern ibm-db-sa.
+- **Weaviate** rejected every DataFrame containing an `id` column
+  (reserved property); ids now become deterministic object uuids,
+  making reloads idempotent.
+- **Milvus** rows were invisible to counts until a segment sealed
+  (missing flush). **Kafka extractor** crashed on tombstone records.
+- **sqlite** silently rewrote explicit paths (`data.db` → `data.db.db`).
+- Family-wide drift: 14 loaders returned None from dry-run, 13 silently
+  appended on keyless upsert, 12 returned None instead of the row count
+  on success — all normalized and locked in by the contract suite.
+- 74 additional confirmed defects fixed in the 2026-06-11 bug campaign
+  across core (atomic checkpoints, scheduler, nested-PII masking),
+  security (JWT revocation lifetime, rate-limiter keying, tenant-scoped
+  catalog search, hash-chain ordering + anchor file), loaders (dispatch
+  injection guard, Oracle/DB2 retry duplication, PostGIS ctid
+  corruption, Databricks per-row inserts), and streaming (Kafka offsets
+  never committed, Kinesis empty-page data loss).
+
+### Changed
+- Extension modules moved from the repository root into
+  `pipeline/extensions/` (deprecation shims at root until v5.0);
+  extension tests import the package directly.
+- `readme.txt` retired — README.md is the single front door, with all
+  counts regenerated from the actual registry and test suite
+  (~1,950 unit + 60+ integration tests).
+- Prompting extracted to `pipeline/prompts.py`; report-path layout
+  extracted to `pipeline/run_artifacts.py` (RunArtifacts dataclass);
+  hypothesis derandomized so property tests cannot flake.
+
+---
+
 ## [4.25.0] — 2026-06-09
 
 ### Fixed — 3 real bugs
