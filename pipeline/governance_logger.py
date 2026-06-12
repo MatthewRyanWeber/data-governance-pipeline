@@ -18,6 +18,8 @@ Revision history
                    sidecar anchor file (last hash + entry count) makes tail
                    truncation and whole-ledger deletion detectable; fixed
                    af-south-1 region mapping (dead "a" prefix never matched).
+4.4   2026-06-12   Report-path layout extracted to pipeline.run_artifacts
+                   (RunArtifacts dataclass); attributes kept as aliases.
 """
 
 import getpass
@@ -33,6 +35,7 @@ from typing import TYPE_CHECKING, Any
 
 from pipeline.constants import default_run_context, EventCategory, RunContext
 from pipeline.helpers import atomic_json_write, file_hash
+from pipeline.run_artifacts import RunArtifacts
 
 if TYPE_CHECKING:
     from pipeline.append_only_writer import AppendOnlyWriter
@@ -125,24 +128,24 @@ class GovernanceLogger:
 
         ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
 
-        self.log_file = self.log_dir / f"pipeline_{ts}.log"
-        self.ledger_file = self.log_dir / f"audit_ledger_{ts}.jsonl"
-        # Anchor sidecar: last chain hash + entry count, rewritten atomically
-        # on every event so deleting or truncating the ledger is detectable.
-        self.ledger_anchor_file = Path(str(self.ledger_file) + ".anchor")
-        self.pii_report_file = self.log_dir / f"pii_report_{ts}.json"
-        self.validation_rpt_file = self.log_dir / f"validation_report_{ts}.json"
-        self.profile_rpt_file = self.log_dir / f"profile_report_{ts}.json"
-        self.dlq_file = self.log_dir / f"dlq_{ts}.csv"
-        self.metrics_rpt_file = self.log_dir / f"metrics_report_{ts}.json"
-        self.classification_file = self.log_dir / f"classification_report_{ts}.json"
-        self.transfer_log_file = self.log_dir / f"transfer_log_{ts}.json"
+        # Path layout lives in RunArtifacts; the attributes below are
+        # back-compat aliases for the original inline names.
+        self.artifacts = RunArtifacts(log_dir=self.log_dir, timestamp=ts)
+        self.artifacts.ensure_directories()
 
-        self.cost_log_file = self.log_dir / "cost_history.jsonl"
-        self.quality_log_file = self.log_dir / "quality_history.jsonl"
-
-        self.snapshot_dir = self.log_dir / "snapshots"
-        self.snapshot_dir.mkdir(parents=True, exist_ok=True)
+        self.log_file = self.artifacts.log_file
+        self.ledger_file = self.artifacts.ledger_file
+        self.ledger_anchor_file = self.artifacts.ledger_anchor_file
+        self.pii_report_file = self.artifacts.pii_report_file
+        self.validation_rpt_file = self.artifacts.validation_report_file
+        self.profile_rpt_file = self.artifacts.profile_report_file
+        self.dlq_file = self.artifacts.dlq_file
+        self.metrics_rpt_file = self.artifacts.metrics_report_file
+        self.classification_file = self.artifacts.classification_file
+        self.transfer_log_file = self.artifacts.transfer_log_file
+        self.cost_log_file = self.artifacts.cost_log_file
+        self.quality_log_file = self.artifacts.quality_log_file
+        self.snapshot_dir = self.artifacts.snapshot_dir
 
         self.logger = logging.getLogger("DataPipeline")
 

@@ -105,8 +105,8 @@ data flow, module map, and extension guide.
 ## Feature Highlights
 
 **ETL core**
-- 12 source formats: CSV, JSON, Excel, XML, Parquet, Avro, ORC, SQL tables, Kafka, Kinesis, Pub/Sub, QuickBooks Online
-- 37 destination loaders (28 standard + 9 vector)
+- 17 source file formats plus SQL tables, Kafka, Kinesis, Pub/Sub, and QuickBooks Online — full reference in [docs/SOURCES.md](docs/SOURCES.md)
+- 40 destinations across three verification tiers (26 core, 5 emulator-verified, 9 cloud-credential — see Supported Destinations)
 - Chunked parallel processing, compression (gz/bz2/zip/zstd/lz4), incremental loading, checkpoint/resume
 - Modular architecture: 130 Python modules across 13 packages with a 7-layer import DAG
 
@@ -147,7 +147,7 @@ data flow, module map, and extension guide.
 - Field-level transparent Fernet encryption on load (opt-in per column)
 - Property-based testing with Hypothesis for security-critical paths
 
-**Healthcare / HIPAA** -- `epic_extensions.py`
+**Healthcare / HIPAA** -- `pipeline.extensions.epic_extensions`
 - HIPAA Safe Harbor de-identification (45 CFR SS164.514(b)) -- all 18 identifier types, ZIP restriction rules, age->=90 capping
 - Epic Clarity extractor with automatic ZC_ code-table decoding and ETL refresh-window guard
 - Business Associate Agreement (BAA) registry -- gates every PHI load
@@ -155,12 +155,12 @@ data flow, module map, and extension guide.
 - OMOP CDM v5.4 transformer -- maps 6 Clarity tables to research-standard domain tables
 - k-anonymity and l-diversity checker with suppress / report / raise enforcement modes
 
-**Continuous compliance monitoring** -- `compliance_extensions.py`
+**Continuous compliance monitoring** -- `pipeline.extensions.compliance_extensions`
 - 8 automated controls: audit ledger integrity, encryption keys, consent DB, BAA/IRB expiry, vendor reviews, log directory
 - Vendor risk registry -- SOC 2 status, DPA tracking, risk classification
 - Trust report generator -- customer-facing security posture HTML report
 
-**Grafana integration** -- `grafana_extensions.py`
+**Grafana integration** -- `pipeline.extensions.grafana_extensions`
 - MetricsSink -- SQLite for Grafana's SQLite data source plugin
 - PrometheusExporter -- `/metrics` HTTP endpoint in Prometheus text format
 - GrafanaDashboardGenerator -- ready-to-import JSON dashboard
@@ -169,23 +169,47 @@ data flow, module map, and extension guide.
 
 ## Supported Destinations
 
-### Standard Loaders (28)
+Every destination carries a **verification tier** that states honestly how
+it is tested.  `pipeline destinations` prints this catalog; the
+`/destinations` API endpoint serves it as JSON.
+
+### Core — tested against a real engine in CI on every push (26)
 
 | Category | Destinations |
 |----------|-------------|
 | Relational SQL | PostgreSQL, MySQL, SQL Server, SQLite |
-| Cloud warehouses | Snowflake, BigQuery, Redshift, Azure Synapse, Databricks, ClickHouse |
-| Enterprise | Oracle, DB2, Firebolt, Yellowbrick, SAP HANA, SAP Datasphere |
-| NoSQL | MongoDB |
-| Distributed SQL | CockroachDB, PostGIS |
-| Data lake formats | DuckDB / MotherDuck, Parquet, Delta Lake, Apache Iceberg |
-| Object storage | S3 / GCS / Azure Blob, Athena, Microsoft Fabric, SFTP |
-| Streaming | Kafka |
-| Accounting | QuickBooks Online |
+| Analytical | ClickHouse, DuckDB, Oracle Free, DB2 |
+| Wire-compatible | Azure Synapse (T-SQL via real SQL Server), Yellowbrick (PostgreSQL protocol), CockroachDB |
+| Geo / vector SQL | PostGIS, pgvector |
+| Data lake formats | Parquet, Delta Lake, Apache Iceberg |
+| Object storage | S3 / GCS (MinIO), Azure Blob (Azurite), SFTP |
+| Streaming | Kafka (Redpanda) |
+| NoSQL / vector | MongoDB, Chroma, LanceDB, Qdrant, Weaviate, Milvus |
 
-### Vector Database Loaders (9)
+Each runs append / replace / upsert round-trips against the live engine
+and reads the data back through the engine's own client
+(`tests/integration/`).
 
-pgvector, Snowflake Vector, BigQuery Vector, Chroma, Milvus, Pinecone, Weaviate, Qdrant, LanceDB
+### Emulator-verified — mechanics proven, vendor quirks not (5)
+
+| Destination | Emulator | Not covered |
+|-------------|----------|-------------|
+| Snowflake | fakesnow | stages/PUT+COPY bulk path, warehouses, roles |
+| BigQuery | goccy/bigquery-emulator | LOAD jobs, slots, IAM |
+| Pinecone | pinecone-local | serverless scaling, pod indexes |
+| Microsoft Fabric | Azurite (storage path) | Fabric/OneLake semantics |
+| Athena | MinIO (S3 half) | the Athena query API |
+
+### Cloud-credential — verified against the live service when secrets are configured (9)
+
+Redshift, Databricks, Firebolt, SAP HANA, SAP Datasphere, MotherDuck,
+QuickBooks Online (sandbox), Snowflake Vector, BigQuery Vector.
+
+The weekly `integration-cloud` workflow runs each of these the moment its
+repository secrets exist — adding a credential automatically upgrades that
+destination's verification. Without credentials they are mock-tested only
+(every loader passes the shared behavioral contract in
+`tests/test_loaders/test_loader_contract.py`).
 
 ---
 
@@ -204,6 +228,7 @@ Key endpoints:
 |----------|--------|------|---------|
 | `/health` | GET | No | Health check with circuit breaker state |
 | `/dashboard` | GET | No | Live HTML dashboard (status, runs, breakers) |
+| `/destinations` | GET | Yes | Destination catalog with verification tiers |
 | `/run` | POST | Yes | Trigger a pipeline run |
 | `/status` | GET | Yes | Current run status with progress |
 | `/runs` | GET | Yes | Run history with pagination |
@@ -272,18 +297,12 @@ data-governance-pipeline/
 |   +-- advanced/                     # Reversible loads, DLQ replay, NL builder
 |   +-- reporting/                    # HTML reports, lineage graphs, cost estimator
 |   +-- streaming/                    # Kafka/Kinesis/Pub/Sub extractors
-+-- tests/                            # 1,250 tests across 78 test files
-|   +-- test_new_features.py          # 38 tests for catalog, RBAC, lineage, etc.
-|   +-- test_security.py              # Security hardening tests
-|   +-- test_dashboard.py             # Web dashboard rendering and route tests
-|   +-- test_multi_tenancy.py         # Tenant isolation, migration, lineage facets
-|   +-- test_property_based.py        # Hypothesis property-based testing
-|   +-- test_loaders/                 # Loader dispatch + untested-loader coverage
++-- tests/                            # ~1,950 unit tests across 80+ files
+|   +-- test_loaders/                 # Per-loader tests + the shared loader contract
+|   |   +-- test_loader_contract.py   # Family contract enforced on every registry entry
 |   +-- test_extensions/              # Governance, HIPAA, compliance, Grafana
-+-- governance_extensions.py          # 8 GDPR/CCPA governance classes
-+-- epic_extensions.py                # 6 Epic EHR / HIPAA classes
-+-- compliance_extensions.py          # 3 continuous compliance monitoring classes
-+-- grafana_extensions.py             # 3 Grafana observability classes
+|   +-- integration/                  # 60+ live-engine tests (containers + emulators)
+|   +-- test_property_based.py        # Hypothesis property-based testing (deterministic)
 +-- docs/                             # Legal, architecture, and extension docs
 |   +-- ARCHITECTURE.md               # Full architecture reference
 |   +-- EXTENDING.md                  # Guide for writing custom loaders
@@ -292,7 +311,8 @@ data-governance-pipeline/
 |   +-- TERMS.md                      # Terms of service
 |   +-- CCPA.md                       # CCPA compliance mapping
 +-- pyproject.toml                    # Package metadata and optional install extras
-+-- .github/workflows/test.yml        # CI: lint, test (3 Python versions), integration
++-- .github/workflows/test.yml        # CI: lint, test (3 Python versions), 5-way engine matrix
++-- .github/workflows/integration-cloud.yml  # Weekly cloud-tier verification
 +-- Dockerfile                        # Multi-stage Python 3.12 image
 +-- docker-compose.yml                # Production-ready API server + test runner
 +-- CLAUDE.md                         # Coding standards
@@ -420,7 +440,7 @@ ropa.save_html("ropa_report.html")
 
 ```python
 from pipeline.governance_logger import GovernanceLogger
-from epic_extensions import HIPAASafeHarborFilter, BAATracker
+from pipeline.extensions.epic_extensions import HIPAASafeHarborFilter, BAATracker
 
 gov  = GovernanceLogger(run_id="run_001", src="clarity_extract")
 safe = HIPAASafeHarborFilter(gov, hash_identifiers=True)
@@ -449,34 +469,38 @@ pip install -e ".[dev]"
 python -m pytest tests/ -q
 ```
 
-**1,250 tests, all passing** -- ~70% line coverage and climbing.
+**~1,950 unit tests plus 60+ live-engine integration tests, all passing.**
 
 The suite spans three fidelity levels so bugs are caught wherever they hide:
 
 - **Unit tests** -- every public method, validation guard, and error path.
-- **Deep load-path tests** -- the SQL/API generation for the destination
-  loaders is asserted against mocked drivers (MERGE/upsert clauses, COPY
-  staging, write dispositions). This catches dialect bugs without a live
-  server -- it's how a broken DuckDB upsert was found and fixed.
-- **Real round-trips** -- serverless loaders (DuckDB, SQLite, Parquet) run
-  against genuine embedded engines, and **live integration tests** spin up
-  real PostgreSQL, MySQL, and MongoDB containers via
-  [testcontainers](https://testcontainers.com) for true end-to-end coverage.
+- **The loader family contract** -- one parameterized suite
+  (`tests/test_loaders/test_loader_contract.py`) runs the same behavioral
+  assertions against every entry in the dispatch registry: dry-run returns
+  0, keyless upsert raises, empty config raises, injection column names
+  are rejected. New loaders are covered automatically the moment they are
+  registered.
+- **Real round-trips** -- every core-tier destination runs append /
+  replace / upsert against its genuine engine via
+  [testcontainers](https://testcontainers.com) or an embedded runtime,
+  and the data is read back through the engine's own client. Emulator-tier
+  destinations run against fakesnow, bigquery-emulator, and
+  pinecone-local with the uncovered surface documented per engine.
 
 Every loader also shares a verified **safety contract**: SQL injection in
-table names is rejected before any connection is opened, `dry_run` never
-connects, and optional-driver loaders fail with a clear install hint when the
-driver is absent.
+table and column names is rejected before any connection is opened, and
+optional-driver loaders fail with a clear install hint when the driver is
+absent.
 
 ### Live integration tests (Docker)
 
-`tests/test_integration_db.py` starts real database containers and runs the
-loaders end-to-end. It requires a running Docker engine and **skips cleanly
-when Docker is unavailable**, so the unit suite is never blocked.
+`tests/integration/` starts real engine containers and runs the loaders
+end-to-end. They require a running Docker engine and **skip cleanly when
+Docker is unavailable**, so the unit suite is never blocked.
 
 ```bash
-pip install "testcontainers[postgres,mysql,mongodb]"
-python -m pytest tests/test_integration_db.py -v
+pip install -e ".[dev,integration]"
+python -m pytest tests/integration tests/test_integration_db.py -v -m integration
 ```
 
 ### Coverage
