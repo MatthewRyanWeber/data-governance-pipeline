@@ -47,3 +47,5 @@ token.json
 
 # Stray Docker Desktop logs (Windows path-mangled filenames)
 C*docker_log.txt
+demo
+config/pipeline_checkpoint.json
