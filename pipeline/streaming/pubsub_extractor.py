@@ -40,7 +40,9 @@ def _pull_timeout_errors() -> tuple[type[BaseException], ...]:
     """
     try:
         from google.api_core import exceptions as gax_exceptions
-    except ImportError:
+    except (ImportError, AttributeError):
+        # AttributeError covers test environments that stub the google
+        # namespace package with a MagicMock lacking __spec__.
         return ()
     candidates = (
         getattr(gax_exceptions, "DeadlineExceeded", None),

@@ -122,7 +122,9 @@ class PostGISLoader(BaseLoader):
         )
 
         params = []
-        clean_df = df.where(df.notna(), None)
+        # Object dtype first: .where(notna, None) on numeric columns upcasts
+        # None straight back to NaN on some pandas versions.
+        clean_df = df.astype(object).where(df.notna(), None)
         for row in clean_df.itertuples(index=False, name=None):
             row_dict = dict(zip(clean_df.columns, row))
             wkt = row_dict.pop(geom_col)
