@@ -44,3 +44,6 @@ Thumbs.db
 *.pem
 credentials.json
 token.json
+
+# Stray Docker Desktop logs (Windows path-mangled filenames)
+C*docker_log.txt
