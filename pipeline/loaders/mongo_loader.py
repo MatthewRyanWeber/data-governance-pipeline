@@ -33,6 +33,7 @@ class MongoLoader(BaseLoader):
             f"mongodb://{cfg.get('host', 'localhost')}:"
             f"{cfg.get('port', 27017)}/"
         )
+        client: "MongoClient"
         with MongoClient(uri) as client:
             records = df.to_dict(orient="records")
             client[cfg["db_name"]][collection].insert_many(records)

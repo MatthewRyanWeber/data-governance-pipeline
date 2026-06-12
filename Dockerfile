@@ -19,6 +19,7 @@ RUN python -m pytest tests/ -q --tb=short \
     --ignore=tests/test_extensions \
     --ignore=tests/test_loaders/test_loader_dispatch.py \
     --ignore=tests/test_integration_db.py \
+    --ignore=tests/integration \
     --ignore=tests/test_benchmarks.py \
     --ignore=tests/test_api_load.py \
     -m "not slow"

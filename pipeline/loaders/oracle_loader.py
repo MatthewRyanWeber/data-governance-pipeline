@@ -72,7 +72,7 @@ class OracleLoader(BaseLoader):
             )
         return _ce(f"oracle+oracledb://{user}:{password}@{dsn}")
 
-    def load(self, df, cfg, table, if_exists="append", natural_keys=None):
+    def load(self, df, cfg, table, if_exists="append", natural_keys=None) -> int:
         table = table.upper()
         validate_sql_identifier(table, "table")
         if cfg.get("schema"):
@@ -89,6 +89,8 @@ class OracleLoader(BaseLoader):
         self.gov.destination_registered(
             "oracle", f"{cfg['dsn']}/{cfg.get('schema', cfg['user'])}", table,
         )
+        # The true count: batcherrors may have quarantined rows
+        return inserted
 
     def _array_insert(self, df, cfg, table, if_exists) -> int:
         schema = cfg.get("schema", "").upper()
@@ -171,7 +173,7 @@ class OracleLoader(BaseLoader):
                 {"tname": table_name_raw},
             )
 
-    def _upsert(self, df, cfg, table, natural_keys):
+    def _upsert(self, df, cfg, table, natural_keys) -> int:
         schema = cfg.get("schema", "").upper()
         import uuid
         tmp_table = f"{table[:20]}_STG_{uuid.uuid4().hex[:8]}"

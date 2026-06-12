@@ -115,7 +115,16 @@ class WeaviateLoader(BaseLoader):
             import numpy as _np
             total = 0
 
-            property_cols = [c for c in df.columns if c != vector_col]
+            # Weaviate reserves 'id' and 'vector' — they may not appear in
+            # properties.  A DataFrame id column becomes the object's
+            # deterministic uuid instead, which also makes reloading the
+            # same rows idempotent.
+            from weaviate.util import generate_uuid5
+            id_col = cfg.get("id_column") \
+                if cfg.get("id_column") in df.columns \
+                else ("id" if "id" in df.columns else None)
+            property_cols = [c for c in df.columns
+                             if c not in (vector_col, id_col, "vector")]
             all_records = df.to_dict(orient="records")
 
             with client.batch.fixed_size(batch_size=batch_size) as batch:
@@ -136,10 +145,13 @@ class WeaviateLoader(BaseLoader):
                         else:
                             vector = list(vec)
 
+                    object_uuid = (generate_uuid5(str(rec[id_col]))
+                                   if id_col is not None else None)
                     batch.add_object(
                         collection=class_name,
                         properties=properties,
                         vector=vector,
+                        uuid=object_uuid,
                     )
                     total += 1
 

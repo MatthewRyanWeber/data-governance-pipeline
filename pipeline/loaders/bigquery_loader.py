@@ -63,6 +63,16 @@ class BigQueryLoader(BaseLoader):
         from google.oauth2 import service_account as _gcp_sa
         project = cfg["project"]
         location = cfg.get("location", "US")
+        # Emulator/test endpoint (e.g. goccy/bigquery-emulator): anonymous
+        # credentials, custom API endpoint
+        if cfg.get("api_endpoint"):
+            from google.api_core.client_options import ClientOptions
+            from google.auth.credentials import AnonymousCredentials
+            return _bigquery.Client(
+                project=project,
+                client_options=ClientOptions(api_endpoint=cfg["api_endpoint"]),
+                credentials=AnonymousCredentials(),
+            )
         creds_path = cfg.get("credentials_path")
         if creds_path:
             creds = _gcp_sa.Credentials.from_service_account_file(
@@ -128,6 +138,11 @@ class BigQueryLoader(BaseLoader):
         client = self._client(cfg)
         dataset = cfg["dataset"]
         table_id = f"{cfg['project']}.{dataset}.{table}"
+
+        if cfg.get("load_method") == "streaming":
+            self._streaming_insert(client, df, cfg, table_id, if_exists)
+            return
+
         write_disposition = (
             _bigquery.WriteDisposition.WRITE_TRUNCATE
             if if_exists == "replace"
@@ -151,6 +166,44 @@ class BigQueryLoader(BaseLoader):
                 wait = 2 ** attempt
                 self.gov.retry_attempt(attempt, 3, float(wait), exc)
                 time.sleep(wait)
+
+    def _streaming_insert(self, client, df, cfg, table_id, if_exists):
+        """insert_rows_json path — no LOAD job, rows visible immediately.
+
+        Streaming inserts trade the LOAD job's atomicity for latency;
+        they're also the only write path BigQuery emulators support.
+        """
+        from google.cloud import bigquery as _bq_local
+
+        dataset_ref = client.dataset(cfg["dataset"])
+        table_name = table_id.rsplit(".", 1)[-1]
+        if if_exists == "replace":
+            client.delete_table(table_id, not_found_ok=True)
+        schema = [
+            _bq_local.SchemaField(
+                str(col),
+                "INTEGER" if df[col].dtype.kind == "i"
+                else "FLOAT" if df[col].dtype.kind == "f"
+                else "BOOLEAN" if df[col].dtype.kind == "b"
+                else "STRING",
+            )
+            for col in df.columns
+        ]
+        table_ref = dataset_ref.table(table_name)
+        try:
+            client.get_table(table_ref)
+        except Exception:
+            client.create_table(_bq_local.Table(table_ref, schema=schema))
+
+        records = df.where(df.notna(), None).to_dict(orient="records")
+        errors = client.insert_rows_json(table_id, records)
+        if errors:
+            raise RuntimeError(
+                f"BigQueryLoader: streaming insert reported errors: "
+                f"{errors[:3]}"
+            )
+        logger.info("[BIGQUERY] Streamed %s rows -> %s",
+                    f"{len(df):,}", table_id)
 
     def _upsert(self, df, cfg, table, natural_keys):
         from google.cloud import bigquery as _bigquery

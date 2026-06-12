@@ -131,8 +131,12 @@ class KafkaStreamExtractor:
 
                 consecutive_errors = 0
                 empty_polls = 0
+                raw = message.value()
+                if raw is None:
+                    # Tombstone record (key with null value) — nothing to parse
+                    continue
                 try:
-                    value = json.loads(message.value().decode("utf-8"))
+                    value = json.loads(raw.decode("utf-8"))
                     records.append(value)
                 except (json.JSONDecodeError, UnicodeDecodeError) as exc:
                     logger.warning("Skipping malformed message at offset %s: %s", message.offset(), exc)

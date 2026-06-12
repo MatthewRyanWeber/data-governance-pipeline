@@ -1,0 +1,75 @@
+name: Cloud-tier verification
+
+# Verifies cloud-credential-tier destinations against the LIVE services.
+# Each test announces loudly when its credentials are absent — adding a
+# repository secret automatically upgrades that destination's verification.
+#
+# Secrets consumed (all optional):
+#   REDSHIFT_HOST REDSHIFT_DATABASE REDSHIFT_USER REDSHIFT_PASSWORD
+#   DATABRICKS_SERVER_HOSTNAME DATABRICKS_HTTP_PATH DATABRICKS_TOKEN
+#   FIREBOLT_CLIENT_ID FIREBOLT_CLIENT_SECRET FIREBOLT_DATABASE
+#     FIREBOLT_ACCOUNT_NAME FIREBOLT_ENGINE_NAME
+#   DATASPHERE_TENANT_URL DATASPHERE_TOKEN
+#   MOTHERDUCK_TOKEN
+#   QB_CLIENT_ID QB_CLIENT_SECRET QB_REFRESH_TOKEN QB_REALM_ID
+#   SNOWFLAKE_ACCOUNT SNOWFLAKE_USER SNOWFLAKE_PASSWORD
+#     SNOWFLAKE_DATABASE SNOWFLAKE_WAREHOUSE
+#   BQ_PROJECT BQ_DATASET BQ_SERVICE_ACCOUNT_JSON
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 5 * * 1"
+
+jobs:
+  cloud-verification:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -e ".[dev,cloud,integration]" || pip install -e ".[dev,integration]"
+
+      - name: Write GCP credentials when provided
+        if: ${{ env.BQ_SA != '' }}
+        env:
+          BQ_SA: ${{ secrets.BQ_SERVICE_ACCOUNT_JSON }}
+        run: |
+          echo "$BQ_SA" > /tmp/gcp-sa.json
+          echo "GOOGLE_APPLICATION_CREDENTIALS=/tmp/gcp-sa.json" >> "$GITHUB_ENV"
+
+      - name: Run cloud-tier verification
+        env:
+          REDSHIFT_HOST: ${{ secrets.REDSHIFT_HOST }}
+          REDSHIFT_DATABASE: ${{ secrets.REDSHIFT_DATABASE }}
+          REDSHIFT_USER: ${{ secrets.REDSHIFT_USER }}
+          REDSHIFT_PASSWORD: ${{ secrets.REDSHIFT_PASSWORD }}
+          DATABRICKS_SERVER_HOSTNAME: ${{ secrets.DATABRICKS_SERVER_HOSTNAME }}
+          DATABRICKS_HTTP_PATH: ${{ secrets.DATABRICKS_HTTP_PATH }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          FIREBOLT_CLIENT_ID: ${{ secrets.FIREBOLT_CLIENT_ID }}
+          FIREBOLT_CLIENT_SECRET: ${{ secrets.FIREBOLT_CLIENT_SECRET }}
+          FIREBOLT_DATABASE: ${{ secrets.FIREBOLT_DATABASE }}
+          FIREBOLT_ACCOUNT_NAME: ${{ secrets.FIREBOLT_ACCOUNT_NAME }}
+          FIREBOLT_ENGINE_NAME: ${{ secrets.FIREBOLT_ENGINE_NAME }}
+          DATASPHERE_TENANT_URL: ${{ secrets.DATASPHERE_TENANT_URL }}
+          DATASPHERE_TOKEN: ${{ secrets.DATASPHERE_TOKEN }}
+          MOTHERDUCK_TOKEN: ${{ secrets.MOTHERDUCK_TOKEN }}
+          QB_CLIENT_ID: ${{ secrets.QB_CLIENT_ID }}
+          QB_CLIENT_SECRET: ${{ secrets.QB_CLIENT_SECRET }}
+          QB_REFRESH_TOKEN: ${{ secrets.QB_REFRESH_TOKEN }}
+          QB_REALM_ID: ${{ secrets.QB_REALM_ID }}
+          SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+          SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
+          SNOWFLAKE_PASSWORD: ${{ secrets.SNOWFLAKE_PASSWORD }}
+          SNOWFLAKE_DATABASE: ${{ secrets.SNOWFLAKE_DATABASE }}
+          SNOWFLAKE_WAREHOUSE: ${{ secrets.SNOWFLAKE_WAREHOUSE }}
+          BQ_PROJECT: ${{ secrets.BQ_PROJECT }}
+          BQ_DATASET: ${{ secrets.BQ_DATASET }}
+        run: >
+          python -m pytest tests/integration/test_cloud_credentialed.py
+          -v -m cloud -rs

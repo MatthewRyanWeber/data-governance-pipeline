@@ -51,6 +51,27 @@ class PineconeLoader(BaseLoader):
                 "Install with:  pip install pinecone-client"
             )
 
+    def _client(self, cfg: dict):
+        """Pinecone client; cfg['host'] reaches pinecone-local and
+        dedicated endpoints."""
+        from pinecone import Pinecone
+        if cfg.get("host"):
+            return Pinecone(api_key=cfg.get("api_key"), host=cfg["host"])
+        return Pinecone(api_key=cfg.get("api_key"))
+
+    def _index(self, pc, cfg: dict, index_name: str):
+        """Index handle; plaintext hosts (pinecone-local) need an explicit
+        http:// scheme — the emulator even advertises https:// for its
+        plaintext data-plane ports, so the scheme must be rewritten."""
+        if str(cfg.get("host", "")).startswith("http://"):
+            host = str(pc.describe_index(index_name).host)
+            if host.startswith("https://"):
+                host = "http://" + host[len("https://"):]
+            elif not host.startswith("http://"):
+                host = f"http://{host}"
+            return pc.Index(host=host)
+        return pc.Index(index_name)
+
     def load(self, df, cfg, table="", if_exists="upsert",
              natural_keys=None) -> int:
         """Write df to a Pinecone index.
@@ -80,9 +101,6 @@ class PineconeLoader(BaseLoader):
             return 0
         self._validate_config(cfg, ["api_key", "index_name"])
 
-        from pinecone import Pinecone
-
-        api_key = cfg.get("api_key")
 
         vector_col = cfg.get("vector_column", "embedding")
         embed_cols = cfg.get("embed_columns")
@@ -110,8 +128,28 @@ class PineconeLoader(BaseLoader):
 
         import numpy as _np
 
-        pc = Pinecone(api_key=api_key)
-        index = pc.Index(index_name)
+        pc = self._client(cfg)
+        # Create the destination if absent — every sibling loader creates
+        # its own table; a loader that 404s on a fresh index would be the
+        # one exception.  Requires the vector dimension, taken from cfg or
+        # inferred from the first vector.
+        existing = {ix["name"] for ix in pc.list_indexes()}
+        if index_name not in existing:
+            from pinecone import ServerlessSpec
+            first_vec = df[vector_col].iloc[0]
+            dimension = int(cfg.get("dimensions", len(first_vec)))
+            pc.create_index(
+                name=index_name,
+                dimension=dimension,
+                metric=cfg.get("metric", "cosine"),
+                spec=ServerlessSpec(
+                    cloud=cfg.get("cloud", "aws"),
+                    region=cfg.get("region", "us-east-1"),
+                ),
+            )
+            logger.info("PineconeLoader: created index '%s' (dim=%d).",
+                        index_name, dimension)
+        index = self._index(pc, cfg, index_name)
 
         if if_exists == "overwrite":
             index.delete(delete_all=True, namespace=namespace)
@@ -160,8 +198,6 @@ class PineconeLoader(BaseLoader):
                namespace="", filter_dict=None,
                include_metadata=True) -> dict:
         """Query a Pinecone index by vector similarity."""
-        from pinecone import Pinecone
-
         if not query_vector:
             raise ValueError(
                 "PineconeLoader.search(): query_vector must be a non-empty "
@@ -177,8 +213,8 @@ class PineconeLoader(BaseLoader):
         if not index_name:
             raise ValueError("PineconeLoader: supply index name.")
 
-        pc = Pinecone(api_key=api_key)
-        index = pc.Index(index_name)
+        pc = self._client(cfg)
+        index = self._index(pc, cfg, index_name)
 
         kwargs: dict = {
             "vector": query_vector,
@@ -199,18 +235,15 @@ class PineconeLoader(BaseLoader):
 
     def describe_index(self, cfg, table="") -> dict:
         """Return index statistics (dimension, count, etc.)."""
-        from pinecone import Pinecone
-
-        api_key = cfg.get("api_key")
-        if not api_key:
+        if not cfg.get("api_key"):
             raise ValueError("PineconeLoader: cfg must contain 'api_key'.")
 
         index_name = table or cfg.get("index_name")
         if not index_name:
             raise ValueError("PineconeLoader: supply index name.")
 
-        pc = Pinecone(api_key=api_key)
-        index = pc.Index(index_name)
+        pc = self._client(cfg)
+        index = self._index(pc, cfg, index_name)
         return dict(index.describe_index_stats())
 
     @staticmethod

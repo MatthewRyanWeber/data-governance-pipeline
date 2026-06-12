@@ -35,6 +35,7 @@ jobs:
         run: >
           python -m pytest tests/ -q --tb=short
           --ignore=tests/test_integration_db.py
+          --ignore=tests/integration
           --ignore=tests/test_benchmarks.py
           --ignore=tests/test_api_load.py
           -m "not slow"
@@ -44,8 +45,22 @@ jobs:
         run: python -m mypy pipeline/ --ignore-missing-imports
 
   integration:
-    name: Live DB integration (testcontainers)
+    name: Real engines (${{ matrix.group.name }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        group:
+          - name: core-db
+            paths: tests/test_integration_db.py tests/integration/test_embedded_engines.py
+          - name: sql-engines
+            paths: tests/integration/test_container_sql_engines.py
+          - name: streams-vector
+            paths: tests/integration/test_container_streams_files.py tests/integration/test_container_vector_engines.py
+          - name: emulators
+            paths: tests/integration/test_emulator_engines.py
+          - name: heavy
+            paths: tests/integration/test_container_heavy_engines.py
     steps:
       - uses: actions/checkout@v6
 
@@ -53,15 +68,24 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install MS ODBC Driver 18
+        if: matrix.group.name == 'sql-engines'
+        run: |
+          curl -sSL https://packages.microsoft.com/keys/microsoft.asc | sudo tee /etc/apt/trusted.gpg.d/microsoft.asc
+          curl -sSL https://packages.microsoft.com/config/ubuntu/22.04/prod.list | sudo tee /etc/apt/sources.list.d/mssql-release.list
+          sudo apt-get update
+          sudo ACCEPT_EULA=Y apt-get install -y msodbcsql18 unixodbc-dev
+
       - name: Install dependencies
         run: |
-          pip install -e ".[dev]"
+          pip install -e ".[dev,integration]"
           pip install "testcontainers[postgres,mysql,mongodb]" pymysql
 
-      - name: Run live DB integration tests
-        # Docker is available on GitHub's Linux runners; testcontainers spins
-        # up real Postgres/MySQL/Mongo. Skips cleanly if Docker is ever absent.
-        run: python -m pytest tests/test_integration_db.py -v -m integration
+      - name: Run real-engine integration tests
+        # Docker is available on GitHub's Linux runners; testcontainers
+        # spins up real engines.  Every loader in the core tier is driven
+        # against its actual engine here.
+        run: python -m pytest ${{ matrix.group.paths }} -v -m integration
 
   benchmarks:
     name: Performance benchmarks

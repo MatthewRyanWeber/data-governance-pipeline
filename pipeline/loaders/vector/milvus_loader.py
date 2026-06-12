@@ -148,6 +148,10 @@ class MilvusLoader(BaseLoader):
                           or res.get("upsert_count", 0)
                           or len(records))
 
+            # Batch-ETL durability: without a flush the rows sit in the
+            # WAL and stay invisible to row counts until a segment seals.
+            client.flush(collection)
+
         finally:
             client.close()
 
