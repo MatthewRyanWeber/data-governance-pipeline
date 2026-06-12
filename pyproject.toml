@@ -203,6 +203,9 @@ dev = [
     "faker>=22.0.0",
     "phonenumbers>=8.13.0",
     "hypothesis>=6.90.0",
+    # Real DeadlineExceeded/RetryError classes for pubsub extractor tests —
+    # lightweight, no transitive google-cloud SDKs.
+    "google-api-core>=2.0.0",
 ]
 
 # Everything
