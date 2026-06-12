@@ -62,7 +62,7 @@ class TestClickHouseUpsert(unittest.TestCase):
 
     def test_upsert_uses_replacingmergetree_and_optimize(self):
         # Empty engine lookup result: the target table does not exist yet.
-        self.client.command.return_value = ""
+        self.client.query.return_value.result_rows = []
         with patch.object(self.loader, "_client", return_value=self.client):
             self.loader.load(_DF, {"database": "db"}, "events", natural_keys=["id"])
         commands = [str(c[0][0]) for c in self.client.command.call_args_list]
@@ -73,7 +73,7 @@ class TestClickHouseUpsert(unittest.TestCase):
 
     def test_upsert_into_plain_mergetree_raises(self):
         """A pre-existing plain MergeTree would silently duplicate rows."""
-        self.client.command.return_value = "MergeTree"
+        self.client.query.return_value.result_rows = [("MergeTree",)]
         with patch.object(self.loader, "_client", return_value=self.client):
             with self.assertRaises(ValueError) as ctx:
                 self.loader.load(_DF, {"database": "db"}, "events",

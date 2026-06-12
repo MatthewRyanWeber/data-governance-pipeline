@@ -212,6 +212,7 @@ dev = [
 # drive the core- and emulator-tier engines in CI.
 integration = [
     "testcontainers>=4.0.0",
+    "pgvector>=0.2.0",
     "deltalake>=0.15.0",
     "pyiceberg[sql-sqlite]>=0.7.0",
     "chromadb>=0.5.0",

@@ -349,6 +349,10 @@ class TestSqlServerFamilyIntegration(unittest.TestCase):
             "user": "sa",
             "password": self.PASSWORD,
             "driver": self._best_driver().replace(" ", "+"),
+            # ODBC 17/18 encrypt by default and reject the container's
+            # self-signed certificate
+            "encrypt": "no",
+            "trust_server_certificate": "yes",
         }
 
     def _read(self, table):

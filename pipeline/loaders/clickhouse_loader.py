@@ -119,11 +119,14 @@ class ClickHouseLoader(BaseLoader):
         database = cfg.get("database", "default")
         # Dedup-on-merge only works on ReplacingMergeTree; inserting into a
         # pre-existing plain MergeTree would silently duplicate every row.
-        existing_engine = client.command(
+        # query() not command(): command() returns a QuerySummary object on
+        # newer clickhouse-connect, which would defeat the string check.
+        engine_rows = client.query(
             "SELECT engine FROM system.tables "
             "WHERE database = {db:String} AND name = {tbl:String}",
             parameters={"db": database, "tbl": table},
-        )
+        ).result_rows
+        existing_engine = engine_rows[0][0] if engine_rows else ""
         if existing_engine and "ReplacingMergeTree" not in str(existing_engine):
             raise ValueError(
                 f"ClickHouseLoader: cannot upsert into '{database}.{table}' — "
