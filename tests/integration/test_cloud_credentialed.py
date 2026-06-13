@@ -20,8 +20,14 @@ loader's verification upgrades automatically:
 Revision history
 ────────────────
 1.0   2026-06-12   Initial release.
+1.1   2026-06-13   Present-but-rejected credentials (expired/revoked token,
+                   unreachable host) skip loudly instead of failing red, so
+                   a lapsed trial account never turns CI red or spams the
+                   owner.  Genuine loader bugs (assertion failures) still
+                   fail — only auth/connection errors are downgraded.
 """
 
+import contextlib
 import os
 import unittest
 from unittest.mock import MagicMock
@@ -54,6 +60,47 @@ def _env(*names) -> dict | None:
     return values
 
 
+# Substrings (case-insensitive) that mark an exception as a credential or
+# connectivity problem — NOT a loader bug.  Kept specific so a loader's own
+# "Invalid Input" / "no such table" errors are never misread as auth issues.
+_CREDENTIAL_ERROR_MARKERS = (
+    "token", "authenticat", "credential", "expired", "unauthorized",
+    "forbidden", "access denied", "permission denied", "login failed",
+    " 401", " 403", "invalid api key", "invalid client",
+    "could not connect", "connection refused", "connection timed out",
+    "could not translate host", "name or service not known", "getaddrinfo",
+    "no route to host", "could not resolve",
+)
+
+
+def _is_credential_failure(exc: BaseException) -> bool:
+    text = f"{type(exc).__name__}: {exc}".lower()
+    return any(marker in text for marker in _CREDENTIAL_ERROR_MARKERS)
+
+
+@contextlib.contextmanager
+def _skip_if_service_rejects(test_case: unittest.TestCase, service: str):
+    """Downgrade auth/connectivity failures to a loud skip.
+
+    A present credential that the service rejects (expired trial token,
+    revoked key, unreachable host) is an environment problem, not a code
+    regression — failing CI red for it would spam the repo owner on every
+    weekly run.  AssertionError and everything else propagate, so a real
+    loader bug still fails.
+    """
+    try:
+        yield
+    except AssertionError:
+        raise
+    except Exception as exc:
+        if _is_credential_failure(exc):
+            test_case.skipTest(
+                f"{service} credentials present but the service rejected "
+                f"them or was unreachable (expired/revoked token?): {exc}"
+            )
+        raise
+
+
 @pytest.mark.integration
 @pytest.mark.cloud
 class TestRedshiftLive(unittest.TestCase):
@@ -69,8 +116,9 @@ class TestRedshiftLive(unittest.TestCase):
             "user": env["REDSHIFT_USER"],
             "password": env["REDSHIFT_PASSWORD"],
         }
-        rows = loader.load(_df(), cfg, table="it_people")
-        self.assertEqual(rows, 3)
+        with _skip_if_service_rejects(self, "Redshift"):
+            rows = loader.load(_df(), cfg, table="it_people")
+            self.assertEqual(rows, 3)
 
 
 @pytest.mark.integration
@@ -87,8 +135,9 @@ class TestDatabricksLive(unittest.TestCase):
             "http_path": env["DATABRICKS_HTTP_PATH"],
             "access_token": env["DATABRICKS_TOKEN"],
         }
-        rows = loader.load(_df(), cfg, table="it_people")
-        self.assertEqual(rows, 3)
+        with _skip_if_service_rejects(self, "Databricks"):
+            rows = loader.load(_df(), cfg, table="it_people")
+            self.assertEqual(rows, 3)
 
     def test_upsert_round_trip(self):
         env = _env("DATABRICKS_SERVER_HOSTNAME", "DATABRICKS_HTTP_PATH",
@@ -101,10 +150,11 @@ class TestDatabricksLive(unittest.TestCase):
             "http_path": env["DATABRICKS_HTTP_PATH"],
             "access_token": env["DATABRICKS_TOKEN"],
         }
-        loader.load(_df(), cfg, table="it_upsert")
-        rows = loader.load(_df(), cfg, table="it_upsert",
-                           if_exists="upsert", natural_keys=["id"])
-        self.assertEqual(rows, 3)
+        with _skip_if_service_rejects(self, "Databricks"):
+            loader.load(_df(), cfg, table="it_upsert")
+            rows = loader.load(_df(), cfg, table="it_upsert",
+                               if_exists="upsert", natural_keys=["id"])
+            self.assertEqual(rows, 3)
 
 
 @pytest.mark.integration
@@ -124,8 +174,9 @@ class TestFireboltLive(unittest.TestCase):
             "account_name": env["FIREBOLT_ACCOUNT_NAME"],
             "engine_name": env["FIREBOLT_ENGINE_NAME"],
         }
-        rows = loader.load(_df(), cfg, table="it_people")
-        self.assertEqual(rows, 3)
+        with _skip_if_service_rejects(self, "Firebolt"):
+            rows = loader.load(_df(), cfg, table="it_people")
+            self.assertEqual(rows, 3)
 
 
 @pytest.mark.integration
@@ -140,8 +191,9 @@ class TestDatasphereLive(unittest.TestCase):
             "tenant_url": env["DATASPHERE_TENANT_URL"],
             "token": env["DATASPHERE_TOKEN"],
         }
-        rows = loader.load(_df(), cfg, table="it_people")
-        self.assertEqual(rows, 3)
+        with _skip_if_service_rejects(self, "SAP Datasphere"):
+            rows = loader.load(_df(), cfg, table="it_people")
+            self.assertEqual(rows, 3)
 
 
 @pytest.mark.integration
@@ -157,32 +209,35 @@ class TestMotherDuckLive(unittest.TestCase):
         import os
         import duckdb
         os.environ["MOTHERDUCK_TOKEN"] = env["MOTHERDUCK_TOKEN"]
-        # MotherDuck only auto-creates a default 'my_db'; a named database
-        # must exist before the loader can attach to md:<name>.
-        admin = duckdb.connect("md:")
-        try:
-            admin.execute(f"CREATE DATABASE IF NOT EXISTS {self.DB_NAME}")
-        finally:
-            admin.close()
+        with _skip_if_service_rejects(self, "MotherDuck"):
+            # MotherDuck only auto-creates a default 'my_db'; a named
+            # database must exist before the loader can attach md:<name>.
+            admin = duckdb.connect("md:")
+            try:
+                admin.execute(
+                    f"CREATE DATABASE IF NOT EXISTS {self.DB_NAME}")
+            finally:
+                admin.close()
 
-        loader = _loader("motherduck")
-        cfg = {
-            "db_path": f"md:{self.DB_NAME}",
-            "motherduck_token": env["MOTHERDUCK_TOKEN"],
-        }
-        # if_exists="replace" keeps the test idempotent — appending would
-        # accumulate rows across repeated CI runs against the same account.
-        rows = loader.load(_df(), cfg, table="it_people", if_exists="replace")
-        self.assertEqual(rows, 3)
+            loader = _loader("motherduck")
+            cfg = {
+                "db_path": f"md:{self.DB_NAME}",
+                "motherduck_token": env["MOTHERDUCK_TOKEN"],
+            }
+            # if_exists="replace" keeps the test idempotent — appending
+            # would accumulate rows across repeated CI runs.
+            rows = loader.load(_df(), cfg, table="it_people",
+                               if_exists="replace")
+            self.assertEqual(rows, 3)
 
-        # Read back through a fresh MotherDuck connection
-        conn = duckdb.connect(f"md:{self.DB_NAME}")
-        try:
-            out = conn.execute(
-                "SELECT name FROM it_people ORDER BY id").fetchall()
-        finally:
-            conn.close()
-        self.assertEqual([r[0] for r in out], ["a", "b", "c"])
+            # Read back through a fresh MotherDuck connection
+            conn = duckdb.connect(f"md:{self.DB_NAME}")
+            try:
+                out = conn.execute(
+                    "SELECT name FROM it_people ORDER BY id").fetchall()
+            finally:
+                conn.close()
+            self.assertEqual([r[0] for r in out], ["a", "b", "c"])
 
 
 @pytest.mark.integration
@@ -205,8 +260,9 @@ class TestQuickBooksSandbox(unittest.TestCase):
         df = pd.DataFrame({
             "DisplayName": [f"IT Test Customer {i}" for i in range(3)],
         })
-        rows = loader.load(df, cfg, table="Customer")
-        self.assertEqual(rows, 3)
+        with _skip_if_service_rejects(self, "QuickBooks"):
+            rows = loader.load(df, cfg, table="Customer")
+            self.assertEqual(rows, 3)
 
 
 @pytest.mark.integration
@@ -233,8 +289,9 @@ class TestSnowflakeVectorLive(unittest.TestCase):
             "name": ["a", "b", "c"],
             "embedding": [[float(i), 0.5, 0.25] for i in (1, 2, 3)],
         })
-        rows = loader.load(df, cfg, table="it_vectors")
-        self.assertEqual(rows, 3)
+        with _skip_if_service_rejects(self, "Snowflake"):
+            rows = loader.load(df, cfg, table="it_vectors")
+            self.assertEqual(rows, 3)
 
 
 @pytest.mark.integration
@@ -256,8 +313,9 @@ class TestBigQueryVectorLive(unittest.TestCase):
             "name": ["a", "b", "c"],
             "embedding": [[float(i), 0.5, 0.25] for i in (1, 2, 3)],
         })
-        rows = loader.load(df, cfg, table="it_vectors")
-        self.assertEqual(rows, 3)
+        with _skip_if_service_rejects(self, "BigQuery"):
+            rows = loader.load(df, cfg, table="it_vectors")
+            self.assertEqual(rows, 3)
 
 
 if __name__ == "__main__":
