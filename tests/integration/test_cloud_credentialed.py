@@ -147,17 +147,40 @@ class TestDatasphereLive(unittest.TestCase):
 @pytest.mark.integration
 @pytest.mark.cloud
 class TestMotherDuckLive(unittest.TestCase):
+    DB_NAME = "dgp_it_db"
+
     def test_append_round_trip(self):
         env = _env("MOTHERDUCK_TOKEN")
         if env is None:
             self.skipTest("MOTHERDUCK_TOKEN not configured")
+
+        import os
+        import duckdb
+        os.environ["MOTHERDUCK_TOKEN"] = env["MOTHERDUCK_TOKEN"]
+        # MotherDuck only auto-creates a default 'my_db'; a named database
+        # must exist before the loader can attach to md:<name>.
+        admin = duckdb.connect("md:")
+        try:
+            admin.execute(f"CREATE DATABASE IF NOT EXISTS {self.DB_NAME}")
+        finally:
+            admin.close()
+
         loader = _loader("motherduck")
         cfg = {
-            "db_path": "md:it_db",
+            "db_path": f"md:{self.DB_NAME}",
             "motherduck_token": env["MOTHERDUCK_TOKEN"],
         }
         rows = loader.load(_df(), cfg, table="it_people")
         self.assertEqual(rows, 3)
+
+        # Read back through a fresh MotherDuck connection
+        conn = duckdb.connect(f"md:{self.DB_NAME}")
+        try:
+            out = conn.execute(
+                "SELECT name FROM it_people ORDER BY id").fetchall()
+        finally:
+            conn.close()
+        self.assertEqual([r[0] for r in out], ["a", "b", "c"])
 
 
 @pytest.mark.integration
