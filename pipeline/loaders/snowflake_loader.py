@@ -107,16 +107,17 @@ class SnowflakeLoader(BaseLoader):
         self._validate_config(cfg, ["account", "user", "password", "database", "warehouse"])
         if natural_keys:
             self._upsert(df, cfg, table, natural_keys)
+            loaded = len(df)
         else:
-            self._bulk_load(df, cfg, table, if_exists)
+            loaded = self._bulk_load(df, cfg, table, if_exists)
 
-        self.gov.load_complete(len(df), table)
+        self.gov.load_complete(loaded, table)
         self.gov.destination_registered(
             "snowflake",
             f"{cfg['account']}/{cfg['database']}/{cfg.get('schema', 'PUBLIC')}",
             table,
         )
-        return len(df)
+        return loaded
 
     # ── Bulk load (PUT -> internal stage -> COPY INTO) ────────────────────
 
@@ -163,15 +164,20 @@ class SnowflakeLoader(BaseLoader):
             )
             cur.execute(copy_sql)
             result = cur.fetchone()
-            rows = result[3] if result else len(df)
+            # COPY INTO returns the true rows_loaded in column 3 — return it
+            # so a partial load (e.g. ON_ERROR=CONTINUE) is reported
+            # honestly rather than as len(df).
+            rows = int(result[3]) if result else len(df)
             logger.info("[SNOWFLAKE] COPY INTO %s -- %s rows loaded",
                         table.upper(), f"{rows:,}")
 
             cur.execute(f"REMOVE {stage}/{stage_file}")
             conn.commit()
+            return rows
         except Exception as exc:
             logger.warning("[SNOWFLAKE] COPY INTO failed -- falling back to to_sql(): %s", exc)
             self._sql_fallback(df, cfg, table, if_exists)
+            return len(df)
         finally:
             cur.close()
             conn.close()

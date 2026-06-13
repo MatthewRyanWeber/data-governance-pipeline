@@ -13,6 +13,10 @@ Revision history
                    as native JSON numbers; rows that coerce to NaT are now
                    included in the output with a logged warning instead of
                    being silently dropped forever.
+1.2   2026-06-13   Atomic watermark write (temp-file-then-rename) and
+                   corruption-tolerant read — a crash mid-write or a
+                   truncated file no longer corrupts the watermark or
+                   crashes the next run.
 """
 
 import json
@@ -20,6 +24,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from pipeline.constants import WATERMARK_FILE, STATE_FILE_LOCK
+from pipeline.helpers import atomic_json_write
 
 if TYPE_CHECKING:
     from pipeline.governance_logger import GovernanceLogger
@@ -47,13 +52,29 @@ class IncrementalFilter:
     def _key(self, source: str, col: str) -> str:
         return f"{source}::{col}"
 
+    def _load_state(self) -> dict:
+        """Read the watermark state, tolerating a missing or corrupt file.
+
+        A truncated/garbled file (e.g. from a crash mid-write before this
+        module wrote atomically) must not crash the run — treat it as
+        empty and log, like run_state does.
+        """
+        if not self.state_file.exists():
+            return {}
+        try:
+            with open(self.state_file, encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError) as exc:
+            logger.warning(
+                "Watermark file %s is unreadable (%s) — treating as empty; "
+                "the next run may reprocess from the start.",
+                self.state_file, exc,
+            )
+            return {}
+
     def read_watermark(self, source: str, col: str):
         key = self._key(source, col)
-        if not self.state_file.exists():
-            return None
-        with open(self.state_file, encoding="utf-8") as f:
-            state = json.load(f)
-        wm = state.get(key)
+        wm = self._load_state().get(key)
         if wm:
             self.gov.watermark_event("READ", col, wm)
         return wm
@@ -121,11 +142,9 @@ class IncrementalFilter:
             new_wm = str(raw_max)
         key = self._key(source, col)
         with STATE_FILE_LOCK:
-            state: dict = {}
-            if self.state_file.exists():
-                with open(self.state_file, encoding="utf-8") as f:
-                    state = json.load(f)
+            state = self._load_state()
             state[key] = new_wm
-            with open(self.state_file, "w", encoding="utf-8") as f:
-                json.dump(state, f, indent=2)
+            # Atomic write: a crash mid-write previously corrupted the
+            # watermark and crashed the next run.
+            atomic_json_write(self.state_file, json.dumps(state, indent=2))
         self.gov.watermark_event("WRITE", col, new_wm)

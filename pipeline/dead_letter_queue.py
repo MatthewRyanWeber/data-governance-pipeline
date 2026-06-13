@@ -102,11 +102,26 @@ class DeadLetterQueue:
             existing_df = pd.read_csv(self.dlq_path, encoding="utf-8")
             existing_df = existing_df.reindex(columns=combined_header)
             aligned_df = rejected_df.reindex(columns=combined_header)
-            pd.concat([existing_df, aligned_df], ignore_index=True).to_csv(
-                self.dlq_path, mode="w",
-                header=True, index=False,
-                encoding="utf-8",
-            )
+            # Atomic rewrite: a plain mode="w" crash mid-write would
+            # truncate the DLQ and lose every previously-rejected row.
+            # Write a sibling temp file, then os.replace (atomic on the
+            # same filesystem).
+            import os
+            import tempfile
+            combined = pd.concat(
+                [existing_df, aligned_df], ignore_index=True)
+            dlq_dir = os.path.dirname(self.dlq_path) or "."
+            fd, tmp_path = tempfile.mkstemp(
+                dir=dlq_dir, prefix=".dlq_", suffix=".tmp")
+            os.close(fd)
+            try:
+                combined.to_csv(
+                    tmp_path, header=True, index=False, encoding="utf-8")
+                os.replace(tmp_path, self.dlq_path)
+            except BaseException:
+                if os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
+                raise
         else:
             rejected_df.reindex(columns=existing_header).to_csv(
                 self.dlq_path, mode="a",

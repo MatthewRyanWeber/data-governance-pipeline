@@ -171,4 +171,22 @@ class ClickHouseLoader(BaseLoader):
                 ]
             elif dtype_str == "bool":
                 out[col] = out[col].astype("uint8")
+            elif dtype_str == "float64":
+                # A float64 column of whole numbers is almost always an
+                # integer column pandas widened because of nulls.  Values
+                # >2^53 are NOT exactly representable in float64, so they
+                # are already corrupted before reaching this loader — warn
+                # so the caller passes the column as pandas 'Int64' to keep
+                # full precision.  (We do not silently re-type genuine
+                # floats here.)
+                series = out[col].dropna()
+                if len(series) and (series == series.round()).all():
+                    over = series.abs() > 2 ** 53
+                    if over.any():
+                        logger.warning(
+                            "[CLICKHOUSE] Column %r holds integer values "
+                            "above 2^53 as float64 — precision is already "
+                            "lost upstream. Pass it as pandas 'Int64' to "
+                            "preserve exact values.", col,
+                        )
         return out
