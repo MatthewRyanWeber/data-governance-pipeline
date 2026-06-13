@@ -170,7 +170,9 @@ class TestMotherDuckLive(unittest.TestCase):
             "db_path": f"md:{self.DB_NAME}",
             "motherduck_token": env["MOTHERDUCK_TOKEN"],
         }
-        rows = loader.load(_df(), cfg, table="it_people")
+        # if_exists="replace" keeps the test idempotent — appending would
+        # accumulate rows across repeated CI runs against the same account.
+        rows = loader.load(_df(), cfg, table="it_people", if_exists="replace")
         self.assertEqual(rows, 3)
 
         # Read back through a fresh MotherDuck connection

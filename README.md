@@ -236,6 +236,10 @@ Each runs append / replace / upsert round-trips against the live engine
 and reads the data back through the engine's own client
 (`tests/integration/`).
 
+Confirmed live-service verifications are logged in
+[docs/CLOUD_VERIFICATION.md](docs/CLOUD_VERIFICATION.md) (MotherDuck:
+verified 2026-06-13).
+
 ### Emulator-verified — mechanics proven, vendor quirks not (5)
 
 | Destination | Emulator | Not covered |
