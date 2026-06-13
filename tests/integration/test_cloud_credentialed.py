@@ -60,16 +60,26 @@ def _env(*names) -> dict | None:
     return values
 
 
-# Substrings (case-insensitive) that mark an exception as a credential or
-# connectivity problem — NOT a loader bug.  Kept specific so a loader's own
-# "Invalid Input" / "no such table" errors are never misread as auth issues.
+# Substrings (case-insensitive) that mark an exception as a credential,
+# connectivity, or transient service problem — NOT a loader bug.  Kept
+# specific so a loader's own "no such table" / wrong-column errors are
+# never misread.  Matched against "<ExceptionType>: <message>", so an
+# exception class name (e.g. RequestError) can match too.
 _CREDENTIAL_ERROR_MARKERS = (
+    # Auth
     "token", "authenticat", "credential", "expired", "unauthorized",
     "forbidden", "access denied", "permission denied", "login failed",
     " 401", " 403", "invalid api key", "invalid client",
+    # Connectivity
     "could not connect", "connection refused", "connection timed out",
     "could not translate host", "name or service not known", "getaddrinfo",
     "no route to host", "could not resolve",
+    # Transient service-side (serverless cold start, throttling, capacity).
+    # Free Edition / serverless warehouses intermittently reject sessions
+    # while starting — a platform limit, not a loader regression.
+    "requesterror", "error during request to server", "service unavailable",
+    "temporarily unavailable", " 503", " 429", "too many requests",
+    "operationaltimeout", "warehouse is starting", "cluster is starting",
 )
 
 
@@ -95,8 +105,9 @@ def _skip_if_service_rejects(test_case: unittest.TestCase, service: str):
     except Exception as exc:
         if _is_credential_failure(exc):
             test_case.skipTest(
-                f"{service} credentials present but the service rejected "
-                f"them or was unreachable (expired/revoked token?): {exc}"
+                f"{service}: credentials present but the service was "
+                f"unavailable — expired/revoked token, or a transient "
+                f"rejection (serverless cold start / throttling): {exc}"
             )
         raise
 
@@ -124,6 +135,34 @@ class TestRedshiftLive(unittest.TestCase):
 @pytest.mark.integration
 @pytest.mark.cloud
 class TestDatabricksLive(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        # A serverless / Free Edition warehouse auto-stops when idle and
+        # can take minutes to resume.  Wake it once here (polling up to
+        # 5 min) so the per-test loads hit a warm warehouse — otherwise the
+        # first test races the cold start and fails non-deterministically.
+        import os
+        import time
+        host = os.environ.get("DATABRICKS_SERVER_HOSTNAME", "")
+        path = os.environ.get("DATABRICKS_HTTP_PATH", "")
+        token = os.environ.get("DATABRICKS_TOKEN", "")
+        if not (host and path and token):
+            return
+        from databricks import sql
+        deadline = time.time() + 300
+        while time.time() < deadline:
+            try:
+                conn = sql.connect(server_hostname=host, http_path=path,
+                                   access_token=token, _socket_timeout=180)
+                cur = conn.cursor()
+                cur.execute("SELECT 1")
+                cur.fetchall()
+                conn.close()
+                return
+            except Exception:
+                time.sleep(15)
+
     def test_append_round_trip(self):
         env = _env("DATABRICKS_SERVER_HOSTNAME", "DATABRICKS_HTTP_PATH",
                    "DATABRICKS_TOKEN")

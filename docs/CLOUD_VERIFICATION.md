@@ -14,6 +14,7 @@ account or token lapses.
 | Date (UTC) | Destination | Loader | Result | Evidence |
 |------------|-------------|--------|--------|----------|
 | 2026-06-13 | MotherDuck | `DuckDBLoader` (`md:` path) | ✅ append + read-back, 3 rows | `tests/integration/test_cloud_credentialed.py::TestMotherDuckLive` passed against a live MotherDuck account (region aws-us-east-1) using a read/write access token; wrote a DataFrame to `md:dgp_it_db.it_people` and read the rows back through a fresh connection. |
+| 2026-06-13 | Databricks | `DatabricksLoader` | ✅ append + upsert + read-back | Verified against a live Databricks Free Edition serverless SQL warehouse (Unity Catalog, `workspace.default`). Append wrote 3 rows; upsert (natural_keys=`id`) updated id=3→`c2` and inserted id=4; read-back returned `[(1,'a'),(2,'b'),(3,'c2'),(4,'d')]`. Two loader fixes were required and made along the way (see note). |
 
 ## How a verification is recorded
 
@@ -44,3 +45,28 @@ a separate connection. It skips loudly — never silently — when
 > 7-day trial token and has since been rotated/expired. The evidence row
 > above stands as the record that the loader works end-to-end against the
 > live service; re-running requires a fresh token.
+
+## Note on the Databricks verification (2026-06-13)
+
+Verifying against Databricks Free Edition surfaced two genuine loader
+defects, both fixed:
+
+1. **`SET spark.databricks.delta.schema.autoMerge.enabled` was mandatory**
+   when `schema_evolution=True` (the default). Serverless / Free Edition
+   warehouses reject setting that config (`CONFIG_NOT_AVAILABLE`), which
+   killed every load. It is now best-effort: attempted, and on rejection
+   logged + skipped, since the explicit `CREATE TABLE` already defines the
+   schema.
+2. **No connection resilience for serverless cold starts.** A warehouse
+   that has auto-stopped can take minutes to resume; the first request
+   failed outright. `_connect` now retries with backoff and a generous
+   socket timeout.
+
+A caveat for CI: Free Edition's serverless warehouse intermittently
+**rejects sessions** while starting or under its single-cluster
+concurrency limit, independent of the loader. The cloud test therefore
+treats such transient `RequestError` / "error during request to server"
+rejections as a **loud skip, not a red failure** (same policy as an
+expired token) — so a flaky free-tier warehouse never reddens CI. When
+the warehouse is warm the test passes; the manual run recorded above is
+the authoritative proof the loader is correct.

@@ -46,10 +46,15 @@ class DatabricksLoader(BaseLoader):
             )
 
     def _connect(self, cfg: dict):
+        import time
         import databricks.sql as _databricks_sql
         conn_kwargs: dict = {
             "server_hostname": cfg["server_hostname"],
             "http_path": cfg["http_path"],
+            # A serverless warehouse that has auto-stopped can take 30-60s+
+            # to resume; the default socket timeout is too short to wait it
+            # out, so the first connection after idle fails.
+            "_socket_timeout": int(cfg.get("connect_timeout", 180)),
         }
         if cfg.get("access_token"):
             conn_kwargs["access_token"] = cfg["access_token"]
@@ -57,7 +62,26 @@ class DatabricksLoader(BaseLoader):
             conn_kwargs["credentials_provider"] = self._oauth_provider(cfg)
         if cfg.get("catalog") and cfg["catalog"] != "hive_metastore":
             conn_kwargs["catalog"] = cfg["catalog"]
-        return _databricks_sql.connect(**conn_kwargs)
+
+        # Retry the connect itself: a cold serverless warehouse often
+        # rejects the very first request while it is still starting.
+        attempts = int(cfg.get("connect_attempts", 3))
+        last_exc: Exception | None = None
+        for attempt in range(1, attempts + 1):
+            try:
+                return _databricks_sql.connect(**conn_kwargs)
+            except Exception as exc:
+                last_exc = exc
+                if attempt == attempts:
+                    break
+                wait = 10 * attempt
+                logger.warning(
+                    "[DATABRICKS] Connect attempt %d/%d failed (warehouse "
+                    "still starting?) — retrying in %ds: %s",
+                    attempt, attempts, wait, exc,
+                )
+                time.sleep(wait)
+        raise last_exc  # type: ignore[misc]
 
     @staticmethod
     def _oauth_provider(cfg: dict):
@@ -131,15 +155,32 @@ class DatabricksLoader(BaseLoader):
             flat_params = [value for row in chunk for value in row]
             cur.execute(insert_sql, flat_params)
 
+    @staticmethod
+    def _try_enable_auto_merge(cur) -> None:
+        """Best-effort schema auto-merge.
+
+        Serverless / Free Edition warehouses reject SET of this config
+        (CONFIG_NOT_AVAILABLE); the explicit CREATE TABLE already defines
+        the schema, so a rejected SET is a warning, not a load failure.
+        """
+        try:
+            cur.execute(
+                "SET spark.databricks.delta.schema.autoMerge.enabled = true"
+            )
+        except Exception as exc:
+            logger.warning(
+                "[DATABRICKS] Could not enable delta.schema.autoMerge "
+                "(serverless/Free Edition restricts it) — continuing "
+                "without schema auto-merge: %s", exc,
+            )
+
     def _bulk_insert(self, df, cfg, table, if_exists, schema_evolution):
         fqt = self._fqt(cfg, table)
         conn = self._connect(cfg)
         cur = conn.cursor()
         try:
             if schema_evolution:
-                cur.execute(
-                    "SET spark.databricks.delta.schema.autoMerge.enabled = true"
-                )
+                self._try_enable_auto_merge(cur)
             self._ensure_table(cur, df, fqt, if_exists)
             self._insert_rows(cur, df, fqt)
             version = self._table_version(cur, fqt)
@@ -176,9 +217,7 @@ class DatabricksLoader(BaseLoader):
         cur = conn.cursor()
         try:
             if schema_evolution:
-                cur.execute(
-                    "SET spark.databricks.delta.schema.autoMerge.enabled = true"
-                )
+                self._try_enable_auto_merge(cur)
             self._ensure_table(cur, df, fqt, "append")
             self._ensure_table(cur, df, fqt_stage, "replace")
             self._insert_rows(cur, df, fqt_stage)
