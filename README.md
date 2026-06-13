@@ -133,7 +133,7 @@ imports and keeps dependency relationships explicit.
 ```
   Layer 6  ORCHESTRATION       cli, api, scheduler, service, watchdog
   Layer 5  ADVANCED            reversible loads, DLQ replay, NL builder
-  Layer 4  LOADERS             28 standard + 9 vector destination loaders
+  Layer 4  LOADERS             40 destinations across 3 verification tiers
   Layer 3  DOMAIN SERVICES     privacy, quality, catalog, security,
                                monitoring, lineage, versioning, ml_governance,
                                reporting, streaming, extractors
@@ -154,7 +154,7 @@ data flow, module map, and extension guide.
 - 17 source file formats plus SQL tables, Kafka, Kinesis, Pub/Sub, and QuickBooks Online — full reference in [docs/SOURCES.md](docs/SOURCES.md)
 - 40 destinations across three verification tiers (26 core, 5 emulator-verified, 9 cloud-credential — see Supported Destinations)
 - Chunked parallel processing, compression (gz/bz2/zip/zstd/lz4), incremental loading, checkpoint/resume
-- Modular architecture: 130 Python modules across 13 packages with a 7-layer import DAG
+- Modular architecture: 136 Python modules across 14 subpackages with a 7-layer import DAG
 
 **Data governance -- GDPR / CCPA**
 - Append-only tamper-evident SHA-256 audit ledger -- every event is chained; seek/truncate blocked at the file handle level; external truncation detected
@@ -217,7 +217,9 @@ data flow, module map, and extension guide.
 
 Every destination carries a **verification tier** that states honestly how
 it is tested.  `pipeline destinations` prints this catalog; the
-`/destinations` API endpoint serves it as JSON.
+`/destinations` API endpoint serves it as JSON. (The CLI lists 42 rows —
+the 40 destinations below plus protocol aliases such as `postgres` and
+`gcs`.)
 
 ### Core — tested against a real engine in CI on every push (26)
 
@@ -237,8 +239,8 @@ and reads the data back through the engine's own client
 (`tests/integration/`).
 
 Confirmed live-service verifications are logged in
-[docs/CLOUD_VERIFICATION.md](docs/CLOUD_VERIFICATION.md) (MotherDuck:
-verified 2026-06-13).
+[docs/CLOUD_VERIFICATION.md](docs/CLOUD_VERIFICATION.md) (MotherDuck and
+Databricks: both CI-confirmed 2026-06-13).
 
 ### Emulator-verified — mechanics proven, vendor quirks not (5)
 
@@ -301,7 +303,7 @@ the `PIPELINE_API_KEYS` environment variable. JWT auth is available when
 ```
 data-governance-pipeline/
 +-- pipeline_v3.py                    # Backward-compat shim
-+-- pipeline/                         # Modular package (130 files, 13 subpackages)
++-- pipeline/                         # Modular package (136 files, 14 subpackages)
 |   +-- constants.py                  # Layer 0 -- flags, paths, version
 |   +-- governance_logger.py          # Layer 1 -- tamper-evident audit ledger
 |   +-- append_only_writer.py         # Layer 0 -- write-once file handle (seek/truncate blocked)
@@ -310,7 +312,7 @@ data-governance-pipeline/
 |   +-- profiler.py                   # Layer 2 -- column profiling
 |   +-- schema_validator.py           # Layer 2 -- Great Expectations integration
 |   +-- business_rules.py             # Layer 2 -- rule engine
-|   +-- loaders/                      # 28 standard + 9 vector destination loaders
+|   +-- loaders/                      # destination loaders (tiered catalog, see Supported Destinations)
 |   |   +-- base.py                   # BaseLoader, SQL identifier validation
 |   |   +-- sql_loader.py             # PostgreSQL / MySQL / SQL Server
 |   |   +-- snowflake_loader.py
@@ -347,7 +349,7 @@ data-governance-pipeline/
 |   +-- advanced/                     # Reversible loads, DLQ replay, NL builder
 |   +-- reporting/                    # HTML reports, lineage graphs, cost estimator
 |   +-- streaming/                    # Kafka/Kinesis/Pub/Sub extractors
-+-- tests/                            # ~1,950 unit tests across 80+ files
++-- tests/                            # ~1,960 unit + 63 live-engine tests, 86 files
 |   +-- test_loaders/                 # Per-loader tests + the shared loader contract
 |   |   +-- test_loader_contract.py   # Family contract enforced on every registry entry
 |   +-- test_extensions/              # Governance, HIPAA, compliance, Grafana
@@ -519,7 +521,7 @@ pip install -e ".[dev]"
 python -m pytest tests/ -q
 ```
 
-**~1,950 unit tests plus 60+ live-engine integration tests, all passing.**
+**~1,960 unit tests plus 63 live-engine integration tests, all passing.**
 
 The suite spans three fidelity levels so bugs are caught wherever they hide:
 

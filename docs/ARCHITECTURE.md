@@ -26,7 +26,7 @@ explicit.
  Layer 5  ADVANCED          reversible_loader, table_copier,
           (cross-cutting)   dlq_replayer, nl_pipeline_builder
 
- Layer 4  LOADERS +         loaders/ (28 standard + 9 vector),
+ Layer 4  LOADERS +         loaders/ (40 destinations, 3 tiers),
           TRANSFORM PIPE    transform_pipeline
 
  Layer 3  DOMAIN SERVICES   privacy/        catalog/       quality/
@@ -190,7 +190,7 @@ The CLI processes data in chunks (default 50,000 rows). After each chunk:
 
 | Package | Layer | Key classes | Purpose |
 |---------|-------|-------------|---------|
-| `loaders/` | 4 | `BaseLoader`, `SQLLoader`, `SnowflakeLoader`, `BigQueryLoader`, ... | 28 standard + 9 vector destination loaders with lazy dispatch |
+| `loaders/` | 4 | `BaseLoader`, `SQLLoader`, `SnowflakeLoader`, `BigQueryLoader`, ... | 40 destinations across 3 verification tiers, lazy dispatch + a column-injection guard |
 | `loaders/vector/` | 4 | `PgvectorLoader`, `ChromaLoader`, `MilvusLoader`, `PineconeLoader`, ... | 9 vector database loaders |
 | `privacy/` | 3 | `ColumnEncryptor`, `ErasureHandler`, `PIIDiscoveryReporter`, `NLPPIIDetector`, `DataClassificationTagger`, `CrossBorderTransferLogger` | PII detection, encryption, erasure, GDPR classification |
 | `quality/` | 3 | `DataQualityScorer`, `QualityAnomalyAlerter`, `DataDiffReporter`, `SchemaEvolver`, `DataContractEnforcer`, `SyntheticDataGenerator`, `ColumnProfiler`, `TestGenerator` | Quality scoring, anomaly detection, contracts, schema evolution |
