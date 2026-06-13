@@ -59,11 +59,30 @@ class PineconeLoader(BaseLoader):
             return Pinecone(api_key=cfg.get("api_key"), host=cfg["host"])
         return Pinecone(api_key=cfg.get("api_key"))
 
+    @staticmethod
+    def _is_local_host(host: str) -> bool:
+        """True only for loopback / RFC1918 hosts (pinecone-local, dev)."""
+        import ipaddress
+        from urllib.parse import urlparse
+        hostname = urlparse(host).hostname or ""
+        if hostname in ("localhost", "127.0.0.1", "::1"):
+            return True
+        try:
+            return ipaddress.ip_address(hostname).is_private
+        except ValueError:
+            return False
+
     def _index(self, pc, cfg: dict, index_name: str):
-        """Index handle; plaintext hosts (pinecone-local) need an explicit
-        http:// scheme — the emulator even advertises https:// for its
-        plaintext data-plane ports, so the scheme must be rewritten."""
-        if str(cfg.get("host", "")).startswith("http://"):
+        """Index handle.
+
+        pinecone-local serves plaintext and even advertises https:// for
+        its plaintext data-plane ports, so the scheme must be rewritten to
+        http://.  This downgrade is gated to loopback/private hosts only —
+        we never send the API key in cleartext to a public endpoint, even
+        if the discovered host claims https.
+        """
+        configured = str(cfg.get("host", ""))
+        if configured.startswith("http://") and self._is_local_host(configured):
             host = str(pc.describe_index(index_name).host)
             if host.startswith("https://"):
                 host = "http://" + host[len("https://"):]

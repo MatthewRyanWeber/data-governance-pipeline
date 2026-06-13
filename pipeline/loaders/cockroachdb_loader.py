@@ -171,8 +171,16 @@ class CockroachDBLoader(BaseLoader):
         # without this the loader's upsert can never work on tables the
         # loader itself created.  Separate transaction: CockroachDB
         # cannot use an index created inside the same transaction.
-        safe_name = validate_sql_identifier(
-            f"uq_{table}_{'_'.join(natural_keys)}", "index")
+        #
+        # Postgres/Cockroach truncate identifiers at 63 bytes, so a long
+        # table+keys name would silently truncate and could collide across
+        # different upsert targets.  A short content hash keeps the name
+        # unique-per-(table,keys) and always under the limit.
+        import hashlib
+        digest = hashlib.sha1(
+            f"{table}\0{','.join(natural_keys)}".encode("utf-8")
+        ).hexdigest()[:12]
+        safe_name = validate_sql_identifier(f"uq_dgp_{digest}", "index")
         with engine.begin() as conn:
             conn.execute(sa_text(
                 f"CREATE UNIQUE INDEX IF NOT EXISTS {safe_name} "

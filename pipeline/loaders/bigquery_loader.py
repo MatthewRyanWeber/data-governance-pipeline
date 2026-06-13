@@ -64,10 +64,21 @@ class BigQueryLoader(BaseLoader):
         project = cfg["project"]
         location = cfg.get("location", "US")
         # Emulator/test endpoint (e.g. goccy/bigquery-emulator): anonymous
-        # credentials, custom API endpoint
+        # credentials, custom API endpoint.  Refuse to attach anonymous
+        # credentials to a real Google endpoint — that path is only for a
+        # local/emulator host, never production.
         if cfg.get("api_endpoint"):
+            from urllib.parse import urlparse
             from google.api_core.client_options import ClientOptions
             from google.auth.credentials import AnonymousCredentials
+            endpoint_host = urlparse(cfg["api_endpoint"]).hostname or ""
+            if endpoint_host.endswith("googleapis.com"):
+                raise ValueError(
+                    "BigQueryLoader: api_endpoint must not point at the real "
+                    "googleapis.com endpoint — it forces anonymous "
+                    "credentials and is intended for emulators only. Omit "
+                    "api_endpoint to use real authentication."
+                )
             return _bigquery.Client(
                 project=project,
                 client_options=ClientOptions(api_endpoint=cfg["api_endpoint"]),
@@ -130,8 +141,8 @@ class BigQueryLoader(BaseLoader):
             f"{cfg['project']}/{cfg['dataset']}@{location}",
             table,
         )
-        return len(df)
         self._log_gdpr_transfer(location)
+        return len(df)
 
     def _bulk_load(self, df, cfg, table, if_exists):
         from google.cloud import bigquery as _bigquery

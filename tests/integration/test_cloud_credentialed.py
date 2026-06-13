@@ -65,11 +65,18 @@ def _env(*names) -> dict | None:
 # specific so a loader's own "no such table" / wrong-column errors are
 # never misread.  Matched against "<ExceptionType>: <message>", so an
 # exception class name (e.g. RequestError) can match too.
+# Anchored phrases, not bare substrings: a genuine loader-bug message that
+# merely contains the word "token" or a number like "503 rows" must NOT be
+# downgraded to a skip.  Each marker is specific enough that only an
+# auth/connectivity/transient condition produces it.
 _CREDENTIAL_ERROR_MARKERS = (
     # Auth
-    "token", "authenticat", "credential", "expired", "unauthorized",
-    "forbidden", "access denied", "permission denied", "login failed",
-    " 401", " 403", "invalid api key", "invalid client",
+    "invalid token", "token expired", "token is expired", "expired token",
+    "invalid or expired", "authentication failed", "authenticationerror",
+    "invalid credential", "unauthorized", "http 401", " 401 ",
+    "access denied", "permission denied", "forbidden", "http 403", " 403 ",
+    "invalid api key", "invalid client", "login failed",
+    "not authenticated", "please check your motherduck token",
     # Connectivity
     "could not connect", "connection refused", "connection timed out",
     "could not translate host", "name or service not known", "getaddrinfo",
@@ -77,9 +84,9 @@ _CREDENTIAL_ERROR_MARKERS = (
     # Transient service-side (serverless cold start, throttling, capacity).
     # Free Edition / serverless warehouses intermittently reject sessions
     # while starting — a platform limit, not a loader regression.
-    "requesterror", "error during request to server", "service unavailable",
-    "temporarily unavailable", " 503", " 429", "too many requests",
-    "operationaltimeout", "warehouse is starting", "cluster is starting",
+    "error during request to server", "service unavailable",
+    "temporarily unavailable", "http 503", "http 429", "too many requests",
+    "warehouse is starting", "cluster is starting",
 )
 
 

@@ -100,9 +100,23 @@ class S3Loader(BaseLoader):
                 kwargs["aws_access_key_id"] = cfg["aws_access_key"]
                 kwargs["aws_secret_access_key"] = cfg["aws_secret_key"]
             # S3-compatible stores (MinIO, Cloudflare R2, Ceph) and local
-            # test servers are reached via a custom endpoint
-            if cfg.get("endpoint_url"):
-                kwargs["endpoint_url"] = cfg["endpoint_url"]
+            # test servers are reached via a custom endpoint.  Reject a
+            # plaintext endpoint for a non-local host: signing real AWS
+            # credentials toward an arbitrary http:// host would leak the
+            # signed request (and the data) over the wire.
+            endpoint_url = cfg.get("endpoint_url")
+            if endpoint_url:
+                from urllib.parse import urlparse
+                parsed = urlparse(endpoint_url)
+                hostname = parsed.hostname or ""
+                is_local = hostname in ("localhost", "127.0.0.1", "::1")
+                if parsed.scheme != "https" and not is_local:
+                    raise ValueError(
+                        "S3Loader: endpoint_url must use https for non-local "
+                        f"hosts (got {endpoint_url!r}). Use https:// or a "
+                        "localhost endpoint for testing."
+                    )
+                kwargs["endpoint_url"] = endpoint_url
             client = _b3.client("s3", **kwargs)
             client.put_object(Bucket=bucket, Key=key, Body=body)
 
