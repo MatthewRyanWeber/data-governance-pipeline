@@ -76,6 +76,11 @@ pipeline run <source> <destination>
 
 For healthcare data from Epic EHR systems, `pipeline.extensions.epic_extensions` adds a complete HIPAA compliance layer on top.
 
+This is **governance-first ETL** — compliance is the spine, not a bolt-on.
+It is deliberately *not* an iPaaS connector marketplace, a transformation
+framework, or an orchestrator; [docs/SCOPE.md](docs/SCOPE.md) states
+exactly what it is and what it refuses to be.
+
 ### Watch the governance happen
 
 Everything below is the **actual output** of one run — not an illustration.
@@ -625,6 +630,16 @@ Copy `.env.example` to `.env` and fill in your values.
 - **Audit trail** -- SHA-256 chained tamper-evident ledger of all operations
 
 ---
+
+## Documentation
+
+Start at **[docs/README.md](docs/README.md)** — it routes you to the right
+doc by why you're here (using it, evaluating the compliance story, running
+it in production, or changing the code) so you don't have to wade through
+all of them. Highlights: [SCOPE.md](docs/SCOPE.md) (what it is / is not),
+[GOVERNANCE.md](docs/GOVERNANCE.md) (regulation → code → artifact),
+[ARCHITECTURE.md](docs/ARCHITECTURE.md) (layers + decision log),
+[EXTENDING.md](docs/EXTENDING.md) (custom loaders).
 
 ## License
 

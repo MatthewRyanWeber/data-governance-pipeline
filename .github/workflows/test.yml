@@ -30,6 +30,11 @@ jobs:
       - name: Lint with pyflakes
         run: python -m pyflakes pipeline/ tests/
 
+      - name: Lint for unreachable code
+        # pyflakes does not catch code after return/raise; a mechanical
+        # edit once left a GDPR audit call dangling after a return.
+        run: python scripts/lint_unreachable.py pipeline
+
       - name: Run unit tests with coverage
         # Integration and benchmark tests run in dedicated jobs; exclude them here.
         run: >
