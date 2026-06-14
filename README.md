@@ -159,7 +159,7 @@ data flow, module map, and extension guide.
 - 17 source file formats plus SQL tables, Kafka, Kinesis, Pub/Sub, and QuickBooks Online — full reference in [docs/SOURCES.md](docs/SOURCES.md)
 - 40 destinations across three verification tiers (26 core, 5 emulator-verified, 9 cloud-credential — see Supported Destinations)
 - Chunked parallel processing, compression (gz/bz2/zip/zstd/lz4), incremental loading, checkpoint/resume
-- Modular architecture: 136 Python modules across 14 subpackages with a 7-layer import DAG
+- Modular architecture: 138 Python modules across 15 subpackages with a 7-layer import DAG
 
 **Data governance -- GDPR / CCPA**
 - Append-only tamper-evident SHA-256 audit ledger -- every event is chained; seek/truncate blocked at the file handle level; external truncation detected
@@ -354,11 +354,11 @@ data-governance-pipeline/
 |   +-- advanced/                     # Reversible loads, DLQ replay, NL builder
 |   +-- reporting/                    # HTML reports, lineage graphs, cost estimator
 |   +-- streaming/                    # Kafka/Kinesis/Pub/Sub extractors
-+-- tests/                            # ~1,960 unit + 63 live-engine tests, 86 files
++-- tests/                            # ~1,990 unit + 63 live-engine tests, 88 files
 |   +-- test_loaders/                 # Per-loader tests + the shared loader contract
 |   |   +-- test_loader_contract.py   # Family contract enforced on every registry entry
 |   +-- test_extensions/              # Governance, HIPAA, compliance, Grafana
-|   +-- integration/                  # 60+ live-engine tests (containers + emulators)
+|   +-- integration/                  # 55 live-engine tests (containers + emulators)
 |   +-- test_property_based.py        # Hypothesis property-based testing (deterministic)
 +-- docs/                             # Legal, architecture, and extension docs
 |   +-- ARCHITECTURE.md               # Full architecture reference

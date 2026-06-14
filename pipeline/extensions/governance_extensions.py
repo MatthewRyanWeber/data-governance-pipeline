@@ -2137,11 +2137,6 @@ class PseudonymVault:
             """)
             conn.commit()
 
-    def _lookup(self, lookup_key: str) -> Optional[str]:
-        """Thread-safe public lookup (acquires lock)."""
-        with self._lock:
-            return self._lookup_unsafe(lookup_key)
-
     def _lookup_unsafe(self, lookup_key: str) -> Optional[str]:
         """Lookup without acquiring the lock — caller must hold self._lock."""
         with sqlite3.connect(str(self.vault_path),
@@ -2151,11 +2146,6 @@ class PseudonymVault:
                 "SELECT pseudonym FROM vault WHERE lookup_key=?", (lookup_key,)
             ).fetchone()
         return row[0] if row else None
-
-    def _store(self, lookup_key: str, original: str, pseudonym: str) -> None:
-        """Thread-safe public store (acquires lock)."""
-        with self._lock:
-            self._store_unsafe(lookup_key, original, pseudonym)
 
     def _store_unsafe(self, lookup_key: str, original: str, pseudonym: str) -> None:
         """Insert without acquiring the lock — caller must hold self._lock."""

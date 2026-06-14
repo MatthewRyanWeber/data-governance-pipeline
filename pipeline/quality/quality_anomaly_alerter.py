@@ -1,7 +1,8 @@
 """
 Quality anomaly alerter — monitors quality score trends and fires alerts.
 
-Layer 3 — imports from Layer 0 (constants), Layer 1 (governance_logger).
+Layer 3 — no module-level pipeline imports; the gov logger is injected and
+DataQualityScorer is imported lazily inside check().
 
 Revision history
 ────────────────

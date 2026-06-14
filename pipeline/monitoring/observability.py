@@ -4,7 +4,7 @@ Data observability — freshness, volume trends, and distribution drift.
 Goes beyond quality alerts to continuously monitor when data was last
 updated, detect volume anomalies, and flag distribution shifts.
 
-Layer 3 — imports from Layer 0 (constants), Layer 1 (governance_logger).
+Layer 3 — imports from Layer 0 (helpers); GovernanceLogger is type-only.
 
 Revision history
 ────────────────
