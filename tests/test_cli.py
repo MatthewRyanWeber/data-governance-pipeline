@@ -46,6 +46,12 @@ class TestArgParsing(unittest.TestCase):
         self.assertEqual(args.table, "pipeline_output")
         self.assertEqual(args.chunk_size, 50_000)
         self.assertEqual(args.sla, 0)
+        # Reconciliation is on by default — a partial load must not slip by silently.
+        self.assertTrue(args.verify)
+
+    def test_no_verify_flag_opts_out(self):
+        args = self.parser.parse_args(["run", "data.csv", "postgresql", "--no-verify"])
+        self.assertFalse(args.verify)
 
     def test_run_all_flags(self):
         args = self.parser.parse_args([

@@ -85,7 +85,12 @@ def _build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--parallel", action="store_true", help="Process source files in parallel")
     run_parser.add_argument("--table", default="pipeline_output", help="Destination table name")
     run_parser.add_argument("--sla", type=int, default=0, help="SLA deadline in seconds (0 = disabled)")
-    run_parser.add_argument("--verify", action="store_true", help="Verify row counts after loading")
+    run_parser.add_argument(
+        "--verify", action=argparse.BooleanOptionalAction, default=True,
+        help="Reconcile source vs destination row counts after loading "
+             "(default: on; pass --no-verify to skip — a partial load then "
+             "goes undetected)",
+    )
     run_parser.add_argument("--transform-config", dest="transform_config",
                             help="Path to transform pipeline YAML/JSON config")
     run_parser.add_argument("--chunk-size", type=int, default=50_000,
@@ -370,6 +375,25 @@ def _run_chunked(
             "exactly-once resume."
         )
 
+    # Build the observer once (not per chunk) so freshness / volume / drift /
+    # null-spike checks actually run during a real load instead of living in a
+    # class nothing calls. Opt-in via the config "observability" block — that
+    # is also where critical_fields are declared, which null-spike needs.
+    observer = None
+    obs_cfg = config.get("observability")
+    if obs_cfg:
+        from pipeline.monitoring.observability import DataObserver
+        observer = DataObserver(
+            gov,
+            dry_run=args.dry_run,
+            critical_fields=obs_cfg.get("critical_fields"),
+            null_spike_threshold=obs_cfg.get("null_spike_threshold", 0.2),
+            null_absolute_floor=obs_cfg.get("null_absolute_floor", 0.5),
+            freshness_threshold_hours=obs_cfg.get("freshness_threshold_hours", 24.0),
+            volume_change_threshold=obs_cfg.get("volume_change_threshold", 0.5),
+            drift_threshold=obs_cfg.get("drift_threshold", 0.1),
+        )
+
     # One streaming loop for every source type — never load the whole
     # dataset into memory.  Database sources stream via
     # DatabaseExtractor.chunks() (previously they loaded the entire table
@@ -390,6 +414,14 @@ def _run_chunked(
 
         chunk = _transform_chunk(chunk, args, config, gov)
 
+        # Observe the governed data that is about to land: a critical field
+        # gone silently null is caught here, before it reaches the destination.
+        if observer is not None:
+            observer.observe(
+                chunk, dataset=table_name,
+                timestamp_col=obs_cfg.get("timestamp_col"),
+            )
+
         with timed_operation(f"load:{destination}:chunk_{chunk_idx}"):
             _load_chunk(chunk)
 
@@ -409,7 +441,14 @@ def _run_chunked(
     state_manager.clear_checkpoint(str(source), table_name)
     logger.info("[PIPELINE] All chunks loaded — %d rows total.", total_rows)
 
-    if getattr(args, "verify", False) and not args.dry_run:
+    if args.dry_run:
+        pass  # nothing was written, so there is nothing to reconcile
+    elif not getattr(args, "verify", True):
+        logger.warning(
+            "[VERIFY] Row-count reconciliation SKIPPED (--no-verify) — "
+            "a partial or silently-dropped load will NOT be detected."
+        )
+    else:
         from pipeline.load_verifier import LoadVerifier
         verifier = LoadVerifier(gov)
         verify_cfg = dict(config)
@@ -418,10 +457,21 @@ def _run_chunked(
             import pandas as pd
             dummy = pd.DataFrame(index=range(total_rows))
             result = verifier.verify_row_count(dummy, verify_cfg, table_name)
-        if result.get("match") is False:
+        if result.get("match") is None:
+            # The reconciliation step ran but could not get a destination
+            # count (e.g. file/object stores). Say so — "verify on" must not
+            # be mistaken for "verified".
             logger.warning(
-                "Load verification FAILED: %d source rows vs %d destination rows.",
-                result["source_rows"], result["dest_rows"],
+                "[VERIFY] Could not reconcile '%s': destination count "
+                "unavailable for %s. The load was NOT verified.",
+                table_name, destination,
+            )
+        elif result.get("match") is False:
+            # A real discrepancy is a failure, not a footnote — log at error.
+            logger.error(
+                "[VERIFY] Load verification FAILED: %d source rows vs "
+                "%d destination rows (difference: %d).",
+                result["source_rows"], result["dest_rows"], result["difference"],
             )
 
 

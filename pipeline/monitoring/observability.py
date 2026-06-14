@@ -13,6 +13,9 @@ Revision history
 1.2   2026-06-08   Taste fixes: dry_run, thread lock, column_stats moved to
                    observe(), guard empty df, use read_jsonl_tail, rename
                    rec→observation_record / ds→dataset_name.
+1.3   2026-06-14   Add per-column null-rate tracking + null-spike detection:
+                   a critical field going silently mostly-null passes schema,
+                   row-count and drift checks — this closes that gap.
 """
 
 import json
@@ -49,6 +52,9 @@ class DataObserver:
         freshness_threshold_hours: float = 24.0,
         volume_change_threshold: float = 0.5,
         drift_threshold: float = 0.1,
+        critical_fields: list[str] | None = None,
+        null_spike_threshold: float = 0.2,
+        null_absolute_floor: float = 0.5,
         dry_run: bool = False,
     ) -> None:
         self.gov = gov
@@ -59,6 +65,12 @@ class DataObserver:
         self.freshness_hours = freshness_threshold_hours
         self.volume_threshold = volume_change_threshold
         self.drift_threshold = drift_threshold
+        # Fields that must stay populated. When set, null-spike detection is
+        # scoped to these (and only these get the absolute-floor check); when
+        # empty, the baseline-spike check still watches every column.
+        self.critical_fields = list(critical_fields or [])
+        self.null_spike_threshold = null_spike_threshold
+        self.null_absolute_floor = null_absolute_floor
         self.dry_run = dry_run
         self._lock = threading.Lock()
 
@@ -100,6 +112,9 @@ class DataObserver:
         drift_alerts = self._check_drift(df, dataset)
         alerts.extend(drift_alerts)
 
+        null_alerts = self._check_null_spikes(df, dataset)
+        alerts.extend(null_alerts)
+
         report = {
             "dataset": dataset,
             "row_count": len(df),
@@ -109,17 +124,25 @@ class DataObserver:
             "observed_utc": datetime.now(timezone.utc).isoformat(),
         }
 
-        # Compute column stats here so _save_observation stays I/O-only
+        # Compute column stats here so _save_observation stays I/O-only.
+        # null_rate is tracked for EVERY column (it drives null-spike
+        # detection on the next run); mean/std only for numeric columns
+        # (they drive drift). Non-numeric columns carry null_rate alone.
+        numeric_cols = set(df.select_dtypes(include="number").columns)
         column_stats = []
-        for col in df.select_dtypes(include="number").columns:
-            series = df[col].dropna()
-            if series.empty:
-                continue
-            column_stats.append({
+        for col in df.columns:
+            series = df[col]
+            entry = {
                 "name": col,
-                "mean": round(float(series.mean()), 6),
-                "std": round(float(series.std()), 6) if len(series) > 1 else 0.0,
-            })
+                "null_rate": round(float(series.isna().mean()), 6),
+            }
+            non_null = series.dropna()
+            if col in numeric_cols and not non_null.empty:
+                entry["mean"] = round(float(non_null.mean()), 6)
+                entry["std"] = (
+                    round(float(non_null.std()), 6) if len(non_null) > 1 else 0.0
+                )
+            column_stats.append(entry)
         report["column_stats"] = column_stats
 
         self._save_observation(report)
@@ -246,6 +269,77 @@ class DataObserver:
                     "prev_mean": prev_mean,
                     "curr_mean": round(curr_mean, 4),
                     "normalized_shift": round(mean_shift, 4),
+                })
+
+        return alerts
+
+    def _check_null_spikes(self, df: "pd.DataFrame", dataset: str) -> list[dict]:
+        """Detect spikes in per-column null rate vs the last observation.
+
+        This is the degraded-but-valid failure the other checks miss: a
+        field going silently mostly-null passes schema validation (nulls
+        are usually allowed), passes row-count reconciliation (the rows are
+        all present), and passes drift (null cells don't move the mean). It
+        also gets averaged away in the aggregate completeness score.
+        """
+        fields = self.critical_fields or list(df.columns)
+
+        history = self._load_history(dataset, n=1)
+        prev_rates: dict[str, float] = {}
+        if history and "column_stats" in history[0]:
+            prev_rates = {
+                stat["name"]: stat["null_rate"]
+                for stat in history[0]["column_stats"]
+                if "null_rate" in stat
+            }
+
+        alerts = []
+        for col in fields:
+            if col not in df.columns:
+                # A declared-critical field that vanished is itself a problem.
+                if col in self.critical_fields:
+                    alerts.append({
+                        "type": "NULL_FLOOR",
+                        "severity": "HIGH",
+                        "message": f"Critical field '{col}' is absent from the data",
+                        "column": col,
+                        "curr_null_rate": 1.0,
+                    })
+                continue
+
+            curr_rate = float(df[col].isna().mean())
+            prev_rate = prev_rates.get(col)
+
+            # Baseline spike: null rate jumped vs the previous run.
+            if prev_rate is not None and curr_rate - prev_rate > self.null_spike_threshold:
+                jump = curr_rate - prev_rate
+                alerts.append({
+                    "type": "NULL_SPIKE",
+                    "severity": "HIGH" if jump > self.null_spike_threshold * 2 else "MEDIUM",
+                    "message": (
+                        f"Null rate for '{col}' jumped from {prev_rate:.0%} "
+                        f"to {curr_rate:.0%} (+{jump:.0%})"
+                    ),
+                    "column": col,
+                    "prev_null_rate": round(prev_rate, 4),
+                    "curr_null_rate": round(curr_rate, 4),
+                    "jump": round(jump, 4),
+                })
+                continue
+
+            # Absolute floor: a declared-critical field that is mostly null
+            # even on the first run, where there is no baseline to spike against.
+            if col in self.critical_fields and curr_rate > self.null_absolute_floor:
+                alerts.append({
+                    "type": "NULL_FLOOR",
+                    "severity": "HIGH",
+                    "message": (
+                        f"Critical field '{col}' is {curr_rate:.0%} null "
+                        f"(floor: {self.null_absolute_floor:.0%})"
+                    ),
+                    "column": col,
+                    "curr_null_rate": round(curr_rate, 4),
+                    "floor": self.null_absolute_floor,
                 })
 
         return alerts

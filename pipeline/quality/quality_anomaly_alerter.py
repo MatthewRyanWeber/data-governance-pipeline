@@ -6,6 +6,9 @@ Layer 3 — imports from Layer 0 (constants), Layer 1 (governance_logger).
 Revision history
 ────────────────
 1.0   2026-06-07   Initial extraction from pipeline_v3.py.
+1.1   2026-06-14   Channels return delivery status; escalate (error + ledger
+                   ALERT_DELIVERY_FAILURE) when every external channel fails,
+                   so a total notification blackout is no longer silent.
 """
 
 import json
@@ -287,10 +290,10 @@ class QualityAnomalyAlerter:
             "run_label":   report.get("run_label"),
         }
 
-        # 1. Console (via logger)
+        # 1. Console (via logger) — always-on local channel.
         self._alert_console(alert, report)
 
-        # 2. Governance ledger
+        # 2. Governance ledger — durable, always-on local channel.
         if self.gov:
             self.gov.transformation_applied("QUALITY_ANOMALY_ALERT", {
                 "type":     alert["type"],
@@ -299,24 +302,38 @@ class QualityAnomalyAlerter:
                 "score":    report.get("score"),
             })
 
-        # 3. Append to alert log file
+        # 3. Append to alert log file — local channel.
         try:
             with open(self.alert_log_file, "a", encoding="utf-8") as fh:
                 fh.write(json.dumps(payload, default=str) + "\n")
         except OSError as exc:
             logger.warning("Could not write alert log: %s", exc)
 
-        # 4. Slack webhook
+        # 4-6. External channels. Track each delivery: if every configured
+        # external channel fails, the operator's only notification paths are
+        # all dead and they would never learn the alert fired. A swallowed
+        # per-channel warning hides that; a total blackout must itself escalate.
+        external: list[tuple[str, bool]] = []
         if self.slack_webhook:
-            self._alert_slack(alert, report)
-
-        # 5. Email
+            external.append(("slack", bool(self._alert_slack(alert, report))))
         if self.email_cfg:
-            self._alert_email(alert, report)
-
-        # 6. Generic webhook
+            external.append(("email", bool(self._alert_email(alert, report))))
         if self.webhook_url:
-            self._alert_webhook(payload)
+            external.append(("webhook", bool(self._alert_webhook(payload))))
+
+        if external and not any(delivered for _, delivered in external):
+            failed = ", ".join(name for name, _ in external)
+            logger.error(
+                "[ALERT] '%s' alert fired but ALL delivery channels failed "
+                "(%s) — operator may not be notified. Alert is preserved in "
+                "the governance ledger and %s.",
+                alert.get("type"), failed, self.alert_log_file,
+            )
+            if self.gov:
+                self.gov.transformation_applied("ALERT_DELIVERY_FAILURE", {
+                    "alert_type":      alert.get("type"),
+                    "failed_channels": [name for name, _ in external],
+                })
 
     def _alert_console(self, alert: dict, report: dict) -> None:
         """Log a formatted alert block."""
@@ -331,8 +348,8 @@ class QualityAnomalyAlerter:
             border,
         )
 
-    def _alert_slack(self, alert: dict, report: dict) -> None:
-        """POST a Slack Block Kit message to the incoming webhook."""
+    def _alert_slack(self, alert: dict, report: dict) -> bool:
+        """POST a Slack Block Kit message. Returns True on success."""
         text = (
             f"*Data Quality Alert [{alert.get('severity')}]*\n"
             f"*{alert['type']}* — {alert['message']}\n"
@@ -347,11 +364,13 @@ class QualityAnomalyAlerter:
                                 headers={"Content-Type": "application/json"})
             with _req.urlopen(req, timeout=5):
                 pass
+            return True
         except Exception as exc:  # pylint: disable=broad-except
             logger.warning("Slack send failed: %s", exc)
+            return False
 
-    def _alert_email(self, alert: dict, report: dict) -> None:
-        """Send an SMTP email alert."""
+    def _alert_email(self, alert: dict, report: dict) -> bool:
+        """Send an SMTP email alert. Returns True on success."""
         cfg = self.email_cfg or {}
         try:
             import smtplib  # pylint: disable=import-outside-toplevel
@@ -386,11 +405,13 @@ class QualityAnomalyAlerter:
                     cfg.get("to_addrs", []),
                     msg.as_string()
                 )
+            return True
         except Exception as exc:  # pylint: disable=broad-except
             logger.warning("Email send failed: %s", exc)
+            return False
 
-    def _alert_webhook(self, payload: dict) -> None:
-        """POST the full alert payload to a generic HTTP webhook."""
+    def _alert_webhook(self, payload: dict) -> bool:
+        """POST the full alert payload to a generic HTTP webhook. Returns True on success."""
         try:
             import urllib.request as _req  # pylint: disable=import-outside-toplevel
             data = json.dumps(payload, default=str).encode("utf-8")
@@ -398,8 +419,10 @@ class QualityAnomalyAlerter:
                                 headers={"Content-Type": "application/json"})
             with _req.urlopen(req, timeout=5):
                 pass
+            return True
         except Exception as exc:  # pylint: disable=broad-except
             logger.warning("Webhook send failed: %s", exc)
+            return False
 
     # ── Reporting helpers ─────────────────────────────────────────────────
 

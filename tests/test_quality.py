@@ -427,6 +427,38 @@ class TestQualityAnomalyAlerter(unittest.TestCase):
             alerter.check({"score": 50, "dimensions": {}})
             mock_hook.assert_called()
 
+    def test_all_channels_fail_escalates(self):
+        """When every external channel fails, escalate to the gov ledger."""
+        from pipeline.quality.quality_anomaly_alerter import QualityAnomalyAlerter
+        hfile = self._write_history([])
+        alerter = QualityAnomalyAlerter(
+            gov=self.gov,
+            absolute_floor=80.0,
+            slack_webhook="https://hooks.example.com/test",
+            history_file=hfile,
+            alert_log_file=Path(self.tmpdir) / "alerts.jsonl",
+        )
+        with patch.object(alerter, "_alert_slack", return_value=False):
+            alerter.check({"score": 50, "dimensions": {}})
+        events = [c.args[0] for c in self.gov.transformation_applied.call_args_list]
+        self.assertIn("ALERT_DELIVERY_FAILURE", events)
+
+    def test_channel_success_no_escalation(self):
+        """A delivered alert does not trigger a delivery-failure escalation."""
+        from pipeline.quality.quality_anomaly_alerter import QualityAnomalyAlerter
+        hfile = self._write_history([])
+        alerter = QualityAnomalyAlerter(
+            gov=self.gov,
+            absolute_floor=80.0,
+            slack_webhook="https://hooks.example.com/test",
+            history_file=hfile,
+            alert_log_file=Path(self.tmpdir) / "alerts.jsonl",
+        )
+        with patch.object(alerter, "_alert_slack", return_value=True):
+            alerter.check({"score": 50, "dimensions": {}})
+        events = [c.args[0] for c in self.gov.transformation_applied.call_args_list]
+        self.assertNotIn("ALERT_DELIVERY_FAILURE", events)
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  5. SchemaEvolver

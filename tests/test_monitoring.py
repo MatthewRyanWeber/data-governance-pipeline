@@ -260,6 +260,73 @@ class TestDataObserver(unittest.TestCase):
         self.assertEqual(len(report["column_stats"]), 1)
         self.assertEqual(report["column_stats"][0]["name"], "price")
 
+    def test_column_stats_track_null_rate(self):
+        obs = DataObserver(self.gov, history_file=self.history_file)
+        df = self.pd.DataFrame({"email": ["a@x.com", None, "c@x.com", None]})
+        report = obs.observe(df, dataset="nr_test")
+        stat = report["column_stats"][0]
+        self.assertEqual(stat["name"], "email")
+        self.assertEqual(stat["null_rate"], 0.5)
+
+    def test_null_spike_detected_vs_baseline(self):
+        obs = DataObserver(self.gov, history_file=self.history_file)
+        prev = {
+            "dataset": "spike_test",
+            "row_count": 4,
+            "column_count": 1,
+            "alerts": [],
+            "alert_count": 0,
+            "observed_utc": datetime.now(timezone.utc).isoformat(),
+            "column_stats": [{"name": "email", "null_rate": 0.0}],
+        }
+        with open(self.history_file, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(prev) + "\n")
+        # Same field is now 75% null — a silent spike vs the 0% baseline.
+        df = self.pd.DataFrame({"email": ["a@x.com", None, None, None]})
+        report = obs.observe(df, dataset="spike_test")
+        null_alerts = [a for a in report["alerts"] if a["type"] == "NULL_SPIKE"]
+        self.assertEqual(len(null_alerts), 1)
+        self.assertEqual(null_alerts[0]["column"], "email")
+
+    def test_no_null_spike_when_rate_stable(self):
+        obs = DataObserver(self.gov, history_file=self.history_file)
+        prev = {
+            "dataset": "stable_null",
+            "row_count": 4,
+            "column_count": 1,
+            "alerts": [],
+            "alert_count": 0,
+            "observed_utc": datetime.now(timezone.utc).isoformat(),
+            "column_stats": [{"name": "email", "null_rate": 0.5}],
+        }
+        with open(self.history_file, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(prev) + "\n")
+        df = self.pd.DataFrame({"email": ["a@x.com", None, "c@x.com", None]})
+        report = obs.observe(df, dataset="stable_null")
+        null_alerts = [a for a in report["alerts"] if a["type"] == "NULL_SPIKE"]
+        self.assertEqual(len(null_alerts), 0)
+
+    def test_critical_field_floor_breach_on_first_run(self):
+        # No baseline exists, but a declared-critical field is mostly null.
+        obs = DataObserver(
+            self.gov, history_file=self.history_file,
+            critical_fields=["ssn"], null_absolute_floor=0.5,
+        )
+        df = self.pd.DataFrame({"ssn": [None, None, None, "x"]})
+        report = obs.observe(df, dataset="floor_test")
+        floor_alerts = [a for a in report["alerts"] if a["type"] == "NULL_FLOOR"]
+        self.assertEqual(len(floor_alerts), 1)
+
+    def test_missing_critical_field_alerts(self):
+        obs = DataObserver(
+            self.gov, history_file=self.history_file, critical_fields=["ssn"],
+        )
+        df = self.pd.DataFrame({"name": ["a", "b"]})
+        report = obs.observe(df, dataset="missing_test")
+        floor_alerts = [a for a in report["alerts"] if a["type"] == "NULL_FLOOR"]
+        self.assertEqual(len(floor_alerts), 1)
+        self.assertEqual(floor_alerts[0]["column"], "ssn")
+
 
 class TestNotifier(unittest.TestCase):
     """Notifier email and Slack dispatch."""
