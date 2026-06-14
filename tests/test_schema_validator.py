@@ -4,9 +4,28 @@ Tests for the Great Expectations schema validator.
 Tests the non-interactive parts: suite building and validation.
 When great_expectations is not installed, tests verify graceful fallback.
 
+Why the two TestSchemaValidatorWithGX cases may report as SKIPPED
+───────────────────────────────────────────────────────────────
+`schema_validator.py` targets the Great Expectations **1.x** API
+(`gxe.ExpectColumnToExist`, `ctx.suites.add(...)`). GX is an *optional*
+dependency, so these two tests skip — by design — whenever a compatible
+GX is not importable. That happens in two situations:
+
+  1. GX is not installed at all (it is not in the CI deps, so these two
+     tests skip in CI today — they exercise an optional capability).
+  2. GX is installed but is a 0.x release, whose API differs. This is the
+     case on Python 3.14: GX 1.x requires `<3.14`, so the newest version
+     that installs there is 0.18.x — incompatible with the 1.x calls.
+
+The skips are therefore an environment/optional-dependency signal, NOT a
+failure or a masked bug. To make them RUN, install GX 1.x on a supported
+interpreter (Python 3.10–3.13): `pip install "great_expectations>=1.0"`.
+
 Revision history
 ────────────────
 1.0   2026-06-09   Initial release.
+1.1   2026-06-14   Document why the GX cases skip (optional dep; GX 1.x is
+                   uninstallable on Python 3.14, leaving an incompatible 0.x).
 """
 
 import unittest
@@ -59,7 +78,10 @@ class TestSchemaValidatorWithGX(unittest.TestCase):
 
     def test_build_suite_generates_expectations(self):
         if not self._gx_ok:
-            self.skipTest("great_expectations API incompatible or not installed")
+            self.skipTest(
+                "Optional dep: needs Great Expectations 1.x (absent in CI; "
+                "uninstallable on Python 3.14 — see module docstring)"
+            )
         sv = SchemaValidator(self.gov, self.dlq)
         df = pd.DataFrame({"id": [1, 2, 3], "name": ["a", "b", "c"]})
         expectations = sv.build_suite(df, interactive=False)
@@ -67,7 +89,10 @@ class TestSchemaValidatorWithGX(unittest.TestCase):
 
     def test_validate_passing_suite(self):
         if not self._gx_ok:
-            self.skipTest("great_expectations API incompatible or not installed")
+            self.skipTest(
+                "Optional dep: needs Great Expectations 1.x (absent in CI; "
+                "uninstallable on Python 3.14 — see module docstring)"
+            )
         sv = SchemaValidator(self.gov, self.dlq)
         df = pd.DataFrame({"id": [1, 2, 3], "name": ["a", "b", "c"]})
         expectations = sv.build_suite(df, interactive=False)

@@ -526,7 +526,14 @@ pip install -e ".[dev]"
 python -m pytest tests/ -q
 ```
 
-**~1,960 unit tests plus 63 live-engine integration tests, all passing.**
+**~1,970 unit tests plus 63 live-engine integration tests, all passing.**
+
+> **Expected skips:** two tests in `tests/test_schema_validator.py` skip
+> unless Great Expectations 1.x is importable. GX is an optional dependency
+> (not in the default CI deps) and GX 1.x is uninstallable on Python 3.14
+> (it requires `<3.14`), so a stock run reports `2 skipped` — this is the
+> optional-dependency signal, not a failure. To run them, install GX on a
+> supported interpreter (3.10–3.13): `pip install "great_expectations>=1.0"`.
 
 The suite spans three fidelity levels so bugs are caught wherever they hide:
 
