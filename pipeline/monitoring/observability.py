@@ -16,6 +16,9 @@ Revision history
 1.3   2026-06-14   Add per-column null-rate tracking + null-spike detection:
                    a critical field going silently mostly-null passes schema,
                    row-count and drift checks — this closes that gap.
+1.4   2026-06-14   observe() reads history once and computes each column's
+                   null rate once, sharing both across all detectors (was
+                   three file reads + a duplicate null-rate pass per call).
 """
 
 import json
@@ -101,18 +104,31 @@ class DataObserver:
 
         alerts: list[dict] = []
 
+        # One history read per observe() for every detector that needs the
+        # prior run(s): volume averages the last few, drift and null-spike
+        # compare against the most recent (history is newest-first). Reading
+        # the file once keeps this off the per-record I/O path.
+        history = self._load_history(dataset, n=5)
+        previous = history[0] if history else None
+
+        # Per-column null rate: computed once here, consumed by both the
+        # null-spike detector and the persisted column_stats below.
+        null_rates = {
+            col: round(float(df[col].isna().mean()), 6) for col in df.columns
+        }
+
         freshness = self._check_freshness(df, timestamp_col)
         if freshness:
             alerts.append(freshness)
 
-        volume_alert = self._check_volume(df, dataset)
+        volume_alert = self._check_volume(df, history)
         if volume_alert:
             alerts.append(volume_alert)
 
-        drift_alerts = self._check_drift(df, dataset)
+        drift_alerts = self._check_drift(df, previous)
         alerts.extend(drift_alerts)
 
-        null_alerts = self._check_null_spikes(df, dataset)
+        null_alerts = self._check_null_spikes(df, previous, null_rates)
         alerts.extend(null_alerts)
 
         report = {
@@ -131,12 +147,11 @@ class DataObserver:
         numeric_cols = set(df.select_dtypes(include="number").columns)
         column_stats = []
         for col in df.columns:
-            series = df[col]
             entry = {
                 "name": col,
-                "null_rate": round(float(series.isna().mean()), 6),
+                "null_rate": null_rates[col],
             }
-            non_null = series.dropna()
+            non_null = df[col].dropna()
             if col in numeric_cols and not non_null.empty:
                 entry["mean"] = round(float(non_null.mean()), 6)
                 entry["std"] = (
@@ -199,9 +214,8 @@ class DataObserver:
                 }
         return None
 
-    def _check_volume(self, df: "pd.DataFrame", dataset: str) -> dict | None:
+    def _check_volume(self, df: "pd.DataFrame", history: list[dict]) -> dict | None:
         """Check for abnormal row count changes vs historical baseline."""
-        history = self._load_history(dataset, n=5)
         if not history:
             return None
 
@@ -228,13 +242,12 @@ class DataObserver:
             }
         return None
 
-    def _check_drift(self, df: "pd.DataFrame", dataset: str) -> list[dict]:
+    def _check_drift(self, df: "pd.DataFrame", previous: dict | None) -> list[dict]:
         """Detect distribution drift on numeric columns vs last observation."""
-        history = self._load_history(dataset, n=1)
-        if not history or "column_stats" not in history[0]:
+        if not previous or "column_stats" not in previous:
             return []
 
-        prev_stats = {s["name"]: s for s in history[0].get("column_stats", [])}
+        prev_stats = {s["name"]: s for s in previous.get("column_stats", [])}
         alerts = []
 
         for col in df.select_dtypes(include="number").columns:
@@ -273,7 +286,12 @@ class DataObserver:
 
         return alerts
 
-    def _check_null_spikes(self, df: "pd.DataFrame", dataset: str) -> list[dict]:
+    def _check_null_spikes(
+        self,
+        df: "pd.DataFrame",
+        previous: dict | None,
+        null_rates: dict[str, float],
+    ) -> list[dict]:
         """Detect spikes in per-column null rate vs the last observation.
 
         This is the degraded-but-valid failure the other checks miss: a
@@ -281,15 +299,17 @@ class DataObserver:
         are usually allowed), passes row-count reconciliation (the rows are
         all present), and passes drift (null cells don't move the mean). It
         also gets averaged away in the aggregate completeness score.
+
+        ``null_rates`` is the current per-column null rate, computed once by
+        the caller and shared with the persisted column_stats.
         """
         fields = self.critical_fields or list(df.columns)
 
-        history = self._load_history(dataset, n=1)
         prev_rates: dict[str, float] = {}
-        if history and "column_stats" in history[0]:
+        if previous and "column_stats" in previous:
             prev_rates = {
                 stat["name"]: stat["null_rate"]
-                for stat in history[0]["column_stats"]
+                for stat in previous["column_stats"]
                 if "null_rate" in stat
             }
 
@@ -307,7 +327,7 @@ class DataObserver:
                     })
                 continue
 
-            curr_rate = float(df[col].isna().mean())
+            curr_rate = null_rates[col]
             prev_rate = prev_rates.get(col)
 
             # Baseline spike: null rate jumped vs the previous run.

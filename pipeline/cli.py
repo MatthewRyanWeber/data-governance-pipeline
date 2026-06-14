@@ -383,15 +383,16 @@ def _run_chunked(
     obs_cfg = config.get("observability")
     if obs_cfg:
         from pipeline.monitoring.observability import DataObserver
+        # Forward only the keys the config actually sets; DataObserver owns
+        # the defaults so a threshold default lives in exactly one place.
+        observer_keys = (
+            "critical_fields", "null_spike_threshold", "null_absolute_floor",
+            "freshness_threshold_hours", "volume_change_threshold", "drift_threshold",
+        )
         observer = DataObserver(
             gov,
             dry_run=args.dry_run,
-            critical_fields=obs_cfg.get("critical_fields"),
-            null_spike_threshold=obs_cfg.get("null_spike_threshold", 0.2),
-            null_absolute_floor=obs_cfg.get("null_absolute_floor", 0.5),
-            freshness_threshold_hours=obs_cfg.get("freshness_threshold_hours", 24.0),
-            volume_change_threshold=obs_cfg.get("volume_change_threshold", 0.5),
-            drift_threshold=obs_cfg.get("drift_threshold", 0.1),
+            **{key: obs_cfg[key] for key in observer_keys if key in obs_cfg},
         )
 
     # One streaming loop for every source type — never load the whole
