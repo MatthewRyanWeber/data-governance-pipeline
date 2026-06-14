@@ -62,6 +62,23 @@ _ensure_mock_module(
     "snowflake.connector",
 )
 
+# The Delta loader does `from deltalake.exceptions import TableNotFoundError`
+# on the upsert path. A bare MagicMock stub has no importable `.exceptions`
+# submodule (the from-import raises AttributeError: __spec__), so when
+# deltalake is not installed register a real exceptions module with a real
+# exception class — the import resolves and the loader's except clause is
+# meaningful. No-op when the real deltalake is installed (stub is not a Mock).
+if isinstance(sys.modules.get("deltalake"), MagicMock):
+    import types as _types
+
+    class TableNotFoundError(Exception):
+        """Stand-in for deltalake.exceptions.TableNotFoundError when unavailable."""
+
+    _exc_module = _types.ModuleType("deltalake.exceptions")
+    _exc_module.TableNotFoundError = TableNotFoundError
+    sys.modules["deltalake.exceptions"] = _exc_module
+    sys.modules["deltalake"].exceptions = _exc_module
+
 _DF = pd.DataFrame({"id": [1, 2], "name": ["a", "b"]})
 _EMPTY = pd.DataFrame()
 
