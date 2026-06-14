@@ -31,6 +31,8 @@ logger = logging.getLogger(__name__)
 class KafkaLoader(BaseLoader):
     """Publish DataFrames to Kafka topics with delivery guarantees."""
 
+    SUPPORTS_UPSERT = False  # append-only event stream, no upsert semantics
+
     def __init__(self, gov: "GovernanceLogger", dry_run: bool = False) -> None:
         super().__init__(gov, dry_run=dry_run)
         if not HAS_KAFKA_LOADER:

@@ -14,6 +14,9 @@ Revision history
                    WHEN MATCHED instead of referencing __NOOP__; staging
                    engine disposed via _engine_scope.
 1.3   2026-06-12   Loader contract: dry-run returns 0 (was None); keyless upsert raises via _require_upsert_keys (was silent append).
+1.4   2026-06-14   Upsert validates each natural_key via the shared identifier
+                   validator and confirms membership in df.columns before
+                   interpolating keys into the MERGE ON/SET clauses.
 """
 
 import time
@@ -164,6 +167,19 @@ class Db2Loader(BaseLoader):
     def _upsert(self, df, cfg, table, natural_keys):
         """Stage -> Db2 MERGE INTO."""
         import ibm_db as _ibm_db
+
+        # natural_keys is caller-supplied and interpolated into the MERGE
+        # ON/SET clauses, so validate it like every other identifier and
+        # require each key to be one of the (already validated) df columns.
+        # Done before staging so a malicious key never opens a connection.
+        df_columns = set(df.columns)
+        for key in natural_keys:
+            validate_sql_identifier(key, "natural_key")
+            if key not in df_columns:
+                raise ValueError(
+                    f"Db2Loader: natural_key '{key}' is not a column in the "
+                    "DataFrame being loaded."
+                )
 
         schema = cfg.get("schema", cfg["user"]).upper()
         tmp_table = f"{table[:20]}_STG"

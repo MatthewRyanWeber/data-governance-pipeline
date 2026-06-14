@@ -5,6 +5,9 @@ TableCopier, and DLQReplayer.
 Revision history
 ────────────────
 1.0   2026-06-08   Initial release: 18 tests across 4 classes.
+1.1   2026-06-14   DLQReplayer: replay/replay_all without a loader must NOT
+                   archive the file (data-orphaning regression); replay WITH a
+                   loader archives after a successful load.
 """
 
 import shutil
@@ -235,14 +238,47 @@ class TestDLQReplayer(unittest.TestCase):
         files = replayer.list_dlq_files()
         self.assertEqual(len(files), 2)
 
-    def test_replay_strips_meta_columns_and_archives(self):
+    def test_replay_without_loader_does_not_archive(self):
+        # Bug fix: with no loader nothing is re-loaded, so archiving would
+        # orphan the rejected rows. The file must be LEFT in place and the
+        # honest replayed-row count is 0.
         self._write_dlq("dlq_001.csv", [
             {"name": "alice", "age": 30, "_dlq_reason": "null_pk", "_dlq_pipeline_id": "p1"},
         ])
         replayer = DLQReplayer(self.gov, dlq_dir=self.dlq_dir)
         rows = replayer.replay(self.dlq_dir / "dlq_001.csv")
+        self.assertEqual(rows, 0)
+        self.assertTrue((self.dlq_dir / "dlq_001.csv").exists())
+
+    def test_replay_with_loader_archives_after_load(self):
+        # With a real loader the rows are re-loaded, so archiving is safe and
+        # the file is renamed away (no un-replayed .csv remains).
+        self._write_dlq("dlq_001b.csv", [
+            {"name": "bob", "age": 41, "_dlq_reason": "null_pk", "_dlq_pipeline_id": "p2"},
+        ])
+        mock_loader = MagicMock()
+        replayer = DLQReplayer(self.gov, dlq_dir=self.dlq_dir)
+        rows = replayer.replay(
+            self.dlq_dir / "dlq_001b.csv",
+            loader=mock_loader, cfg={"path": "/tmp/x"}, table="t",
+        )
         self.assertEqual(rows, 1)
-        self.assertFalse((self.dlq_dir / "dlq_001.csv").exists())
+        mock_loader.load.assert_called_once()
+        self.assertFalse((self.dlq_dir / "dlq_001b.csv").exists())
+        archived = list(self.dlq_dir.glob("dlq_001b.replayed_*.csv"))
+        self.assertEqual(len(archived), 1)
+
+    def test_replay_all_without_loader_leaves_files(self):
+        # The CLI replay-dlq path calls replay_all() with no loader; it must
+        # not orphan files or report them as replayed.
+        self._write_dlq("dlq_a.csv", [{"x": 1, "_dlq_reason": "r"}])
+        self._write_dlq("dlq_b.csv", [{"x": 2, "_dlq_reason": "r"}])
+        replayer = DLQReplayer(self.gov, dlq_dir=self.dlq_dir)
+        summary = replayer.replay_all()
+        self.assertEqual(summary["files_replayed"], 0)
+        self.assertEqual(summary["total_rows"], 0)
+        self.assertTrue((self.dlq_dir / "dlq_a.csv").exists())
+        self.assertTrue((self.dlq_dir / "dlq_b.csv").exists())
 
     def test_replay_with_transformer(self):
         self._write_dlq("dlq_002.csv", [{"val": 10}])
@@ -252,7 +288,9 @@ class TestDLQReplayer(unittest.TestCase):
         rows = replayer.replay(
             self.dlq_dir / "dlq_002.csv", transformer=mock_tx,
         )
-        self.assertEqual(rows, 1)
+        # No loader supplied, so nothing was re-loaded: honest count is 0
+        # and the transformer still ran.
+        self.assertEqual(rows, 0)
         mock_tx.transform.assert_called_once()
 
     def test_dry_run_does_not_archive(self):

@@ -24,6 +24,8 @@ logger = logging.getLogger(__name__)
 class S3Loader(BaseLoader):
     """Write DataFrames to S3, GCS, or Azure Blob as flat files."""
 
+    SUPPORTS_UPSERT = False  # flat object writes, no row-level merge
+
     _FORMATS = ("parquet", "csv", "json", "jsonl")
 
     def __init__(self, gov: "GovernanceLogger", dry_run: bool = False) -> None:

@@ -21,6 +21,11 @@ Revision history
 1.0   2026-06-14   Extracted from GovernanceLogger (the _event hash chain,
                    anchor sidecar, and verify_ledger) so the durable-append
                    mechanism is separable and independently testable.
+1.1   2026-06-14   Fix false-positive tamper on crash during append: a ledger
+                   exactly one event ahead of the anchor, whose last line's
+                   prev_hash matches the anchor's last_hash, is treated as a
+                   legitimate crash-between-write-and-anchor (and the anchor is
+                   caught up) instead of reported as tail truncation.
 """
 
 import hashlib
@@ -194,17 +199,49 @@ class LedgerWriter:
             prev_hash = computed_hash
 
         if anchor is not None:
-            if anchor.get("entry_count") != len(lines):
+            anchor_count = anchor.get("entry_count")
+            anchor_hash = anchor.get("last_hash")
+
+            # event() does a durable write() + count increment BEFORE
+            # _write_anchor(); a crash in that window leaves the ledger one
+            # event ahead of the anchor on an otherwise-intact chain. That is
+            # not tamper — no data was lost — so recognise it before the
+            # equality checks below would flag a spurious truncation.
+            last_line_event = json.loads(lines[-1])
+            crash_during_append = (
+                isinstance(anchor_count, int)
+                and len(lines) == anchor_count + 1
+                and last_line_event.get("prev_hash") == anchor_hash
+            )
+            if crash_during_append:
+                self.logger.warning(
+                    "[TAMPER CHECK] Anchor lagged by one event (count=%s, "
+                    "ledger=%s) — crash during append, chain intact through "
+                    "the final event. Treating as legitimate.",
+                    anchor_count, len(lines),
+                )
+                # Catch the anchor up to the durable ledger so the next
+                # verify sees a matching pair (skipped under dry_run).
+                if not self.dry_run:
+                    self._written_event_count = len(lines)
+                    self._write_anchor(prev_hash)
+                self.logger.info(
+                    "[TAMPER CHECK] Ledger integrity verified — %s events OK.",
+                    len(lines),
+                )
+                return True
+
+            if anchor_count != len(lines):
                 self.logger.error(
                     "[TAMPER DETECTED] Ledger has %s events but anchor "
                     "records %s — tail truncation suspected.",
-                    len(lines), anchor.get("entry_count"),
+                    len(lines), anchor_count,
                 )
                 return False
-            if anchor.get("last_hash") != prev_hash:
+            if anchor_hash != prev_hash:
                 self.logger.error(
                     "[TAMPER DETECTED] Final ledger hash %r does not match "
-                    "anchored hash %r.", prev_hash, anchor.get("last_hash"),
+                    "anchored hash %r.", prev_hash, anchor_hash,
                 )
                 return False
 

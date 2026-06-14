@@ -11,6 +11,9 @@ Revision history
                    works; all-key MERGE omits WHEN MATCHED instead of
                    referencing a non-existent __noop__ column.
 1.2   2026-06-12   Dry-run path returns 0 instead of None (loader contract).
+1.3   2026-06-14   Upsert validates each natural_key via the shared identifier
+                   validator and confirms membership in df.columns before
+                   interpolating keys into the MERGE ON/SET clauses.
 """
 
 import time
@@ -218,6 +221,19 @@ class BigQueryLoader(BaseLoader):
 
     def _upsert(self, df, cfg, table, natural_keys):
         from google.cloud import bigquery as _bigquery
+
+        # natural_keys is caller-supplied and interpolated into the MERGE
+        # ON/SET clauses, so validate it like every other identifier and
+        # require each key to be one of the (already validated) df columns.
+        df_columns = set(df.columns)
+        for key in natural_keys:
+            validate_sql_identifier(key, "natural_key")
+            if key not in df_columns:
+                raise ValueError(
+                    f"BigQueryLoader: natural_key '{key}' is not a column in "
+                    "the DataFrame being loaded."
+                )
+
         client = self._client(cfg)
         project = cfg["project"]
         dataset = cfg["dataset"]

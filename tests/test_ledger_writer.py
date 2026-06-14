@@ -6,6 +6,9 @@ prove the extraction stands on its own.
 Revision history
 ────────────────
 1.0   2026-06-14   Initial release.
+1.1   2026-06-14   Add crash-during-append cases: anchor lagging by exactly
+                   one event on an intact chain is NOT tamper; genuine
+                   truncation and a forged last line still fail.
 """
 
 import json
@@ -95,6 +98,70 @@ class TestLedgerWriterChain(unittest.TestCase):
         self.assertFalse(w.ledger_file.exists())
         self.assertEqual(len(w.entries), 3)
         self.assertEqual(w.entries[1]["prev_hash"], w.entries[0]["self_hash"])
+
+    def test_crash_between_write_and_anchor_is_not_tamper(self):
+        # event() writes the ledger line + increments the count BEFORE
+        # _write_anchor(); a crash in that window leaves N ledger events but
+        # an anchor pinned at N-1. Rewind the anchor to that exact lagged
+        # state and assert it is treated as an intact ledger, not tamper.
+        w = _writer(self.tmpdir)
+        for i in range(5):
+            w.event(_entry(f"E{i}"))
+        lines = [json.loads(line) for line in
+                 w.ledger_file.read_text(encoding="utf-8").splitlines()
+                 if line.strip()]
+        # The anchor as it would have stood after event N-1: its last_hash is
+        # event N-1's self_hash, which is exactly the last line's prev_hash.
+        lagged_anchor = {
+            "last_hash": lines[-1]["prev_hash"],
+            "entry_count": len(lines) - 1,
+            "ledger_file": w.ledger_file.name,
+        }
+        w.ledger_anchor_file.write_text(
+            json.dumps(lagged_anchor, indent=2), encoding="utf-8"
+        )
+        self.assertTrue(w.verify_ledger())
+        # The recovery path should have caught the anchor back up so a second
+        # verify sees a matching pair.
+        caught_up = json.loads(w.ledger_anchor_file.read_text(encoding="utf-8"))
+        self.assertEqual(caught_up["entry_count"], len(lines))
+        self.assertEqual(caught_up["last_hash"], lines[-1]["self_hash"])
+        self.assertTrue(w.verify_ledger())
+
+    def test_one_ahead_with_forged_last_line_still_tamper(self):
+        # Ledger one ahead of the anchor, but the extra last line does NOT
+        # continue the anchored chain (its prev_hash differs from the anchor's
+        # last_hash). That is an injected/forged tail, not a crash — must fail.
+        w = _writer(self.tmpdir)
+        for i in range(4):
+            w.event(_entry(f"E{i}"))
+        lines = [json.loads(line) for line in
+                 w.ledger_file.read_text(encoding="utf-8").splitlines()
+                 if line.strip()]
+        # Pin the anchor one behind, but at a last_hash that the genuine last
+        # line does NOT chain from — so crash-during-append must not apply.
+        forged_anchor = {
+            "last_hash": "NOT_THE_REAL_PREV_HASH",
+            "entry_count": len(lines) - 1,
+            "ledger_file": w.ledger_file.name,
+        }
+        w.ledger_anchor_file.write_text(
+            json.dumps(forged_anchor, indent=2), encoding="utf-8"
+        )
+        self.assertFalse(w.verify_ledger())
+
+    def test_anchor_ahead_of_ledger_still_tamper(self):
+        # Real tail truncation: ledger SHORTER than the anchor must always
+        # fail — the >=0 lag direction is never a legitimate crash.
+        w = _writer(self.tmpdir)
+        for i in range(5):
+            w.event(_entry(f"E{i}"))
+        anchor = json.loads(w.ledger_anchor_file.read_text(encoding="utf-8"))
+        anchor["entry_count"] = anchor["entry_count"] + 3
+        w.ledger_anchor_file.write_text(
+            json.dumps(anchor, indent=2), encoding="utf-8"
+        )
+        self.assertFalse(w.verify_ledger())
 
 
 if __name__ == "__main__":

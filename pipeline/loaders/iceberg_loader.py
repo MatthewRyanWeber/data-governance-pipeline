@@ -25,6 +25,8 @@ logger = logging.getLogger(__name__)
 class IcebergLoader(BaseLoader):
     """Apache Iceberg loader with append and overwrite modes."""
 
+    SUPPORTS_UPSERT = False  # append/overwrite only — no row-level merge here
+
     def __init__(self, gov: "GovernanceLogger", dry_run: bool = False) -> None:
         super().__init__(gov, dry_run=dry_run)
         if not HAS_ICEBERG:

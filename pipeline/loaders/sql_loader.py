@@ -11,10 +11,16 @@ Revision history
                    schema= to to_sql and quoted separately in upsert SQL)
                    instead of creating a literal "schema.table" table.
 1.3   2026-06-12   Loader contract: dry-run returns 0 (was None); keyless upsert raises via _require_upsert_keys (was silent append).
+1.4   2026-06-14   Upsert staging table name is now unique per run+thread (run id +
+                   uuid4) so parallel workers targeting the same destination no
+                   longer clobber each other's staging table; engine is cached per
+                   connection identity so streaming chunk loads reuse one pool.
 """
 
 import time
+import uuid
 import logging
+import threading
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -33,6 +39,51 @@ class SQLLoader(BaseLoader):
     def __init__(self, gov: "GovernanceLogger", db_type: str, dry_run: bool = False) -> None:
         super().__init__(gov, dry_run=dry_run)
         self.db_type = db_type
+        # load() runs once per streaming chunk; caching the engine here keeps the
+        # connection pool alive across chunks instead of rebuilding it each call.
+        self._engine_cache: dict = {}
+        self._engine_cache_lock = threading.Lock()
+
+    @staticmethod
+    def _cfg_identity(cfg) -> tuple:
+        """Stable, hashable key over the connection-defining cfg fields.
+
+        Engines differ only by where they connect, so two cfgs that resolve to
+        the same target share one pooled engine.  Credentials are part of the
+        identity but are never logged from here.
+        """
+        fields = (
+            "db_name", "database", "host", "port", "user", "password",
+            "driver", "encrypt", "trust_server_certificate",
+            "account", "warehouse", "role", "schema",
+        )
+        return tuple((f, cfg.get(f)) for f in fields)
+
+    def _engine_for(self, cfg):
+        """Return a cached engine for cfg's connection identity, building once.
+
+        Replaces _engine_scope's per-call create/dispose: in streaming mode that
+        rebuilt the whole pool every chunk.  Disposed via close().
+        """
+        key = self._cfg_identity(cfg)
+        with self._engine_cache_lock:
+            engine = self._engine_cache.get(key)
+            if engine is None:
+                engine = self._engine(cfg)
+                self._engine_cache[key] = engine
+            return engine
+
+    def close(self) -> None:
+        """Dispose every cached engine and its connection pool."""
+        with self._engine_cache_lock:
+            for engine in self._engine_cache.values():
+                try:
+                    engine.dispose()
+                except Exception as exc:
+                    # Disposal is best-effort cleanup; a failure here must not
+                    # mask the real work the loader already completed.
+                    logger.warning("Could not dispose engine: %s", exc)
+            self._engine_cache.clear()
 
     def _engine(self, cfg):
         from sqlalchemy import create_engine
@@ -103,12 +154,12 @@ class SQLLoader(BaseLoader):
         if self._dry_run_guard(table, len(df)):
             return 0
         self._require_upsert_keys(if_exists, natural_keys)
-        with self._engine_scope(cfg) as engine:
-            if natural_keys:
-                self._upsert(df, engine, table_name, natural_keys, schema)
-            else:
-                self._load_with_retry(df, engine, table_name, if_exists,
-                                      schema)
+        engine = self._engine_for(cfg)
+        if natural_keys:
+            self._upsert(df, engine, table_name, natural_keys, schema)
+        else:
+            self._load_with_retry(df, engine, table_name, if_exists,
+                                  schema)
         self.gov.load_complete(len(df), table)
         db_identifier = cfg.get("database") or cfg.get("db_name", "")
         self.gov.destination_registered(self.db_type, db_identifier, table)
@@ -138,7 +189,16 @@ class SQLLoader(BaseLoader):
             self._load_with_retry(new_df, engine, table, "replace", schema)
             return
 
-        staging = f"_upsert_staging_{table}"
+        # Unique per run + thread so two parallel workers upserting into the same
+        # destination table never share (and clobber) one staging table mid
+        # DELETE/INSERT.  Run id scopes the run; uuid4 disambiguates concurrent
+        # threads within it.  Keep only alphanumerics (and cap length) so an
+        # arbitrary pipeline_id value can never produce an identifier that
+        # validate_sql_identifier (or SQL) rejects.
+        run_context = getattr(self.gov, "run_context", None)
+        run_id = getattr(run_context, "pipeline_id", "") if run_context else ""
+        run_token = "".join(c for c in str(run_id) if c.isalnum())[:16] or uuid.uuid4().hex
+        staging = f"_upsert_staging_{table}_{run_token}_{uuid.uuid4().hex}"
         validate_sql_identifier(staging, "staging table")
 
         def q(name):
@@ -154,11 +214,12 @@ class SQLLoader(BaseLoader):
             for k in natural_keys
         )
 
-        with engine.begin() as conn:
-            new_df.to_sql(staging, conn, if_exists="replace", index=False,
-                          chunksize=500, schema=schema)
-
+        # Staging creation is inside the try so a mid-create failure still hits
+        # the finally and drops whatever partial table was left behind.
         try:
+            with engine.begin() as conn:
+                new_df.to_sql(staging, conn, if_exists="replace", index=False,
+                              chunksize=500, schema=schema)
             with engine.begin() as conn:
                 conn.execute(text(
                     f"DELETE FROM {qualified(table)} WHERE EXISTS "

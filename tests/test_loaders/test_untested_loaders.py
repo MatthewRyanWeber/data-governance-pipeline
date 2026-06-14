@@ -13,6 +13,9 @@ Revision history
                     imports inside load() don't raise ModuleNotFoundError.
 1.2   2026-06-11   Regression test: LanceDB upsert without natural_keys
                     raises instead of silently appending.
+1.3   2026-06-14   Regression test: Delta Lake first-upsert propagates a
+                    non-not-found error instead of falling back to append;
+                    genuine TableNotFoundError still falls back.
 """
 
 import sys
@@ -154,6 +157,37 @@ class TestDeltaLakeLoader(unittest.TestCase):
         loader = self._make()
         with self.assertRaises(ValueError):
             loader.load(_DF, {"path": "/tmp/d"}, table="t", if_exists="invalid")
+
+    def test_first_upsert_propagates_non_not_found_error(self):
+        # Bug fix: a transient catalog/permission/network error while opening
+        # the table must NOT be treated as "table missing" and degraded into a
+        # blind append (which would duplicate existing rows). It must propagate
+        # and the append path (write_deltalake) must never be called.
+        loader = self._make()
+        boom = RuntimeError("transient catalog outage")
+        with patch("deltalake.DeltaTable", side_effect=boom) as mock_dt, \
+                patch("deltalake.write_deltalake") as mock_write:
+            with self.assertRaises(RuntimeError):
+                loader.load(
+                    _DF, {"path": "/tmp/delta"}, table="t",
+                    if_exists="upsert", natural_keys=["id"],
+                )
+        mock_dt.assert_called_once()
+        mock_write.assert_not_called()
+
+    def test_first_upsert_table_not_found_falls_back_to_append(self):
+        # The genuine "no table yet" case still falls back to a plain write.
+        from deltalake.exceptions import TableNotFoundError
+        loader = self._make()
+        with patch("deltalake.DeltaTable",
+                   side_effect=TableNotFoundError("no table")), \
+                patch("deltalake.write_deltalake") as mock_write:
+            result = loader.load(
+                _DF, {"path": "/tmp/delta"}, table="t",
+                if_exists="upsert", natural_keys=["id"],
+            )
+        self.assertEqual(result, len(_DF))
+        mock_write.assert_called_once()
 
 
 # ── Iceberg ─────────────────────────────────────────────────────────────────

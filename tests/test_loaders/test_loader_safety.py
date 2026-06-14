@@ -15,6 +15,8 @@ pre-connection logic.
 Revision history
 ────────────────
 1.0   2026-06-09   Initial release: cross-loader safety contract.
+1.1   2026-06-14   Added natural_key injection contract: db2/bigquery/clickhouse
+                   upsert must reject a malicious natural_key before connecting.
 """
 
 import importlib
@@ -110,6 +112,55 @@ class TestDriverGatedConstruction(unittest.TestCase):
                 with patch.object(mod, has_flag, True):
                     loader = cls(MagicMock())
                 self.assertIsNotNone(loader)
+
+
+_BAD_KEY = 'id"); DROP TABLE x--'
+
+# Loaders whose upsert path interpolates natural_keys into SQL.  Each must
+# reject an injected key before any DB connection is opened.
+NATURAL_KEY_LOADERS = [
+    ("db2_loader",        "Db2Loader",        "HAS_DB2"),
+    ("bigquery_loader",   "BigQueryLoader",   "HAS_BIGQUERY"),
+    ("clickhouse_loader", "ClickHouseLoader", "HAS_CLICKHOUSE"),
+]
+
+
+class TestNaturalKeyInjectionRejected(unittest.TestCase):
+    def test_malicious_natural_key_raises_before_connecting(self):
+        # _upsert is the first place natural_keys is interpolated; patching the
+        # connection/client factories to explode proves validation runs first.
+        for module_name, class_name, has_flag in NATURAL_KEY_LOADERS:
+            with self.subTest(loader=class_name):
+                mod, cls = _get_class(module_name, class_name)
+                loader, _gov = _construct(mod, cls, has_flag)
+
+                def _boom(*_a, **_k):
+                    raise AssertionError(
+                        "connection opened before natural_key validation"
+                    )
+
+                # Any connection/staging entry point would raise AssertionError
+                # if reached; ValueError instead proves the key was rejected
+                # before a connection was attempted.
+                with patch.object(loader, "_client", _boom, create=True), \
+                        patch.object(loader, "_engine_scope", _boom, create=True), \
+                        patch.object(loader, "_conn_str", _boom, create=True):
+                    with self.assertRaises(ValueError):
+                        loader._upsert(_DF, {"project": "p", "dataset": "d"},
+                                       "valid_table", [_BAD_KEY])
+
+    def test_non_member_natural_key_raises(self):
+        # A syntactically valid key that is not a df column must also raise.
+        for module_name, class_name, has_flag in NATURAL_KEY_LOADERS:
+            with self.subTest(loader=class_name):
+                mod, cls = _get_class(module_name, class_name)
+                loader, _gov = _construct(mod, cls, has_flag)
+                with patch.object(loader, "_client", MagicMock(), create=True), \
+                        patch.object(loader, "_engine_scope", MagicMock(), create=True), \
+                        patch.object(loader, "_conn_str", MagicMock(), create=True):
+                    with self.assertRaises(ValueError):
+                        loader._upsert(_DF, {"project": "p", "dataset": "d"},
+                                       "valid_table", ["not_a_column"])
 
 
 if __name__ == "__main__":

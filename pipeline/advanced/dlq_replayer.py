@@ -6,6 +6,10 @@ Layer 5 — imports from Layer 0-4.
 Revision history
 ────────────────
 1.0   2026-06-07   Initial release: replay, replay_all, archive on success.
+1.1   2026-06-14   Never archive a DLQ file when no loader was supplied: with no
+                   loader nothing is re-loaded, so archiving orphaned the
+                   rejected rows. replay/replay_all now leave the file in place
+                   and report rows as inspected-only, not replayed.
 """
 
 import logging
@@ -82,7 +86,9 @@ class DLQReplayer:
         3. Optionally re-transform via ``transformer.transform(df)``.
         4. Optionally re-load via ``loader.load(df, cfg, table)``.
         5. Log a governance event.
-        6. Archive the file with a ``.replayed`` suffix.
+        6. Archive the file with a ``.replayed`` suffix — ONLY when a successful
+           re-load happened. With no loader (or in dry-run) nothing was loaded,
+           so the file is left in place and 0 is returned.
 
         Parameters
         ----------
@@ -94,7 +100,8 @@ class DLQReplayer:
 
         Returns
         -------
-        int  Number of rows replayed.
+        int  Number of rows actually re-loaded (0 when no loader was supplied
+             or in dry-run mode — nothing was re-loaded, so nothing is claimed).
         """
         dlq_file = Path(dlq_file)
         if not dlq_file.exists():
@@ -143,21 +150,35 @@ class DLQReplayer:
                     self.gov.error(f"DLQ replay load failed: {dlq_file.name}", exc)
                     raise
 
+        # Without a loader nothing was re-loaded, so the rejected rows are NOT
+        # back in the destination — archiving here would orphan them forever.
+        # Leave the file in place so a real replay (with a loader) can run later.
+        re_loaded = loader is not None and not self.dry_run
+
         # Governance event
         self.gov.transformation_applied("DLQ_REPLAY", {
             "dlq_file": str(dlq_file),
-            "rows_replayed": len(df),
+            "rows_replayed": len(df) if re_loaded else 0,
+            "rows_inspected": len(df),
             "rows_original": original_count,
             "meta_columns_stripped": meta_present,
             "re_transformed": transformer is not None,
-            "re_loaded": loader is not None,
+            "re_loaded": re_loaded,
             "dry_run": self.dry_run,
         })
 
-        # Archive
-        if not self.dry_run:
-            self._archive(dlq_file)
+        if not re_loaded:
+            if loader is None:
+                logger.warning(
+                    "DLQ file %s was read (%d rows) but NO loader was supplied — "
+                    "rows were NOT re-loaded. Leaving the file in place for a "
+                    "real replay; pass a loader to actually re-load and archive.",
+                    dlq_file.name, len(df),
+                )
+            return 0
 
+        # Archive only after a successful re-load so the rows are recoverable.
+        self._archive(dlq_file)
         return len(df)
 
     # ── Bulk replay ──────────────────────────────────────────────────────
@@ -173,11 +194,20 @@ class DLQReplayer:
         Replay every un-replayed DLQ file in the dlq_dir.
 
         Returns a summary dict with files_replayed, total_rows, and any errors.
+        Without a loader nothing is re-loaded or archived: files_replayed and
+        total_rows are 0 and the files are left in place for a real replay.
         """
         files = self.list_dlq_files()
         if not files:
             logger.info("No DLQ files found in %s.", self.dlq_dir)
             return {"files_replayed": 0, "total_rows": 0, "errors": []}
+
+        if loader is None and not self.dry_run:
+            logger.warning(
+                "replay_all called with NO loader — %d DLQ file(s) will be "
+                "inspected but NOT re-loaded or archived. Pass a loader to "
+                "actually replay rejected rows.", len(files),
+            )
 
         total_rows = 0
         errors: list[dict] = []
@@ -190,7 +220,9 @@ class DLQReplayer:
                     loader=loader, cfg=cfg, table=table,
                 )
                 total_rows += rows
-                replayed += 1
+                # Count a file as replayed only when rows were actually re-loaded.
+                if rows > 0:
+                    replayed += 1
             except Exception as exc:
                 logger.error("Failed to replay %s: %s", dlq_file.name, exc)
                 errors.append({"file": str(dlq_file), "error": str(exc)})
@@ -201,7 +233,7 @@ class DLQReplayer:
             "errors": errors,
         }
         logger.info(
-            "DLQ replay complete: %d file(s), %d rows, %d error(s).",
+            "DLQ replay complete: %d file(s) re-loaded, %d rows, %d error(s).",
             replayed, total_rows, len(errors),
         )
         return summary

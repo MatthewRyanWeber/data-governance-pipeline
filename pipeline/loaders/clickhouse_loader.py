@@ -10,6 +10,9 @@ Revision history
                    run against a pre-existing table whose engine is not
                    ReplacingMergeTree (plain MergeTree would duplicate rows).
 1.2   2026-06-12   Loader contract: dry-run returns 0 (was None); keyless upsert raises via _require_upsert_keys (was silent append).
+1.3   2026-06-14   Upsert validates each natural_key via the shared identifier
+                   validator and confirms membership in df.columns before the
+                   keys are interpolated into the ORDER BY clause.
 """
 
 import time
@@ -115,6 +118,18 @@ class ClickHouseLoader(BaseLoader):
         client.command(create_sql)
 
     def _upsert(self, df, cfg, table, natural_keys):
+        # natural_keys is caller-supplied and interpolated into the ORDER BY
+        # clause, so validate it like every other identifier and require each
+        # key to be one of the (already validated) df columns.
+        df_columns = set(df.columns)
+        for key in natural_keys:
+            validate_sql_identifier(key, "natural_key")
+            if key not in df_columns:
+                raise ValueError(
+                    f"ClickHouseLoader: natural_key '{key}' is not a column in "
+                    "the DataFrame being loaded."
+                )
+
         client = self._client(cfg)
         database = cfg.get("database", "default")
         # Dedup-on-merge only works on ReplacingMergeTree; inserting into a

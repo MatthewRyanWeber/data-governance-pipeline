@@ -964,6 +964,31 @@ class TestClarityExtractorNoDB(_TmpMixin):
         # Should not raise
         cx._check_refresh_window()
 
+    def test_malicious_schema_rejected(self):
+        """A schema with SQL metacharacters raises ValueError in __init__."""
+        from pipeline.extensions.epic_extensions import ClarityExtractor
+
+        for bad_schema in ('dbo; DROP TABLE PAT_ENC--', 'a"b', '1schema', ''):
+            with self.subTest(schema=bad_schema):
+                with self.assertRaises(ValueError):
+                    ClarityExtractor(
+                        self.gov,
+                        cfg={"host": "x", "db_name": "y",
+                             "user": "u", "password": "p"},
+                        schema=bad_schema,
+                    )
+
+    def test_valid_schema_accepted(self):
+        """A bare-identifier schema constructs without error."""
+        from pipeline.extensions.epic_extensions import ClarityExtractor
+
+        cx = ClarityExtractor(
+            self.gov,
+            cfg={"host": "x", "db_name": "y", "user": "u", "password": "p"},
+            schema="clarity_dbo",
+        )
+        self.assertEqual(cx.schema, "clarity_dbo")
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 

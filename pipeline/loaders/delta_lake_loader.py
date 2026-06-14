@@ -13,6 +13,10 @@ Revision history
                    as SQL identifiers before interpolation into the merge
                    predicate.
 1.3   2026-06-12   Keyless upsert raises via _require_upsert_keys instead of silently appending (loader contract).
+1.4   2026-06-14   First-upsert fallback to append now only triggers on a genuine
+                   TableNotFoundError; transient catalog/permission/network
+                   errors propagate instead of degrading a MERGE into a blind
+                   append that duplicates existing rows.
 """
 
 import logging
@@ -42,6 +46,7 @@ class DeltaLakeLoader(BaseLoader):
              natural_keys=None) -> int:
         """Write df to a Delta Lake table."""
         import deltalake
+        from deltalake.exceptions import TableNotFoundError
         import pyarrow as pa
 
         if if_exists not in ("append", "replace", "upsert"):
@@ -78,9 +83,11 @@ class DeltaLakeLoader(BaseLoader):
             )
             try:
                 dt = deltalake.DeltaTable(path, storage_options=storage_opts)
-            except Exception as exc:
-                # First upsert into a brand-new destination: there is no
-                # table to merge into yet, so the write itself is the upsert.
+            except TableNotFoundError as exc:
+                # Only a genuinely-absent table justifies falling back to a
+                # plain write. Transient catalog/permission/network errors must
+                # propagate — silently appending here would duplicate every
+                # existing row that the MERGE was meant to update in place.
                 logger.warning(
                     "DeltaLakeLoader: no Delta table at %s yet (%s) — "
                     "writing initial data instead of merging.", path, exc,

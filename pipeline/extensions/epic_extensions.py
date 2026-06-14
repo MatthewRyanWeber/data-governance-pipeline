@@ -34,6 +34,9 @@ and healthcare-specific requirements (HIPAA, IRB, OMOP research standards):
 Revision history
 ────────────────
 1.0   2026-03-11   Initial release: all six Epic / HIPAA governance classes.
+1.1   2026-06-14   ClarityExtractor validates the `schema` constructor arg as a
+                   SQL identifier; it is interpolated into FROM clauses, so an
+                   unvalidated value was a SQL-identifier injection vector.
 """
 from __future__ import annotations
 
@@ -624,6 +627,17 @@ class ClarityExtractor:
             raise ImportError(
                 "ClarityExtractor requires sqlalchemy and pyodbc.\n"
                 "Install with: pip install sqlalchemy pyodbc"
+            )
+        # `schema` is interpolated directly into FROM clauses (e.g.
+        # FROM {self.schema}.PAT_ENC), so it must be a bare SQL identifier.
+        # A local regex mirrors the shared loaders.base validator rather than
+        # importing it, since this extensions module sits above the loaders
+        # layer and must not take a dependency on it.
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", schema or ""):
+            raise ValueError(
+                f"ClarityExtractor: schema '{schema}' is not a valid SQL "
+                "identifier (letters, digits, underscores; must not start "
+                "with a digit)."
             )
         self.gov                   = gov
         self.cfg                   = cfg

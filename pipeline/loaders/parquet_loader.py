@@ -10,9 +10,17 @@ Revision history
 1.1   2026-06-07   Added Layer 4 docstring convention.
 1.2   2026-06-11   append to an existing single file now reads, concatenates,
                    and rewrites it instead of silently overwriting.
+1.3   2026-06-14   single-file append is now crash-safe: write to a sibling
+                   temp file then os.replace (atomic), and serialise concurrent
+                   writers to the same path with a per-path lock so --parallel
+                   workers cannot lose an update.
 """
 
 import logging
+import os
+import threading
+import uuid
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from pipeline.loaders.base import BaseLoader
@@ -22,9 +30,27 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Per-path locks serialise the read-concat-write of a single Parquet file so
+# two --parallel workers targeting the same path cannot clobber each other's
+# update. Keyed by output path; guarded by _LOCKS_GUARD for safe creation.
+_PATH_LOCKS: dict[str, threading.Lock] = {}
+_LOCKS_GUARD = threading.Lock()
+
+
+def _lock_for_path(path: str) -> threading.Lock:
+    """Return the shared lock for a given output path, creating it once."""
+    with _LOCKS_GUARD:
+        lock = _PATH_LOCKS.get(path)
+        if lock is None:
+            lock = threading.Lock()
+            _PATH_LOCKS[path] = lock
+        return lock
+
 
 class ParquetLoader(BaseLoader):
     """Write DataFrames to Parquet files with optional partitioning."""
+
+    SUPPORTS_UPSERT = False  # append-only file format, no idempotent merge
 
     def __init__(self, gov: "GovernanceLogger", dry_run: bool = False) -> None:
         super().__init__(gov, dry_run=dry_run)
@@ -69,6 +95,8 @@ class ParquetLoader(BaseLoader):
         arrow_table = pa.Table.from_pandas(df, preserve_index=False)
 
         if partition_cols:
+            # partition_cols is the O(1) streaming path for large loads — each
+            # write only adds new fragments, never re-reading prior data.
             pq.write_to_dataset(
                 arrow_table,
                 root_path=path,
@@ -80,25 +108,25 @@ class ParquetLoader(BaseLoader):
             )
         else:
             filesystem = self._filesystem(path, storage_opts)
-            if if_exists == "append" and self._target_exists(path, filesystem):
-                # A single Parquet file cannot be appended to in place:
-                # read + concat + rewrite, otherwise append silently
-                # overwrites the existing data.
-                existing_table = pq.read_table(path, filesystem=filesystem)
-                arrow_table = pa.concat_tables(
-                    [existing_table, arrow_table], promote_options="default"
+            # Serialise same-path writers: the read-concat-write below is a
+            # lost-update race under --parallel without this guard.
+            with _lock_for_path(path):
+                if if_exists == "append" and self._target_exists(path, filesystem):
+                    # A single Parquet file cannot be appended to in place:
+                    # read + concat + rewrite, otherwise append silently
+                    # overwrites the existing data.
+                    existing_table = pq.read_table(path, filesystem=filesystem)
+                    arrow_table = pa.concat_tables(
+                        [existing_table, arrow_table], promote_options="default"
+                    )
+                    logger.info(
+                        "[PARQUET] append: rewriting %s with %d existing + %d "
+                        "new rows.", path, existing_table.num_rows, len(df),
+                    )
+                self._write_table_atomic(
+                    pq, arrow_table, path, compression,
+                    row_group_size, filesystem,
                 )
-                logger.info(
-                    "[PARQUET] append: rewriting %s with %d existing + %d "
-                    "new rows.", path, existing_table.num_rows, len(df),
-                )
-            pq.write_table(
-                arrow_table,
-                path,
-                compression=compression,
-                row_group_size=row_group_size,
-                filesystem=filesystem,
-            )
 
         self.gov._event(
             "LOAD", "PARQUET_WRITE_COMPLETE",
@@ -113,12 +141,69 @@ class ParquetLoader(BaseLoader):
         return len(df)
 
     @staticmethod
+    def _write_table_atomic(pq, arrow_table, path, compression,
+                            row_group_size, filesystem) -> None:
+        """Write the table to a sibling temp file, then atomically replace path.
+
+        A crash during pq.write_table directly over `path` would truncate the
+        whole accumulated file and lose every previously-loaded row. Writing a
+        temp sibling first and then moving it means `path` is never in a
+        partially-written state.
+        """
+        unique = uuid.uuid4().hex
+        tmp_path = f"{path}.tmp-{unique}"
+        try:
+            pq.write_table(
+                arrow_table,
+                tmp_path,
+                compression=compression,
+                row_group_size=row_group_size,
+                filesystem=filesystem,
+            )
+            if filesystem is None:
+                # Local disk: os.replace is atomic and overwrites on the same
+                # filesystem, the closure for the data-loss bug.
+                os.replace(tmp_path, path)
+            elif hasattr(filesystem, "mv"):
+                # Remote filesystem (s3fs/gcsfs/adlfs): no POSIX rename, but
+                # object stores treat a single-key move as atomic at the key
+                # level, which is the strongest guarantee available here.
+                filesystem.mv(tmp_path, path)
+            else:
+                # No move primitive available — fall back to a direct write so
+                # the load still completes rather than silently dropping data.
+                logger.warning(
+                    "[PARQUET] filesystem %s has no mv(); writing %s directly "
+                    "(non-atomic).", type(filesystem).__name__, path,
+                )
+                pq.write_table(
+                    arrow_table, path, compression=compression,
+                    row_group_size=row_group_size, filesystem=filesystem,
+                )
+        except BaseException:
+            ParquetLoader._remove_temp(tmp_path, filesystem)
+            raise
+
+    @staticmethod
+    def _remove_temp(tmp_path: str, filesystem) -> None:
+        """Best-effort removal of a leftover temp file after a failed write."""
+        try:
+            if filesystem is not None:
+                if filesystem.exists(tmp_path):
+                    filesystem.rm(tmp_path)
+            elif Path(tmp_path).exists():
+                Path(tmp_path).unlink()
+        except OSError as exc:
+            logger.warning(
+                "[PARQUET] could not remove temp file %s: %s", tmp_path, exc,
+            )
+
+    @staticmethod
     def _target_exists(path: str, filesystem) -> bool:
         """Check target existence on local disk or the remote filesystem."""
         if filesystem is not None:
             return bool(filesystem.exists(path))
-        import pathlib
-        return pathlib.Path(path).exists()
+        return Path(path).exists()
 
     @staticmethod
     def _filesystem(path: str, storage_options: dict):

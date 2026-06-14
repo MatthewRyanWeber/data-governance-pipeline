@@ -21,6 +21,9 @@ Revision history
 1.6   2026-06-11   Added backtick to _BAD_CHARS_RE so column names cannot break
                    out of backtick-quoted DDL (BigQuery, Databricks, ClickHouse).
 1.7   2026-06-12   Added _require_upsert_keys shared guard; dry-run docstring examples return 0.
+1.8   2026-06-14   _require_upsert_keys now validates every natural_key (closes
+                   the identifier-injection gap across all upsert loaders);
+                   SUPPORTS_UPSERT capability flag for the CLI fail-fast.
 """
 
 import contextlib
@@ -116,6 +119,11 @@ class BaseLoader:
         if self._dry_run_guard(table, len(df)): return 0
     """
 
+    # Whether the loader has an idempotent upsert path. Append-only
+    # destinations (file/object/stream) override this to False so the CLI can
+    # refuse a natural_keys config up front instead of crashing mid-load.
+    SUPPORTS_UPSERT = True
+
     def __init__(self, gov: "GovernanceLogger", dry_run: bool = False) -> None:
         self.gov = gov
         self.dry_run = dry_run
@@ -158,6 +166,11 @@ class BaseLoader:
                 f"natural_keys — without them the load would silently "
                 f"append duplicates."
             )
+        # Every upsert loader interpolates natural_keys into MERGE/ON/SET SQL,
+        # but the table/column guards don't cover them — validate each here so
+        # one unchecked key can't become an injection vector in any loader.
+        for key in (natural_keys or []):
+            validate_sql_identifier(key, "natural_key")
 
     def _dry_run_guard(self, table: str, row_count: int) -> bool:
         """

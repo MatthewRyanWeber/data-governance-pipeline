@@ -2168,7 +2168,11 @@ class TestNewDestinationLoaders(unittest.TestCase):
 
     def test_parquet_table_param_used_as_filename(self):
         loader = ParquetLoader(self.gov)
-        with patch("pyarrow.parquet.write_table") as mock_write:
+        # write_table is mocked, so the atomic temp file is never created;
+        # stub os.replace too so the temp→final move is a no-op. The target
+        # path still derives from the table name, which is what we assert.
+        with patch("pyarrow.parquet.write_table") as mock_write, \
+             patch("os.replace"):
             loader.load(self._df(), {}, table="employees")
         mock_write.assert_called_once()
         call_args = mock_write.call_args[0]

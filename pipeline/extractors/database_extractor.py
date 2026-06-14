@@ -10,6 +10,10 @@ Layer 3 — imports from Layer 1 (governance_logger), Layer 0 (constants).
 Revision history
 ────────────────
 1.0   2026-06-08   Initial release.
+1.1   2026-06-14   chunks() streams a single ordered server-side cursor
+                   instead of LIMIT/OFFSET: fixes O(n²) offset re-scans and,
+                   critically, the unordered pagination that let a crash +
+                   position-based resume drop and duplicate rows.
 """
 
 import logging
@@ -161,8 +165,15 @@ class DatabaseExtractor:
         """
         Yield DataFrames in chunks for memory-efficient extraction.
 
-        Uses LIMIT/OFFSET pagination internally. For large tables, prefer
-        a query with an ORDER BY on an indexed column.
+        Streams the result set through a single server-side cursor in a
+        deterministic order. The previous implementation paginated with
+        ``LIMIT/OFFSET`` and no ``ORDER BY``; that was wrong on two counts:
+        OFFSET re-scans and discards the skipped rows every chunk (O(n²) on
+        large tables), and — worse — SQL gives no row-order guarantee across
+        separate queries, so a crash + resume (which skips already-loaded
+        chunks BY POSITION in cli.py) could silently drop some rows and
+        duplicate others. A stable ORDER BY makes chunk boundaries identical
+        across runs, so position-based resume is exactly-once.
         """
         import pandas as pd
         from sqlalchemy import text
@@ -179,38 +190,95 @@ class DatabaseExtractor:
         })
 
         try:
+            order_clause, is_ordered = self._resolve_order_clause(
+                cfg, engine, query, table, schema
+            )
+            if not is_ordered:
+                logger.warning(
+                    "[DATABASE_EXTRACT] '%s' is being chunked without a stable "
+                    "ORDER BY; chunk boundaries are not guaranteed identical "
+                    "across runs, so a crash + resume may DROP or DUPLICATE "
+                    "rows. Set cfg['order_by'] to a unique indexed column.",
+                    source_label,
+                )
+
             if query:
-                base_sql = query
+                sql = query
             else:
                 safe_table = self._validate_identifier(table)  # type: ignore[arg-type]
                 schema_prefix = f"{self._validate_identifier(schema)}." if schema else ""  # type: ignore[arg-type]
-                base_sql = f"SELECT * FROM {schema_prefix}{safe_table}"
+                sql = f"SELECT * FROM {schema_prefix}{safe_table}{order_clause}"
 
-            offset = 0
             chunk_index = 0
-
-            while True:
-                paginated = f"{base_sql} LIMIT {chunk_size} OFFSET {offset}"
-                chunk = pd.read_sql(text(paginated), engine)
-
-                if chunk.empty:
-                    break
-
-                self.gov.extract_event("DATABASE_CHUNK_EXTRACTED", {
-                    "chunk_index": chunk_index,
-                    "rows": len(chunk),
-                    "offset": offset,
-                })
-                logger.info(
-                    "[DATABASE_EXTRACT] Chunk %d: %d rows (offset %d)",
-                    chunk_index, len(chunk), offset,
-                )
-                yield chunk
-
-                if len(chunk) < chunk_size:
-                    break
-
-                offset += chunk_size
-                chunk_index += 1
+            # stream_results pushes a server-side cursor where the driver
+            # supports it (psycopg2, mysqlclient, …); a no-op but still
+            # correct elsewhere. read_sql(chunksize=) iterates that cursor
+            # without ever materialising the whole table.
+            with engine.connect().execution_options(stream_results=True) as conn:
+                for chunk in pd.read_sql(text(sql), conn, chunksize=chunk_size):
+                    if chunk.empty:
+                        continue
+                    self.gov.extract_event("DATABASE_CHUNK_EXTRACTED", {
+                        "chunk_index": chunk_index,
+                        "rows": len(chunk),
+                    })
+                    logger.info(
+                        "[DATABASE_EXTRACT] Chunk %d: %d rows",
+                        chunk_index, len(chunk),
+                    )
+                    yield chunk
+                    chunk_index += 1
         finally:
             engine.dispose()
+
+    def _resolve_order_clause(
+        self, cfg: dict, engine, query: str | None,
+        table: str | None, schema: str | None,
+    ) -> tuple[str, bool]:
+        """Return (order_by_clause, is_ordered) for stable chunked resume.
+
+        Prefer an explicit cfg['order_by']; else the table's primary key;
+        else order by every column (deterministic but slower) so resume is
+        still safe. For a raw query, detect an existing ORDER BY textually —
+        we cannot safely inject one into arbitrary SQL.
+        """
+        import re
+
+        order_by = cfg.get("order_by")
+        if order_by:
+            cols = [order_by] if isinstance(order_by, str) else list(order_by)
+            clause = ", ".join(self._validate_identifier(c) for c in cols)
+            return f" ORDER BY {clause}", True
+
+        if query:
+            return "", bool(re.search(r"\border\s+by\b", query, re.IGNORECASE))
+
+        from sqlalchemy import inspect as sa_inspect
+        try:
+            inspector = sa_inspect(engine)
+            pk_cols = (
+                inspector.get_pk_constraint(table, schema=schema)
+                .get("constrained_columns") or []
+            )
+            if pk_cols:
+                clause = ", ".join(self._validate_identifier(c) for c in pk_cols)
+                return f" ORDER BY {clause}", True
+
+            all_cols = [c["name"] for c in inspector.get_columns(table, schema=schema)]
+        except Exception as exc:
+            logger.warning(
+                "[DATABASE_EXTRACT] could not introspect %r for ordering: %s",
+                table, exc,
+            )
+            return "", False
+
+        if all_cols:
+            logger.warning(
+                "[DATABASE_EXTRACT] table %r has no primary key; ordering by "
+                "all columns for stable resume — set cfg['order_by'] to a "
+                "unique indexed column for performance.", table,
+            )
+            clause = ", ".join(self._validate_identifier(c) for c in all_cols)
+            return f" ORDER BY {clause}", True
+
+        return "", False
