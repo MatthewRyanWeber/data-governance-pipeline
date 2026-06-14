@@ -46,7 +46,6 @@ class DeltaLakeLoader(BaseLoader):
              natural_keys=None) -> int:
         """Write df to a Delta Lake table."""
         import deltalake
-        from deltalake.exceptions import TableNotFoundError
         import pyarrow as pa
 
         if if_exists not in ("append", "replace", "upsert"):
@@ -81,6 +80,10 @@ class DeltaLakeLoader(BaseLoader):
             predicate = " AND ".join(
                 f"t.{k} = s.{k}" for k in natural_keys
             )
+            # Imported here, not at load() top: only the upsert path needs it,
+            # and the dry-run/empty/bad-config paths must not touch deltalake's
+            # submodules (they run with deltalake mocked out in CI).
+            from deltalake.exceptions import TableNotFoundError
             try:
                 dt = deltalake.DeltaTable(path, storage_options=storage_opts)
             except TableNotFoundError as exc:
