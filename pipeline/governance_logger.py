@@ -20,6 +20,12 @@ Revision history
                    af-south-1 region mapping (dead "a" prefix never matched).
 4.4   2026-06-12   Report-path layout extracted to pipeline.run_artifacts
                    (RunArtifacts dataclass); attributes kept as aliases.
+4.5   2026-06-14   Durable hash-chained ledger extracted to
+                   pipeline.ledger_writer.LedgerWriter and the in-memory
+                   aggregation to pipeline.audit_buffers.AuditBuffers.
+                   GovernanceLogger is now a thin facade (event vocabulary +
+                   delegation); the public attribute/method surface is kept
+                   via delegating properties so call sites are unchanged.
 """
 
 import getpass
@@ -27,18 +33,18 @@ import hashlib
 import json
 import logging
 import platform
-import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from pipeline.audit_buffers import AuditBuffers
 from pipeline.constants import default_run_context, EventCategory, RunContext
-from pipeline.helpers import atomic_json_write, file_hash
+from pipeline.helpers import file_hash
+from pipeline.ledger_writer import LedgerWriter
 from pipeline.run_artifacts import RunArtifacts
 
 if TYPE_CHECKING:
-    from pipeline.append_only_writer import AppendOnlyWriter
     from pipeline.reporting.report_writer import ReportWriter
 
 logger = logging.getLogger(__name__)
@@ -149,24 +155,69 @@ class GovernanceLogger:
 
         self.logger = logging.getLogger("DataPipeline")
 
-        self.pii_findings: list[dict] = []
-        self.ledger_entries: list[dict] = []
-        self.validation_results: list[dict] = []
-        self.classification_tags: list[dict] = []
-        self.transfer_events: list[dict] = []
-        self.dlq_rows_total: int = 0
-        self._prev_hash: str = "GENESIS"
-        self._written_event_count: int = 0
-        self._event_lock = threading.RLock()
-        self._verify_integrity = verify_integrity
-        self._writer: "AppendOnlyWriter | None" = None
+        # Collaborators: the durable hash-chained ledger and the in-memory
+        # aggregation buffers.  GovernanceLogger is now a thin facade over
+        # these plus RunArtifacts and ReportWriter — the public attributes
+        # below are kept as delegating properties for back-compat.
+        self._ledger = LedgerWriter(
+            self.artifacts,
+            dry_run=dry_run,
+            verify_integrity=verify_integrity,
+            logger=self.logger,
+        )
+        self._buffers = AuditBuffers()
 
-    # ── Core event writer with chained hash ──────────────────────────────
-    # Performance: each _event() call serialises JSON + computes SHA-256 +
-    # writes to disk.  For high-volume pipelines (>100k chunks), consider
-    # buffering events in self.ledger_entries and flushing once per
-    # checkpoint interval instead of per-event.  Current design prioritises
-    # durability (no events lost on crash) over throughput.
+    # ── Back-compat delegating properties ────────────────────────────────
+    # GovernanceLogger used to own the ledger machinery and aggregation
+    # buffers directly; those moved to LedgerWriter / AuditBuffers.  These
+    # properties keep the ~100 existing call sites (and the test suite)
+    # working unchanged against the old attribute names.
+
+    @property
+    def ledger_entries(self) -> list[dict]:
+        return self._ledger.entries
+
+    @property
+    def pii_findings(self) -> list[dict]:
+        return self._buffers.pii_findings
+
+    @property
+    def validation_results(self) -> list[dict]:
+        return self._buffers.validation_results
+
+    @property
+    def classification_tags(self) -> list[dict]:
+        return self._buffers.classification_tags
+
+    @property
+    def transfer_events(self) -> list[dict]:
+        return self._buffers.transfer_events
+
+    @property
+    def dlq_rows_total(self) -> int:
+        return self._buffers.dlq_rows_total
+
+    @dlq_rows_total.setter
+    def dlq_rows_total(self, value: int) -> None:
+        self._buffers.dlq_rows_total = value
+
+    @property
+    def _prev_hash(self) -> str:
+        return self._ledger._prev_hash
+
+    @property
+    def _writer(self):
+        return self._ledger._writer
+
+    @property
+    def _verify_integrity(self) -> bool:
+        return self._ledger._verify_integrity
+
+    @property
+    def _event_lock(self):
+        return self._ledger._event_lock
+
+    # ── Core event writer ────────────────────────────────────────────────
 
     def _event(
         self,
@@ -175,7 +226,12 @@ class GovernanceLogger:
         detail: dict | None = None,
         level: str = "INFO",
     ) -> None:
-        """Write a structured audit event to the JSONL ledger with chained hash."""
+        """Build a structured audit event and hand it to the ledger.
+
+        The durable hash-chained write lives in LedgerWriter; this method
+        owns only the event vocabulary (the standard envelope fields) and
+        the human-readable log line.
+        """
         base_entry = {
             "pipeline_id": self.run_context.pipeline_id,
             "event_id": str(uuid.uuid4()),
@@ -186,145 +242,16 @@ class GovernanceLogger:
             "action": action,
             "detail": detail or {},
         }
-
-        with self._event_lock:
-            base_entry["prev_hash"] = self._prev_hash
-            raw_json = json.dumps(base_entry, sort_keys=True)
-            event_hash = hashlib.sha256(raw_json.encode()).hexdigest()
-            base_entry["self_hash"] = event_hash
-            final_json = json.dumps(base_entry, sort_keys=True)
-
-            if not self.dry_run:
-                if self._writer is None:
-                    from pipeline.append_only_writer import AppendOnlyWriter
-                    self._writer = AppendOnlyWriter(
-                        self.ledger_file,
-                        verify_integrity=self._verify_integrity,
-                    )
-                    self._writer.open()
-                self._writer.write(final_json + "\n")
-                self._written_event_count += 1
-                self._write_anchor(event_hash)
-
-            # Advance the chain only after the write lands: if the write
-            # raises, the next event reuses this prev_hash and the on-disk
-            # chain stays contiguous instead of permanently broken.
-            self._prev_hash = event_hash
-            self.ledger_entries.append(base_entry)
+        self._ledger.event(base_entry)
 
         msg = f"[{category}] {action}"
         if detail:
             msg += f" | {json.dumps(detail)}"
         getattr(self.logger, level.lower(), self.logger.info)(msg)
 
-    def _write_anchor(self, last_hash: str) -> None:
-        """Persist the chain anchor atomically alongside the ledger.
-
-        The chained hashes alone cannot prove the ledger's *tail* exists:
-        truncating the last N lines (or deleting the file) leaves a chain
-        that still verifies. The anchor pins the expected final hash and
-        entry count outside the ledger file itself.
-        """
-        anchor = {
-            "last_hash": last_hash,
-            "entry_count": self._written_event_count,
-            "ledger_file": self.ledger_file.name,
-        }
-        atomic_json_write(self.ledger_anchor_file, json.dumps(anchor, indent=2))
-
-    def _read_anchor(self) -> dict | None:
-        """Load the anchor sidecar. Returns None when no anchor exists."""
-        if not self.ledger_anchor_file.exists():
-            return None
-        try:
-            anchor = json.loads(
-                self.ledger_anchor_file.read_text(encoding="utf-8")
-            )
-        except (json.JSONDecodeError, OSError) as exc:
-            # An unreadable anchor is itself a tamper signal — never treat
-            # it as "no anchor", which would let truncation pass unnoticed.
-            self.logger.error("[TAMPER CHECK] Anchor file unreadable: %s", exc)
-            return {"last_hash": "UNREADABLE", "entry_count": -1}
-        if not isinstance(anchor, dict):
-            self.logger.error("[TAMPER CHECK] Anchor file malformed (not a dict)")
-            return {"last_hash": "UNREADABLE", "entry_count": -1}
-        return anchor
-
     def verify_ledger(self) -> bool:
-        """
-        Walk the JSONL ledger and verify the chained-hash integrity,
-        then check the tail against the persisted anchor.
-
-        Returns True if the entire ledger is intact; False if tampering detected.
-        """
-        anchor = self._read_anchor()
-
-        if not self.ledger_file.exists():
-            if anchor is not None:
-                self.logger.error(
-                    "[TAMPER DETECTED] Ledger file is missing but anchor "
-                    "records %s written events.", anchor.get("entry_count"),
-                )
-                return False
-            return True
-
-        with open(self.ledger_file, encoding="utf-8") as f:
-            lines = [line.strip() for line in f if line.strip()]
-
-        if not lines:
-            if anchor is not None:
-                self.logger.error(
-                    "[TAMPER DETECTED] Ledger file is empty but anchor "
-                    "records %s written events.", anchor.get("entry_count"),
-                )
-                return False
-            return True
-
-        prev_hash = "GENESIS"
-        for i, line in enumerate(lines):
-            event = json.loads(line)
-            stored_prev = event.get("prev_hash", "")
-            if stored_prev != prev_hash:
-                self.logger.error(
-                    "[TAMPER DETECTED] Event #%s (id=%s) "
-                    "expected prev_hash=%r but found %r",
-                    i + 1, event.get("event_id"), prev_hash, stored_prev,
-                )
-                return False
-
-            entry_for_hash = {k: v for k, v in event.items() if k != "self_hash"}
-            computed_hash = hashlib.sha256(
-                json.dumps(entry_for_hash, sort_keys=True).encode()
-            ).hexdigest()
-            stored_self = event.get("self_hash")
-            if stored_self and stored_self != computed_hash:
-                self.logger.error(
-                    "[TAMPER DETECTED] Event #%s (id=%s) "
-                    "self_hash mismatch — event content has been altered",
-                    i + 1, event.get("event_id"),
-                )
-                return False
-            prev_hash = computed_hash
-
-        if anchor is not None:
-            if anchor.get("entry_count") != len(lines):
-                self.logger.error(
-                    "[TAMPER DETECTED] Ledger has %s events but anchor "
-                    "records %s — tail truncation suspected.",
-                    len(lines), anchor.get("entry_count"),
-                )
-                return False
-            if anchor.get("last_hash") != prev_hash:
-                self.logger.error(
-                    "[TAMPER DETECTED] Final ledger hash %r does not match "
-                    "anchored hash %r.", prev_hash, anchor.get("last_hash"),
-                )
-                return False
-
-        self.logger.info(
-            "[TAMPER CHECK] Ledger integrity verified — %s events OK.", len(lines)
-        )
-        return True
+        """Verify the chained-hash ledger and its anchor (delegates)."""
+        return self._ledger.verify_ledger()
 
     # ── Lifecycle events ─────────────────────────────────────────────────
 

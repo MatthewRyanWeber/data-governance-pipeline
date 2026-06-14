@@ -41,7 +41,8 @@ explicit.
                             referential_integrity, incremental_filter,
                             secrets_manager
 
- Layer 1  AUDIT LEDGER      governance_logger
+ Layer 1  AUDIT LEDGER      governance_logger (facade),
+                            ledger_writer, audit_buffers, run_artifacts
 
  Layer 0  FOUNDATION        constants, helpers, exceptions, logging_setup
 ```
@@ -158,7 +159,9 @@ The CLI processes data in chunks (default 50,000 rows). After each chunk:
 | `helpers.py` | 0 | Pure utility functions: `file_hash`, `flatten_record`, `mask_value`, `interactive_prompt` |
 | `exceptions.py` | 0 | `ConfigValidationError`, `LoaderError`, `ExtractionError`, `ValidationError` |
 | `logging_setup.py` | 0 | Rotating file handlers, JSON structured logging, sensitive data scrubbing |
-| `governance_logger.py` | 1 | SHA-256 chained JSONL audit ledger, 30+ event types, 7 report writers |
+| `governance_logger.py` | 1 | Facade: 30+ domain event wrappers + 7 report-writer delegations, over the collaborators below |
+| `ledger_writer.py` | 1 | `LedgerWriter` — durable, tamper-evident SHA-256 hash-chained JSONL append + anchor + `verify_ledger` |
+| `audit_buffers.py` | 1 | `AuditBuffers` — in-memory PII/validation/classification/transfer aggregation the report writers consume |
 | `extract.py` | 2 | File-based extraction: 12+ formats with compression support |
 | `transform.py` | 2 | Flatten, sanitise, dedup, PII mask, column minimisation |
 | `profiler.py` | 2 | Column-level statistical profiling (nulls, uniques, ranges) |
@@ -224,6 +227,21 @@ Root-level shims with the original filenames remain until v5.0;
 
 The major architectural bets, why they were made, and what would cause a
 revisit. New entries go at the top.
+
+**LedgerWriter extracted from GovernanceLogger (2026-06).** The durable,
+tamper-evident hash-chained append (the `_event` chain, anchor sidecar,
+and `verify_ledger`) moved to `pipeline/ledger_writer.py`, and the
+in-memory aggregation to `pipeline/audit_buffers.py`. `GovernanceLogger`
+is now a thin facade: the event vocabulary (37 domain wrappers) plus
+delegation to LedgerWriter + AuditBuffers + RunArtifacts + ReportWriter.
+The cryptographic/durability primitive now has one reason to change and
+its own isolated tests, separate from the domain vocabulary. The public
+`gov` API (methods and the old attribute names) is preserved via
+delegating properties, so the ~31 modules that take `gov` are unchanged.
+Note: passing `gov` everywhere is deliberate (governance-by-default), not
+a coupling defect — this change was about internal cohesion, not that.
+Revisit if: the event vocabulary itself grows unwieldy enough to warrant
+domain sub-recorders (`gov.privacy.*`, `gov.lineage.*`).
 
 **Tiered destination catalog (2026-06).** Every destination declares how
 it is verified — core (real engine in CI), emulator, or cloud-credential —
