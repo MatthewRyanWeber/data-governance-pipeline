@@ -359,6 +359,41 @@ class TestResumeCarriesRowTotal(unittest.TestCase):
         self.assertEqual(len(verified_df), 200)
 
 
+class TestUpsertCapabilityGuard(unittest.TestCase):
+    """natural_keys against an append-only destination must fail fast with a
+    clear message, not crash mid-first-chunk."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        import pipeline.run_state as run_state_module
+        self._orig = run_state_module.CHECKPOINT_FILE
+        run_state_module.CHECKPOINT_FILE = Path(self.tmpdir) / "checkpoint.json"
+
+    def tearDown(self):
+        import pipeline.run_state as run_state_module
+        run_state_module.CHECKPOINT_FILE = self._orig
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    @patch("pipeline.cli._make_loader")
+    def test_natural_keys_on_append_only_destination_fails_fast(self, mock_make_loader):
+        from pipeline.run_state import RunStateManager
+        loader = MagicMock()
+        loader.SUPPORTS_UPSERT = False
+        mock_make_loader.return_value = (loader, False)
+        state_manager = RunStateManager(state_dir=Path(self.tmpdir) / "run_state")
+        args = argparse.Namespace(
+            source="data.parquet", destination="parquet", table="t",
+            config_path="", dry_run=False, skip_pii=True, verify=False,
+            transform_config=None, chunk_size=100,
+        )
+        with self.assertRaises(ValueError) as ctx:
+            _run_chunked(
+                "data.parquet", args, {"natural_keys": ["id"]},
+                MagicMock(), MagicMock(), state_manager=state_manager,
+            )
+        self.assertIn("append-only", str(ctx.exception))
+
+
 class TestChunkLoadHonorsUpsertKeys(unittest.TestCase):
     """Each chunk must load with the configured if_exists/natural_keys so a
     crash-resume re-run of a chunk is idempotent (exactly-once), not a

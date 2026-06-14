@@ -27,12 +27,19 @@ Revision history
                    with an at-least-once warning when keyless); database
                    sources stream via DatabaseExtractor.chunks() instead of
                    loading the whole table into memory.
+1.8   2026-06-14   Wire DataObserver from the config 'observability' block
+                   (per-chunk freshness/volume/drift/null-spike).
+1.9   2026-06-14   Audit fixes: REST sources stream via pages() (no full
+                   materialization); fail fast when natural_keys targets an
+                   append-only destination (SUPPORTS_UPSERT); memoize PII
+                   detection per schema and lock the transform-config cache.
 """
 
 import argparse
 import json
 import logging
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -108,6 +115,10 @@ def _build_parser() -> argparse.ArgumentParser:
     # ── replay-dlq ───────────────────────────────────────────────────────
     dlq_parser = subparsers.add_parser("replay-dlq", help="Replay records from the dead-letter queue")
     dlq_parser.add_argument("--dlq-dir", default="dead_letter_queue", help="DLQ directory")
+    dlq_parser.add_argument("--destination", help="db_type to re-load rows into "
+                            "(omit to inspect only — files are left in place)")
+    dlq_parser.add_argument("--config", dest="config_path", help="Path to the destination config")
+    dlq_parser.add_argument("--table", default="pipeline_output", help="Destination table name")
 
     # ── schedule ─────────────────────────────────────────────────────────
     sched_parser = subparsers.add_parser("schedule", help="Run the pipeline on a cron schedule")
@@ -234,8 +245,8 @@ def _iter_source_chunks(source, config, gov, chunk_size):
     - database  → DatabaseExtractor.chunks() (server-side pagination, never
       materializes the whole table)
     - file      → Extractor.chunks() (native chunked reader)
-    - REST API  → a single in-memory batch (REST has no streaming
-      abstraction here; responses are expected to be bounded)
+    - REST API  → RESTExtractor.pages() (one DataFrame per page, so a large
+      paginated API is never fully materialized in memory)
     """
     from pipeline.logging_setup import timed_operation
     source_str = str(source)
@@ -255,9 +266,21 @@ def _iter_source_chunks(source, config, gov, chunk_size):
             )
 
     elif source_str.startswith("api:") or config.get("source_type") == "rest_api":
-        df = _extract_source(source, config, gov)
-        if not df.empty:
-            yield df
+        from pipeline.extractors.rest_extractor import RESTExtractor
+        rest_cfg = config.get("source", config)
+        rest = RESTExtractor(gov)
+        with timed_operation("extract:rest:stream"):
+            streamed_any = False
+            for page_df in rest.pages(rest_cfg):
+                if not page_df.empty:
+                    streamed_any = True
+                    yield page_df
+        # A non-paginated endpoint may yield nothing from pages(); fall back to
+        # the single-batch extractor so those sources still load.
+        if not streamed_any:
+            df = _extract_source(source, config, gov)
+            if not df.empty:
+                yield df
 
     else:
         from pipeline.extract import Extractor
@@ -266,6 +289,10 @@ def _iter_source_chunks(source, config, gov, chunk_size):
 
 
 _transform_config_cache: dict | None = None
+_pii_findings_cache: dict[tuple, object] = {}
+# Guards the two caches below: in --parallel mode several worker threads call
+# _transform_chunk concurrently and would otherwise race the lazy loads.
+_transform_cache_lock = threading.Lock()
 
 
 def _transform_chunk(chunk, args, config, gov):
@@ -278,7 +305,9 @@ def _transform_chunk(chunk, args, config, gov):
     if transform_config_path:
         from pipeline.transform_pipeline import TransformPipeline
         if _transform_config_cache is None:
-            _transform_config_cache = _load_config(transform_config_path)
+            with _transform_cache_lock:
+                if _transform_config_cache is None:
+                    _transform_config_cache = _load_config(transform_config_path)
         tp = TransformPipeline(gov)
         with timed_operation("transform:pipeline"):
             return tp.run(chunk, _transform_config_cache)
@@ -286,7 +315,16 @@ def _transform_chunk(chunk, args, config, gov):
         transformer = Transformer(gov)
         if not args.skip_pii:
             from pipeline.helpers import detect_pii
-            pii_findings = detect_pii(list(chunk.columns))
+            # PII detection keys off column NAMES, which are identical across
+            # every chunk of a source — memoize so it runs once per schema
+            # instead of once per chunk. Keyed by columns, so it stays correct
+            # across different sources in one process.
+            cols_key = tuple(chunk.columns)
+            with _transform_cache_lock:
+                pii_findings = _pii_findings_cache.get(cols_key)
+                if pii_findings is None:
+                    pii_findings = detect_pii(list(chunk.columns))
+                    _pii_findings_cache[cols_key] = pii_findings
         else:
             # None (not []) tells the transformer the PII stage is disabled,
             # so it also skips supplemental detection on flattened columns.
@@ -356,6 +394,19 @@ def _run_chunked(
     if_exists = config.get("if_exists", "append")
     natural_keys = config.get("natural_keys")
     if natural_keys and if_exists == "append":
+        # Fail fast: an append-only destination (Parquet/Iceberg/Kafka/S3) has
+        # no upsert path, so promoting to "upsert" would crash mid-first-chunk
+        # with a confusing "if_exists must be append/replace" error, and plain
+        # append-resume would silently duplicate the interrupted chunk. Say so
+        # up front instead.
+        if not getattr(loader, "SUPPORTS_UPSERT", True):
+            raise ValueError(
+                f"'natural_keys' was set for exactly-once resume, but "
+                f"destination '{destination}' is append-only and has no upsert "
+                f"path. Use a transactional destination, or remove "
+                f"'natural_keys' and accept at-least-once loads (a crash + "
+                f"resume can duplicate the interrupted chunk's rows)."
+            )
         if_exists = "upsert"
 
     def _load_chunk(chunk_df):
@@ -395,12 +446,31 @@ def _run_chunked(
             **{key: obs_cfg[key] for key in OBSERVER_CONFIG_KEYS if key in obs_cfg},
         )
 
+    # Capture the destination row count BEFORE loading so --verify checks only
+    # the rows THIS run adds — an append into a non-empty table is otherwise a
+    # false discrepancy, and a duplication would otherwise pass as "verified".
+    # Measured once on a fresh run and persisted; resume reuses it (the local
+    # also survives clear_checkpoint below).
+    baseline_rows = None
+    verify_on = not args.dry_run and getattr(args, "verify", True)
+    if verify_on:
+        from pipeline.load_verifier import LoadVerifier
+        baseline_cfg = dict(config)
+        baseline_cfg["db_type"] = destination
+        if resume_from_chunk < 0:
+            measured = LoadVerifier(gov).count_rows(baseline_cfg, table_name)
+            if isinstance(measured, int):
+                baseline_rows = measured
+                state_manager.save_baseline(str(source), table_name, measured)
+        else:
+            baseline_rows = state_manager.load_baseline(str(source), table_name)
+
     # One streaming loop for every source type — never load the whole
     # dataset into memory.  Database sources stream via
     # DatabaseExtractor.chunks() (previously they loaded the entire table
     # then sliced in memory, OOMing on large tables and violating the
     # streaming guarantee); file sources via Extractor.chunks(); REST APIs
-    # yield a single in-memory batch (no streaming pagination abstraction).
+    # stream per page via RESTExtractor.pages().
     total_rows = rows_already_loaded
     chunk_idx = 0
 
@@ -457,7 +527,9 @@ def _run_chunked(
         with timed_operation("verify"):
             import pandas as pd
             dummy = pd.DataFrame(index=range(total_rows))
-            result = verifier.verify_row_count(dummy, verify_cfg, table_name)
+            result = verifier.verify_row_count(
+                dummy, verify_cfg, table_name, baseline_rows=baseline_rows,
+            )
         if result.get("match") is None:
             # The reconciliation step ran but could not get a destination
             # count (e.g. file/object stores). Say so — "verify on" must not
@@ -469,10 +541,14 @@ def _run_chunked(
             )
         elif result.get("match") is False:
             # A real discrepancy is a failure, not a footnote — log at error.
+            # A positive difference means MORE rows landed than were sent
+            # (duplication); negative means rows were dropped.
+            kind = "DUPLICATION" if result["difference"] > 0 else "MISSING ROWS"
             logger.error(
-                "[VERIFY] Load verification FAILED: %d source rows vs "
-                "%d destination rows (difference: %d).",
-                result["source_rows"], result["dest_rows"], result["difference"],
+                "[VERIFY] Load verification FAILED (%s): %d rows loaded vs "
+                "%d source rows (difference: %+d, destination total: %d).",
+                kind, result.get("loaded_rows"), result["source_rows"],
+                result["difference"], result["dest_rows"],
             )
 
 
@@ -570,10 +646,35 @@ def _cmd_replay_dlq(args: argparse.Namespace) -> None:
 
     gov = GovernanceLogger(source_name="dlq-replay")
     replayer = DLQReplayer(gov, dlq_dir=args.dlq_dir)
-    summary = replayer.replay_all()
+
+    # Without a destination the replayer inspects and LEAVES files in place
+    # (it no longer archives un-reloaded rows). Build a loader so the command
+    # actually re-ingests when a destination is given.
+    loader = None
+    cfg = None
+    table = None
+    destination = getattr(args, "destination", None)
+    if destination:
+        cfg = _load_config(getattr(args, "config_path", None))
+        table = getattr(args, "table", "pipeline_output")
+        loader_args = argparse.Namespace(
+            destination=destination, table=table, dry_run=False,
+        )
+        loader, _uses_mongo = _make_loader(loader_args, cfg, gov)
+
+    summary = replayer.replay_all(loader=loader, cfg=cfg, table=table)
     total = summary["total_rows"]
-    logger.info("Replayed %d DLQ records.", total)
-    print(f"Replayed {total} records from DLQ.")
+    if loader is None:
+        logger.warning(
+            "replay-dlq ran WITHOUT --destination: %d rows inspected, nothing "
+            "re-loaded, files left in place. Pass --destination/--config/--table "
+            "to actually replay.", total,
+        )
+        print(f"Inspected DLQ ({total} rows); nothing re-loaded "
+              f"(pass --destination to replay).")
+    else:
+        logger.info("Replayed %d DLQ records into %s.", total, table)
+        print(f"Replayed {total} records from DLQ into {table}.")
 
 
 def _cmd_schedule(args: argparse.Namespace) -> None:

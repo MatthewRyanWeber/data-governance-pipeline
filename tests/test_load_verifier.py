@@ -51,6 +51,29 @@ class TestLoadVerifier(unittest.TestCase):
         self.assertFalse(result["match"])
         self.assertEqual(result["difference"], 3 - 10)
 
+    def test_baseline_excludes_pre_existing_rows(self):
+        # Table already had 3 rows; this load added 2 more (dest=5). With a
+        # baseline of 3, the 2 loaded rows match the 2 source rows — no false
+        # discrepancy from the pre-existing rows.
+        conn = sqlite3.connect(self.db_path)
+        conn.executemany("INSERT INTO customers VALUES (?, ?)", [(4, "d"), (5, "e")])
+        conn.commit()
+        conn.close()
+        df = pd.DataFrame({"id": [4, 5]})  # 2 rows loaded this run
+        result = self.verifier.verify_row_count(df, self.cfg, "customers", baseline_rows=3)
+        self.assertTrue(result["match"])
+        self.assertEqual(result["loaded_rows"], 2)
+        self.assertEqual(result["difference"], 0)
+
+    def test_baseline_catches_duplication(self):
+        # dest=3, baseline=0, but only 2 rows were sent → over-count = duplication.
+        df = pd.DataFrame({"id": [1, 2]})
+        result = self.verifier.verify_row_count(
+            df, self.cfg, "customers", baseline_rows=0, tolerance=0.5,
+        )
+        self.assertFalse(result["match"])  # over-count never passes tolerance
+        self.assertEqual(result["difference"], 1)
+
     def test_tolerance_allows_small_discrepancy(self):
         df = pd.DataFrame({"id": list(range(4))})  # 4 source vs 3 dest = 25% off
         within = self.verifier.verify_row_count(df, self.cfg, "customers", tolerance=0.5)

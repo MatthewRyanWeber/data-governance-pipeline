@@ -20,6 +20,9 @@ Revision history
                    corrupt JSON on read; hold the lock across update_chunk's full
                    read-modify-write; checkpoints now persist row totals
                    (load_checkpoint_rows) so resumed runs keep accurate counts.
+1.5   2026-06-14   Persist a pre-load destination baseline in the checkpoint
+                   (save_baseline/load_baseline) so --verify checks only the
+                   rows this load added, surviving resume.
 """
 
 import json
@@ -249,10 +252,42 @@ class RunStateManager:
         with STATE_FILE_LOCK:
             state = self._read_checkpoint_state()
             # Row total is persisted so a resumed run can carry its count
-            # forward instead of restarting --verify maths at zero.
-            state[key] = {"chunk": chunk_idx, "rows": rows}
+            # forward instead of restarting --verify maths at zero. Preserve
+            # any baseline captured before the loop so resume keeps it.
+            existing = state.get(key)
+            prior = existing if isinstance(existing, dict) else {}
+            entry = {"chunk": chunk_idx, "rows": rows}
+            if "baseline" in prior:
+                entry["baseline"] = prior["baseline"]
+            state[key] = entry
             atomic_json_write(CHECKPOINT_FILE, json.dumps(state, indent=2))
         gov.checkpoint_event("SAVED", chunk_idx, rows)
+
+    def save_baseline(self, source: str, table: str, baseline: int) -> None:
+        """Record the destination row count measured before the load begins.
+
+        Stored in the checkpoint entry so a resumed run reuses the original
+        baseline instead of re-measuring a partially-loaded table.
+        """
+        key = f"{source}::{table}"
+        with STATE_FILE_LOCK:
+            state = self._read_checkpoint_state()
+            existing = state.get(key)
+            entry = existing if isinstance(existing, dict) else {}
+            entry["baseline"] = int(baseline)
+            entry.setdefault("chunk", -1)
+            entry.setdefault("rows", 0)
+            state[key] = entry
+            atomic_json_write(CHECKPOINT_FILE, json.dumps(state, indent=2))
+
+    def load_baseline(self, source: str, table: str) -> int | None:
+        """Return the pre-load destination baseline, or None if not recorded."""
+        key = f"{source}::{table}"
+        with STATE_FILE_LOCK:
+            entry = self._read_checkpoint_state().get(key)
+        if isinstance(entry, dict) and "baseline" in entry:
+            return int(entry["baseline"])
+        return None
 
     def clear_checkpoint(self, source: str, table: str) -> None:
         """Remove the checkpoint for a completed, successful run."""

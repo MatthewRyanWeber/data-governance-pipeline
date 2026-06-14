@@ -9,6 +9,9 @@ Layer 3 — imports from Layer 1 (governance_logger).
 Revision history
 ────────────────
 1.0   2026-06-08   Initial release.
+1.1   2026-06-14   verify_row_count takes an optional pre-load baseline so an
+                   append into a non-empty table is not a false discrepancy
+                   and an over-count (duplication) is caught; add count_rows().
 """
 
 import logging
@@ -37,12 +40,17 @@ class LoadVerifier:
     def __init__(self, gov: "GovernanceLogger") -> None:
         self.gov = gov
 
+    def count_rows(self, cfg: dict, table: str) -> int | None:
+        """Public row count for capturing a pre-load baseline. None if unavailable."""
+        return self._count_destination(cfg, table)
+
     def verify_row_count(
         self,
         source_df: "pd.DataFrame",
         cfg: dict,
         table: str,
         tolerance: float = 0.0,
+        baseline_rows: int | None = None,
     ) -> dict:
         """
         Compare source DataFrame row count against the destination table.
@@ -52,6 +60,11 @@ class LoadVerifier:
             cfg: Loader config dict (connection details).
             table: Destination table name.
             tolerance: Acceptable discrepancy as a fraction (0.01 = 1%).
+            baseline_rows: Rows present in the table BEFORE this load. When
+                given, only the rows this load added are checked, so an append
+                into a non-empty table is not a false discrepancy AND an
+                over-count (duplication) is caught. When None the baseline is
+                unknown, so a symmetric tolerance band is used (legacy).
 
         Returns:
             Dict with keys: match (bool), source_rows, dest_rows, difference, tolerance.
@@ -73,13 +86,33 @@ class LoadVerifier:
                 "table": table,
             }
 
-        difference = dest_rows - source_rows
-        within_tolerance = abs(difference) <= source_rows * tolerance if source_rows > 0 else difference == 0
+        if baseline_rows is None:
+            # Baseline unknown: can't separate duplication from rows that were
+            # already there, so keep the symmetric tolerance band.
+            loaded_rows = dest_rows
+            difference = dest_rows - source_rows
+            within_tolerance = (
+                abs(difference) <= source_rows * tolerance
+                if source_rows > 0 else difference == 0
+            )
+        else:
+            loaded_rows = dest_rows - baseline_rows
+            difference = loaded_rows - source_rows
+            if difference > 0:
+                # More rows landed than were sent — duplication is corruption,
+                # never acceptable "within tolerance".
+                within_tolerance = False
+            elif source_rows > 0:
+                within_tolerance = abs(difference) <= source_rows * tolerance
+            else:
+                within_tolerance = difference == 0
 
         result = {
             "match": within_tolerance,
             "source_rows": source_rows,
             "dest_rows": dest_rows,
+            "baseline_rows": baseline_rows,
+            "loaded_rows": loaded_rows,
             "difference": difference,
             "tolerance": tolerance,
             "table": table,
@@ -100,6 +133,8 @@ class LoadVerifier:
             "table": table,
             "source_rows": source_rows,
             "dest_rows": dest_rows,
+            "baseline_rows": baseline_rows,
+            "loaded_rows": loaded_rows,
             "difference": difference,
             "match": within_tolerance,
         })
