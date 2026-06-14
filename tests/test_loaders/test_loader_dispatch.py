@@ -2167,16 +2167,15 @@ class TestNewDestinationLoaders(unittest.TestCase):
         self.assertIn("PARQUET_WRITE_COMPLETE", str(self.gov._event.call_args))
 
     def test_parquet_table_param_used_as_filename(self):
+        import pathlib as _pl
         loader = ParquetLoader(self.gov)
-        # write_table is mocked, so the atomic temp file is never created;
-        # stub os.replace too so the temp→final move is a no-op. The target
-        # path still derives from the table name, which is what we assert.
-        with patch("pyarrow.parquet.write_table") as mock_write, \
-             patch("os.replace"):
-            loader.load(self._df(), {}, table="employees")
-        mock_write.assert_called_once()
-        call_args = mock_write.call_args[0]
-        self.assertIn("employees.parquet", str(call_args[1]))
+        # A bare table name becomes a "<table>.parquet" dataset directory of
+        # part files; write it under the temp dir and assert the layout.
+        table = str(_pl.Path(self._tmp) / "employees")
+        loader.load(self._df(), {}, table=table)
+        dataset = _pl.Path(self._tmp) / "employees.parquet"
+        self.assertTrue(dataset.is_dir())
+        self.assertEqual(len(list(dataset.glob("part-*.parquet"))), 1)
 
     # ── DeltaLakeLoader ───────────────────────────────────────────────────────
 

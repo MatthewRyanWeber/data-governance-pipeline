@@ -14,6 +14,11 @@ Revision history
                    temp file then os.replace (atomic), and serialise concurrent
                    writers to the same path with a per-path lock so --parallel
                    workers cannot lose an update.
+1.4   2026-06-14   Non-partitioned writes now produce a DIRECTORY of part files
+                   (one atomic part per chunk) instead of re-reading and
+                   rewriting the whole file every chunk — O(n) per load, not
+                   O(n²) over a streaming run. A legacy single-file target is
+                   adopted as the first part so append doesn't lose data.
 """
 
 import logging
@@ -30,9 +35,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Per-path locks serialise the read-concat-write of a single Parquet file so
-# two --parallel workers targeting the same path cannot clobber each other's
-# update. Keyed by output path; guarded by _LOCKS_GUARD for safe creation.
+# Per-path locks serialise dataset-directory preparation (replace-clear and
+# legacy-file adoption) for a given output path so two --parallel workers
+# targeting it cannot race. Keyed by output path; guarded by _LOCKS_GUARD.
 _PATH_LOCKS: dict[str, threading.Lock] = {}
 _LOCKS_GUARD = threading.Lock()
 
@@ -108,23 +113,18 @@ class ParquetLoader(BaseLoader):
             )
         else:
             filesystem = self._filesystem(path, storage_opts)
-            # Serialise same-path writers: the read-concat-write below is a
-            # lost-update race under --parallel without this guard.
+            # Non-partitioned writes go to a DIRECTORY of part files (a standard
+            # Parquet dataset): one atomically-written part per load() call.
+            # That is O(rows-in-chunk), not the old read-concat-rewrite of the
+            # whole file every chunk (which was O(n^2) under streaming), and a
+            # crash leaves every completed part intact — exactly what the
+            # per-chunk checkpoint/resume model needs. pandas/pyarrow read the
+            # directory back as a single table.
             with _lock_for_path(path):
-                if if_exists == "append" and self._target_exists(path, filesystem):
-                    # A single Parquet file cannot be appended to in place:
-                    # read + concat + rewrite, otherwise append silently
-                    # overwrites the existing data.
-                    existing_table = pq.read_table(path, filesystem=filesystem)
-                    arrow_table = pa.concat_tables(
-                        [existing_table, arrow_table], promote_options="default"
-                    )
-                    logger.info(
-                        "[PARQUET] append: rewriting %s with %d existing + %d "
-                        "new rows.", path, existing_table.num_rows, len(df),
-                    )
+                self._prepare_dataset_dir(path, if_exists, filesystem)
+                part_path = self._new_part_path(path, filesystem)
                 self._write_table_atomic(
-                    pq, arrow_table, path, compression,
+                    pq, arrow_table, part_path, compression,
                     row_group_size, filesystem,
                 )
 
@@ -199,11 +199,46 @@ class ParquetLoader(BaseLoader):
             )
 
     @staticmethod
-    def _target_exists(path: str, filesystem) -> bool:
-        """Check target existence on local disk or the remote filesystem."""
+    def _new_part_path(path: str, filesystem) -> str:
+        """A unique part-file path inside the dataset directory `path`."""
+        name = f"part-{uuid.uuid4().hex}.parquet"
         if filesystem is not None:
-            return bool(filesystem.exists(path))
-        return Path(path).exists()
+            return f"{path.rstrip('/')}/{name}"
+        return str(Path(path) / name)
+
+    def _prepare_dataset_dir(self, path: str, if_exists: str, filesystem) -> None:
+        """Make `path` a dataset directory, honoring replace vs append."""
+        if filesystem is not None:
+            # Object-store "directories" are key prefixes — nothing to create.
+            # For replace, delete any objects already under the prefix.
+            if if_exists == "replace" and filesystem.exists(path):
+                filesystem.rm(path, recursive=True)
+            return
+        path_obj = Path(path)
+        if if_exists == "replace":
+            self._remove_path(path_obj)
+        elif path_obj.is_file():
+            # A single .parquet FILE written by an older version: adopt its
+            # rows as the first part so append doesn't silently lose them.
+            self._adopt_legacy_file(path_obj)
+        path_obj.mkdir(parents=True, exist_ok=True)
+
+    @staticmethod
+    def _remove_path(path_obj: Path) -> None:
+        """Remove a dataset directory or legacy single file (for replace)."""
+        import shutil
+        if path_obj.is_dir():
+            shutil.rmtree(path_obj)
+        elif path_obj.exists():
+            path_obj.unlink()
+
+    @staticmethod
+    def _adopt_legacy_file(path_obj: Path) -> None:
+        """Convert a pre-existing single-file target into a dataset directory."""
+        sibling = path_obj.with_name(f"{path_obj.name}.adopt-{uuid.uuid4().hex}")
+        os.replace(path_obj, sibling)
+        path_obj.mkdir(parents=True, exist_ok=True)
+        os.replace(sibling, path_obj / f"part-{uuid.uuid4().hex}.parquet")
 
     @staticmethod
     def _filesystem(path: str, storage_options: dict):

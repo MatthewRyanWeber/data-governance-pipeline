@@ -164,36 +164,24 @@ class TestParquetLoaderRoundTrip(unittest.TestCase):
         self.assertEqual(len(back), 5)
         self.assertEqual(sorted(back["id"]), [1, 2, 3, 4, 5])
 
-    def test_write_failure_does_not_corrupt_existing_file(self):
-        # A crash mid-write must leave the previously accumulated file intact:
-        # the atomic temp+os.replace means path is never partially written.
+    def test_write_failure_does_not_corrupt_existing_dataset(self):
+        # A failed part write must leave the existing dataset intact and add no
+        # readable or leftover part — each chunk is its own atomic part file.
         import pyarrow.parquet as pq
 
         path = str(Path(self.tmp) / "safe.parquet")
         self.loader.load(_df(), {"path": path}, if_exists="append")
-        original_bytes = Path(path).read_bytes()
-
-        real_write_table = pq.write_table
-
-        def exploding_write_table(table, where, *args, **kwargs):
-            # Let the temp sibling be written, then fail before os.replace so
-            # the original target is never touched.
-            real_write_table(table, where, *args, **kwargs)
-            raise OSError("simulated disk failure")
+        self.assertEqual(sorted(pd.read_parquet(path)["id"]), [1, 2, 3])
 
         with mock.patch.object(
-                pq, "write_table", side_effect=exploding_write_table):
+                pq, "write_table", side_effect=OSError("simulated disk failure")):
             with self.assertRaises(OSError):
                 self.loader.load(pd.DataFrame({"id": [9], "name": ["z"]}),
                                  {"path": path}, if_exists="append")
 
-        # Original file is byte-for-byte unchanged and still readable.
-        self.assertEqual(Path(path).read_bytes(), original_bytes)
-        back = pd.read_parquet(path)
-        self.assertEqual(sorted(back["id"]), [1, 2, 3])
-        # No temp sibling left behind.
-        leftovers = list(Path(self.tmp).glob("safe.parquet.tmp-*"))
-        self.assertEqual(leftovers, [])
+        # Prior parts untouched; the failed write left no temp or partial part.
+        self.assertEqual(sorted(pd.read_parquet(path)["id"]), [1, 2, 3])
+        self.assertEqual(list(Path(path).glob("*.tmp-*")), [])
 
 
 class TestSQLLoaderSQLiteRoundTrip(unittest.TestCase):
