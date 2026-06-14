@@ -19,6 +19,8 @@ Revision history
 1.4   2026-06-14   observe() reads history once and computes each column's
                    null rate once, sharing both across all detectors (was
                    three file reads + a duplicate null-rate pass per call).
+1.5   2026-06-14   Export OBSERVER_CONFIG_KEYS (pinned to the constructor by
+                   a test) so the CLI forwards config keys from one home.
 """
 
 import json
@@ -35,6 +37,21 @@ if TYPE_CHECKING:
     from pipeline.governance_logger import GovernanceLogger
 
 logger = logging.getLogger(__name__)
+
+
+# The DataObserver.__init__ keyword arguments that may be supplied from a
+# config "observability" block. Kept here, next to the class, so the CLI can
+# forward exactly these without re-declaring the threshold defaults — the set
+# has one home. test_monitoring pins it to the actual constructor signature,
+# so renaming a parameter fails CI instead of silently dropping config.
+OBSERVER_CONFIG_KEYS = (
+    "critical_fields",
+    "null_spike_threshold",
+    "null_absolute_floor",
+    "freshness_threshold_hours",
+    "volume_change_threshold",
+    "drift_threshold",
+)
 
 
 class DataObserver:

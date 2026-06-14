@@ -327,6 +327,16 @@ class TestDataObserver(unittest.TestCase):
         self.assertEqual(len(floor_alerts), 1)
         self.assertEqual(floor_alerts[0]["column"], "ssn")
 
+    def test_observer_config_keys_match_constructor(self):
+        # The CLI forwards config via OBSERVER_CONFIG_KEYS; if a constructor
+        # parameter is renamed, this pins the drift to a CI failure instead
+        # of a silently dropped config value.
+        import inspect
+        from pipeline.monitoring.observability import OBSERVER_CONFIG_KEYS
+        params = set(inspect.signature(DataObserver.__init__).parameters)
+        for key in OBSERVER_CONFIG_KEYS:
+            self.assertIn(key, params, f"{key} is not a DataObserver parameter")
+
 
 class TestNotifier(unittest.TestCase):
     """Notifier email and Slack dispatch."""
