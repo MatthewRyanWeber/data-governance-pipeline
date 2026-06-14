@@ -21,6 +21,10 @@ Revision history
                    three file reads + a duplicate null-rate pass per call).
 1.5   2026-06-14   Export OBSERVER_CONFIG_KEYS (pinned to the constructor by
                    a test) so the CLI forwards config keys from one home.
+1.6   2026-06-14   Audit fixes: drop duplicate columns instead of crashing
+                   observe() (df[col] -> DataFrame); tolerate history records
+                   without row_count in volume check; a critical field that
+                   both spikes and breaches the floor now reports HIGH.
 """
 
 import json
@@ -118,6 +122,18 @@ class DataObserver:
                 "alert_count": 0,
                 "observed_utc": datetime.now(timezone.utc).isoformat(),
             }
+
+        # Duplicate column labels make df[col] return a DataFrame rather than
+        # a Series, which breaks every per-column statistic below (and would
+        # abort the whole load, since observe() runs per chunk). Drop the
+        # duplicates loudly instead of crashing.
+        if df.columns.duplicated().any():
+            dupes = sorted(set(df.columns[df.columns.duplicated()]))
+            logger.warning(
+                "[OBSERVE] '%s': duplicate column(s) %s — keeping the first of "
+                "each for observation.", dataset, dupes,
+            )
+            df = df.loc[:, ~df.columns.duplicated()]
 
         alerts: list[dict] = []
 
@@ -236,7 +252,11 @@ class DataObserver:
         if not history:
             return None
 
-        historical_counts = [h["row_count"] for h in history]
+        # Tolerate old/hand-edited records that predate row_count, the way
+        # drift and null-spike tolerate records without column_stats.
+        historical_counts = [h["row_count"] for h in history if "row_count" in h]
+        if not historical_counts:
+            return None
         avg_count = sum(historical_counts) / len(historical_counts)
 
         if avg_count == 0:
@@ -347,12 +367,17 @@ class DataObserver:
             curr_rate = null_rates[col]
             prev_rate = prev_rates.get(col)
 
-            # Baseline spike: null rate jumped vs the previous run.
+            # Baseline spike: null rate jumped vs the previous run. A critical
+            # field that both spiked AND breached the floor is HIGH — the
+            # single spike alert must not under-report it to MEDIUM.
             if prev_rate is not None and curr_rate - prev_rate > self.null_spike_threshold:
                 jump = curr_rate - prev_rate
+                spike_is_high = jump > self.null_spike_threshold * 2 or (
+                    col in self.critical_fields and curr_rate > self.null_absolute_floor
+                )
                 alerts.append({
                     "type": "NULL_SPIKE",
-                    "severity": "HIGH" if jump > self.null_spike_threshold * 2 else "MEDIUM",
+                    "severity": "HIGH" if spike_is_high else "MEDIUM",
                     "message": (
                         f"Null rate for '{col}' jumped from {prev_rate:.0%} "
                         f"to {curr_rate:.0%} (+{jump:.0%})"

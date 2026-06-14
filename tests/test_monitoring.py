@@ -327,6 +327,46 @@ class TestDataObserver(unittest.TestCase):
         self.assertEqual(len(floor_alerts), 1)
         self.assertEqual(floor_alerts[0]["column"], "ssn")
 
+    def test_duplicate_columns_do_not_crash(self):
+        obs = DataObserver(self.gov, history_file=self.history_file)
+        df = self.pd.DataFrame([[1, None, 3]], columns=["a", "a", "b"])
+        report = obs.observe(df, dataset="dup_test")  # must not raise
+        # First of each duplicate label is kept: a, b.
+        names = [s["name"] for s in report["column_stats"]]
+        self.assertEqual(names, ["a", "b"])
+
+    def test_volume_tolerates_record_without_row_count(self):
+        obs = DataObserver(
+            self.gov, history_file=self.history_file, volume_change_threshold=0.5,
+        )
+        with open(self.history_file, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps({"dataset": "novc", "observed_utc": "x"}) + "\n")
+        df = self.pd.DataFrame({"a": range(10)})
+        report = obs.observe(df, dataset="novc")  # must not raise KeyError
+        self.assertEqual(report["row_count"], 10)
+
+    def test_critical_field_spike_over_floor_is_high(self):
+        obs = DataObserver(
+            self.gov, history_file=self.history_file,
+            critical_fields=["email"], null_spike_threshold=0.2,
+            null_absolute_floor=0.5,
+        )
+        prev = {
+            "dataset": "sev", "row_count": 10, "column_count": 1, "alerts": [],
+            "alert_count": 0,
+            "observed_utc": datetime.now(timezone.utc).isoformat(),
+            "column_stats": [{"name": "email", "null_rate": 0.4}],
+        }
+        with open(self.history_file, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(prev) + "\n")
+        # 0.4 -> 0.7: jump 0.3 (not > 0.4, so MEDIUM by jump alone) but
+        # curr 0.7 > floor 0.5 for a critical field -> must escalate to HIGH.
+        df = self.pd.DataFrame({"email": ["x"] * 3 + [None] * 7})
+        report = obs.observe(df, dataset="sev")
+        spikes = [a for a in report["alerts"] if a["type"] == "NULL_SPIKE"]
+        self.assertEqual(len(spikes), 1)
+        self.assertEqual(spikes[0]["severity"], "HIGH")
+
     def test_observer_config_keys_match_constructor(self):
         # The CLI forwards config via OBSERVER_CONFIG_KEYS; if a constructor
         # parameter is renamed, this pins the drift to a CI failure instead
