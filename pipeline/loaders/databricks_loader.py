@@ -65,11 +65,16 @@ class DatabricksLoader(BaseLoader):
 
         # Retry the connect itself: a cold serverless warehouse often
         # rejects the very first request while it is still starting.
+        # A TypeError means a bad/renamed kwarg (e.g. connector API drift on
+        # the private _socket_timeout) — that will never succeed, so fail
+        # fast instead of masking it as a 30s "warehouse starting" retry.
         attempts = int(cfg.get("connect_attempts", 3))
         last_exc: Exception | None = None
         for attempt in range(1, attempts + 1):
             try:
                 return _databricks_sql.connect(**conn_kwargs)
+            except TypeError:
+                raise
             except Exception as exc:
                 last_exc = exc
                 if attempt == attempts:

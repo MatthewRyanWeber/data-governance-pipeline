@@ -167,10 +167,11 @@ class SynapseLoader(BaseLoader):
             cur.execute(f"CREATE TABLE {fqt} ({col_defs})")
             cur.connection.commit()
         else:
+            # OBJECT_ID resolves the bracketed identifier correctly,
+            # including names containing dots — the old
+            # TABLE_SCHEMA+'.'+TABLE_NAME string compare broke on those.
             cur.execute(
-                "IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES "
-                f"WHERE TABLE_SCHEMA+'.'+TABLE_NAME="
-                f"'{fqt.replace('[','').replace(']','')}') "
+                f"IF OBJECT_ID('{fqt}', 'U') IS NULL "
                 f"CREATE TABLE {fqt} ({col_defs})"
             )
             cur.connection.commit()
