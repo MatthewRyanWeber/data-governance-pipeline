@@ -21,6 +21,12 @@ Revision history
                    passes None so flatten-time PII detection is also skipped.
 1.6   2026-06-12   New 'destinations' subcommand: lists every destination with
                    its verification tier (core / emulator / cloud).
+1.7   2026-06-13   Per-source run_id so --parallel files no longer collapse
+                   onto one run-state file; chunk loads honor configured
+                   if_exists/natural_keys (idempotent/exactly-once resume,
+                   with an at-least-once warning when keyless); database
+                   sources stream via DatabaseExtractor.chunks() instead of
+                   loading the whole table into memory.
 """
 
 import argparse
@@ -217,6 +223,43 @@ def _extract_source(source, config, gov):
     return df
 
 
+def _iter_source_chunks(source, config, gov, chunk_size):
+    """Yield source data in chunks, streaming for every source type.
+
+    - database  → DatabaseExtractor.chunks() (server-side pagination, never
+      materializes the whole table)
+    - file      → Extractor.chunks() (native chunked reader)
+    - REST API  → a single in-memory batch (REST has no streaming
+      abstraction here; responses are expected to be bounded)
+    """
+    from pipeline.logging_setup import timed_operation
+    source_str = str(source)
+
+    if source_str.startswith("db:") or config.get("source_type") == "database":
+        from pipeline.extractors import DatabaseExtractor
+        db_ext = DatabaseExtractor(gov)
+        db_cfg = config.get("source", config)
+        query = db_cfg.get("query") or config.get("query")
+        table = db_cfg.get("table") or source_str.removeprefix("db:")
+        schema = db_cfg.get("schema")
+        with timed_operation("extract:database:stream"):
+            yield from db_ext.chunks(
+                db_cfg, query=query,
+                table=table if not query else None,
+                schema=schema, chunk_size=chunk_size,
+            )
+
+    elif source_str.startswith("api:") or config.get("source_type") == "rest_api":
+        df = _extract_source(source, config, gov)
+        if not df.empty:
+            yield df
+
+    else:
+        from pipeline.extract import Extractor
+        extractor = Extractor(gov)
+        yield from extractor.chunks(source_str, chunk_size=chunk_size)
+
+
 _transform_config_cache: dict | None = None
 
 
@@ -248,7 +291,11 @@ def _transform_chunk(chunk, args, config, gov):
 
 
 def _make_loader(args, config, gov):
-    """Instantiate the destination loader."""
+    """Instantiate the destination loader.
+
+    Returns (loader, uses_mongo) — the Mongo loader has a
+    ``load(df, cfg, collection)`` signature with no if_exists/natural_keys.
+    """
     from pipeline.loaders import resolve_loader, validate_loader_config
 
     destination = args.destination
@@ -256,8 +303,10 @@ def _make_loader(args, config, gov):
     validate_loader_config(destination, config, table_name)
     loader_class, needs_db_type, uses_mongo = resolve_loader(destination)
     if needs_db_type:
-        return loader_class(gov, db_type=destination, dry_run=args.dry_run)
-    return loader_class(gov, dry_run=args.dry_run)
+        loader = loader_class(gov, db_type=destination, dry_run=args.dry_run)
+    else:
+        loader = loader_class(gov, dry_run=args.dry_run)
+    return loader, uses_mongo
 
 
 def _run_chunked(
@@ -267,7 +316,6 @@ def _run_chunked(
     state_manager=None,
 ) -> None:
     """Process source in chunks: extract → transform → load → checkpoint per chunk."""
-    from pipeline.extract import Extractor
     from pipeline.logging_setup import timed_operation
 
     chunk_size = getattr(args, "chunk_size", 50_000)
@@ -294,77 +342,69 @@ def _run_chunked(
                 rows_already_loaded,
             )
 
-    loader = _make_loader(args, config, gov)
+    loader, uses_mongo = _make_loader(args, config, gov)
 
-    source_str = str(source)
-    if source_str.startswith("db:") or source_str.startswith("api:") or \
-       config.get("source_type") in ("database", "rest_api"):
-        # Non-file sources: extract all then chunk in memory
-        metrics.start_stage("extract")
-        df = _extract_source(source, config, gov)
-        metrics.end_stage("extract", rows=len(df))
+    # Honor upsert keys from config so each chunk load is idempotent: a
+    # crash between load and checkpoint re-runs that chunk on resume, and
+    # without keys (plain append) the re-run DUPLICATES rows. With
+    # natural_keys the per-chunk upsert makes resume exactly-once.
+    if_exists = config.get("if_exists", "append")
+    natural_keys = config.get("natural_keys")
+    if natural_keys and if_exists == "append":
+        if_exists = "upsert"
 
-        if df.empty:
-            logger.warning("No data extracted from %s.", source)
-            return
+    def _load_chunk(chunk_df):
+        if uses_mongo:
+            # Mongo signature: load(df, cfg, collection) — no if_exists.
+            loader.load(chunk_df, config, table_name)
+        else:
+            loader.load(chunk_df, config, table_name,
+                        if_exists=if_exists, natural_keys=natural_keys)
 
-        total_rows = rows_already_loaded
-        n_chunks = (len(df) + chunk_size - 1) // chunk_size
+    if resume_from_chunk >= 0 and not natural_keys and \
+            if_exists == "append" and not uses_mongo:
+        logger.warning(
+            "[CHECKPOINT] Resuming an append-mode load with no natural_keys: "
+            "the chunk interrupted by the crash will be re-loaded, which can "
+            "DUPLICATE its rows (at-least-once). Configure 'natural_keys' for "
+            "exactly-once resume."
+        )
 
-        for i in range(n_chunks):
-            if i <= resume_from_chunk:
-                logger.info("[CHECKPOINT] Skipping chunk %d (already processed).", i)
-                continue
+    # One streaming loop for every source type — never load the whole
+    # dataset into memory.  Database sources stream via
+    # DatabaseExtractor.chunks() (previously they loaded the entire table
+    # then sliced in memory, OOMing on large tables and violating the
+    # streaming guarantee); file sources via Extractor.chunks(); REST APIs
+    # yield a single in-memory batch (no streaming pagination abstraction).
+    total_rows = rows_already_loaded
+    chunk_idx = 0
 
-            chunk = df.iloc[i * chunk_size:(i + 1) * chunk_size].copy()
-            chunk = _transform_chunk(chunk, args, config, gov)
-
-            with timed_operation(f"load:{destination}:chunk_{i}"):
-                loader.load(chunk, config, table_name)
-
-            total_rows += len(chunk)
-            state_manager.save_checkpoint(gov, str(source), table_name, i, total_rows)
-
-            if state_manager and run_state:
-                state_manager.update_chunk(run_state.run_id, i, total_rows)
-
-            logger.info(
-                "[PIPELINE] Chunk %d/%d loaded — %d rows total.",
-                i + 1, n_chunks, total_rows,
-            )
-    else:
-        # File source: use native chunked reader
-        extractor = Extractor(gov)
-        metrics.start_stage("extract")
-
-        total_rows = rows_already_loaded
-        chunk_idx = 0
-
-        for chunk in extractor.chunks(str(source), chunk_size=chunk_size):
-            if chunk_idx <= resume_from_chunk:
-                logger.info("[CHECKPOINT] Skipping chunk %d (already processed).", chunk_idx)
-                chunk_idx += 1
-                continue
-
-            metrics.end_stage("extract", rows=len(chunk))
-
-            chunk = _transform_chunk(chunk, args, config, gov)
-
-            with timed_operation(f"load:{destination}:chunk_{chunk_idx}"):
-                loader.load(chunk, config, table_name)
-
-            total_rows += len(chunk)
-            state_manager.save_checkpoint(gov, str(source), table_name, chunk_idx, total_rows)
-
-            if state_manager and run_state:
-                state_manager.update_chunk(run_state.run_id, chunk_idx, total_rows)
-
-            logger.info(
-                "[PIPELINE] Chunk %d loaded — %d rows total.",
-                chunk_idx + 1, total_rows,
-            )
+    metrics.start_stage("extract")
+    for chunk in _iter_source_chunks(source, config, gov, chunk_size):
+        if chunk_idx <= resume_from_chunk:
+            logger.info("[CHECKPOINT] Skipping chunk %d (already processed).", chunk_idx)
             chunk_idx += 1
-            metrics.start_stage("extract")
+            continue
+
+        metrics.end_stage("extract", rows=len(chunk))
+
+        chunk = _transform_chunk(chunk, args, config, gov)
+
+        with timed_operation(f"load:{destination}:chunk_{chunk_idx}"):
+            _load_chunk(chunk)
+
+        total_rows += len(chunk)
+        state_manager.save_checkpoint(gov, str(source), table_name, chunk_idx, total_rows)
+
+        if state_manager and run_state:
+            state_manager.update_chunk(run_state.run_id, chunk_idx, total_rows)
+
+        logger.info(
+            "[PIPELINE] Chunk %d loaded — %d rows total.",
+            chunk_idx + 1, total_rows,
+        )
+        chunk_idx += 1
+        metrics.start_stage("extract")
 
     state_manager.clear_checkpoint(str(source), table_name)
     logger.info("[PIPELINE] All chunks loaded — %d rows total.", total_rows)
@@ -390,8 +430,16 @@ def _run_single_file(source, args, config, gov, metrics) -> None:
     from pipeline.run_state import RunStateManager, RunState
 
     state_manager = RunStateManager()
+    # Per-source run_id: in --parallel mode every worker shares one gov
+    # (one pipeline_id), so keying the run-state file on pipeline_id alone
+    # made all files write the same {run_id}.json — racing and leaving
+    # every file but one unrecoverable on crash. A deterministic per-source
+    # suffix gives each file its own resumable run-state.
+    import hashlib
+    source_tag = hashlib.sha1(str(source).encode("utf-8")).hexdigest()[:8]
+    per_source_run_id = f"{gov.run_context.pipeline_id}_{source_tag}"
     run_state = RunState(
-        run_id=gov.run_context.pipeline_id,
+        run_id=per_source_run_id,
         source=str(source),
         destination=args.destination,
         table=args.table,

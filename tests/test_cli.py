@@ -281,7 +281,11 @@ class TestSubcommandHandlers(unittest.TestCase):
 
         mock_rsm.save_start.assert_called_once()
         mock_chunked.assert_called_once()
-        mock_rsm.mark_complete.assert_called_once_with("test-abc-123")
+        # run_id is now per-source (pipeline_id + source hash) so parallel
+        # files don't collide on one run-state file.
+        mock_rsm.mark_complete.assert_called_once()
+        completed_id = mock_rsm.mark_complete.call_args[0][0]
+        self.assertTrue(completed_id.startswith("test-abc-123_"))
 
 
 class TestResumeCarriesRowTotal(unittest.TestCase):
@@ -320,7 +324,8 @@ class TestResumeCarriesRowTotal(unittest.TestCase):
         mock_extractor_cls.return_value.chunks.return_value = iter(
             [chunk_one, chunk_two]
         )
-        mock_make_loader.return_value = MagicMock()
+        # _make_loader now returns (loader, uses_mongo)
+        mock_make_loader.return_value = (MagicMock(), False)
         mock_verifier = mock_verifier_cls.return_value
         mock_verifier.verify_row_count.return_value = {"match": True}
 
@@ -346,6 +351,52 @@ class TestResumeCarriesRowTotal(unittest.TestCase):
         # Chunk 0 (100 rows, pre-crash) is skipped on resume; chunk 1 adds
         # 100 more. The verify comparison must see 200, not 100.
         self.assertEqual(len(verified_df), 200)
+
+
+class TestChunkLoadHonorsUpsertKeys(unittest.TestCase):
+    """Each chunk must load with the configured if_exists/natural_keys so a
+    crash-resume re-run of a chunk is idempotent (exactly-once), not a
+    duplicate append."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    @patch("pipeline.extract.Extractor")
+    @patch("pipeline.cli._make_loader")
+    @patch("pipeline.cli._transform_chunk", side_effect=lambda chunk, *a, **kw: chunk)
+    def test_natural_keys_become_per_chunk_upsert(
+        self, mock_transform, mock_make_loader, mock_extractor_cls,
+    ):
+        from pipeline.run_state import RunStateManager
+
+        gov = MagicMock()
+        metrics = MagicMock()
+        state_manager = RunStateManager(state_dir=Path(self.tmpdir) / "rs")
+
+        loader = MagicMock()
+        mock_make_loader.return_value = (loader, False)
+        mock_extractor_cls.return_value.chunks.return_value = iter(
+            [pd.DataFrame({"id": range(10)})]
+        )
+
+        args = argparse.Namespace(
+            source="data.csv", destination="postgresql", table="events",
+            config_path="", dry_run=False, skip_pii=True, verify=False,
+            transform_config=None, chunk_size=10,
+        )
+        config = {"natural_keys": ["id"]}
+
+        _run_chunked("data.csv", args, config, gov, metrics,
+                     state_manager=state_manager)
+
+        # The chunk load was issued as an idempotent upsert keyed on id.
+        loader.load.assert_called_once()
+        _, kwargs = loader.load.call_args
+        self.assertEqual(kwargs.get("if_exists"), "upsert")
+        self.assertEqual(kwargs.get("natural_keys"), ["id"])
 
 
 if __name__ == "__main__":
