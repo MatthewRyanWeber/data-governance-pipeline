@@ -49,6 +49,27 @@ jobs:
       - name: Type check with mypy
         run: python -m mypy pipeline/ --ignore-missing-imports
 
+  minimal-deps:
+    # Runs the loader tests with optional loader SDKs deliberately absent, so
+    # the deps-absent code path (mocked via _ensure_mock_module) is exercised.
+    # This catches the "from optional.submodule import X" class of bug that
+    # passes on a dev box only because the dep happens to be installed.
+    name: Loader tests (optional deps absent)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install base deps only (no optional loader SDKs)
+        run: |
+          pip install -e .
+          pip install pytest pandas pyarrow
+      - name: Run loader tests with optional deps blocked
+        run: >
+          python -m pytest tests/test_loaders -q --tb=short
+          -p scripts.block_optional_deps -m "not slow"
+
   integration:
     name: Real engines (${{ matrix.group.name }})
     runs-on: ubuntu-latest
