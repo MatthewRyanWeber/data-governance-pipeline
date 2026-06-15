@@ -17,6 +17,10 @@ Revision history
                    turned into a MASKED_ token (it inflated the non-null count
                    and diverged by reader null representation). Masked output is
                    now identical across compute engines.
+1.3   2026-06-15   Performance (output byte-identical): nested-column detection
+                   uses a fast infer_dtype pre-filter so all-string columns skip
+                   the per-cell scan; PII masking masks each DISTINCT value once
+                   and maps the rest (fewer SHA-256 calls, no per-cell apply).
 """
 
 import re
@@ -76,11 +80,28 @@ class Transformer:
     @staticmethod
     def _columns_containing_nested_values(df) -> list:
         """Object columns that actually hold dicts/lists — plain strings are skipped."""
-        return [
-            c for c in df.columns
-            if df[c].dtype == object
-            and df[c].dropna().apply(lambda x: isinstance(x, (dict, list))).any()
-        ]
+        import pandas as pd
+
+        out = []
+        for c in df.columns:
+            if df[c].dtype != object:
+                continue
+            series = df[c].dropna()
+            if series.empty:
+                continue
+            # Fast C-level pre-filter: an all-scalar column (e.g. every cell a
+            # string) cannot hold dict/list cells — infer_dtype returns
+            # 'string'/'bytes', never 'mixed' — so skip the per-cell isinstance
+            # scan that dominated profiling. A genuinely mixed column (which a
+            # dict/list cell forces) still gets the precise check. Output is
+            # identical; only flat data takes the cheap path.
+            if pd.api.types.infer_dtype(series, skipna=True) in (
+                "string", "unicode", "bytes", "empty",
+            ):
+                continue
+            if series.map(lambda x: isinstance(x, (dict, list))).any():
+                out.append(c)
+        return out
 
     @staticmethod
     def _flatten_df(df, obj_cols: list, flatten_kw: dict):
@@ -246,7 +267,13 @@ class Transformer:
                 # regardless of how the reader represents null (pandas NaN vs
                 # DuckDB None), so the compute engine can never change it.
                 present = df[field].notna()
-                df.loc[present, field] = df.loc[present, field].apply(mask_value)
+                col = df.loc[present, field]
+                # mask_value is deterministic per value, so mask each DISTINCT
+                # value once and vectorise the rest with .map — identical output,
+                # far fewer SHA-256 calls on repeated values, and no per-cell
+                # Python .apply loop.
+                token = {v: mask_value(v) for v in col.unique()}
+                df.loc[present, field] = col.map(token)
                 self.gov.pii_action(field, "MASKED")
                 self.pii_actions[field] = "MASKED"
             elif pii_strategy == "drop":
