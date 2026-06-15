@@ -49,7 +49,7 @@ class TestUpsertStagingUniqueness(unittest.TestCase):
         real_to_sql = pd.DataFrame.to_sql
 
         def spy_to_sql(self_df, name, *args, **kwargs):
-            if str(name).startswith("_upsert_staging_"):
+            if str(name).startswith("_dgp_stg_"):
                 seen.append(name)
             return real_to_sql(self_df, name, *args, **kwargs)
 
@@ -77,7 +77,7 @@ class TestUpsertStagingUniqueness(unittest.TestCase):
         loader = SQLLoader(_gov_with_run_id("run-123"), db_type="sqlite")
         self._capture_staging_names(loader)
         tables = inspect(self.engine).get_table_names()
-        leaked = [t for t in tables if t.startswith("_upsert_staging_")]
+        leaked = [t for t in tables if t.startswith("_dgp_stg_")]
         self.assertEqual(leaked, [], f"staging table leaked: {leaked}")
 
     def test_upsert_result_is_correct(self):
@@ -101,7 +101,7 @@ class TestUpsertStagingUniqueness(unittest.TestCase):
                 loader.load(bad_df, {"db_name": "x"}, "events",
                             natural_keys=["id"])
         tables = inspect(self.engine).get_table_names()
-        leaked = [t for t in tables if t.startswith("_upsert_staging_")]
+        leaked = [t for t in tables if t.startswith("_dgp_stg_")]
         self.assertEqual(leaked, [], f"staging table leaked: {leaked}")
 
 
