@@ -2166,14 +2166,14 @@ class TestNewDestinationLoaders(unittest.TestCase):
         self.gov._event.assert_called_once()
         self.assertIn("PARQUET_WRITE_COMPLETE", str(self.gov._event.call_args))
 
-    def test_parquet_table_param_used_as_filename(self):
+    def test_parquet_table_param_used_as_dataset_dir(self):
         import pathlib as _pl
         loader = ParquetLoader(self.gov)
-        # A bare table name becomes a "<table>.parquet" dataset directory of
-        # part files; write it under the temp dir and assert the layout.
+        # A bare table name (no suffix) becomes a dataset directory of parts,
+        # named exactly for the table — not "<table>.parquet".
         table = str(_pl.Path(self._tmp) / "employees")
         loader.load(self._df(), {}, table=table)
-        dataset = _pl.Path(self._tmp) / "employees.parquet"
+        dataset = _pl.Path(self._tmp) / "employees"
         self.assertTrue(dataset.is_dir())
         self.assertEqual(len(list(dataset.glob("part-*.parquet"))), 1)
 

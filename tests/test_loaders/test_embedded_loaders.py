@@ -121,9 +121,11 @@ class TestParquetLoaderRoundTrip(unittest.TestCase):
         self.assertEqual(list(back.columns), ["id", "name"])
 
     def test_path_derived_from_table(self):
-        path = Path(self.tmp) / "mytable.parquet"
-        self.loader.load(_df(), {}, table=str(Path(self.tmp) / "mytable"))
-        self.assertTrue(path.exists())
+        # A bare table name (no .parquet suffix) becomes a dataset directory.
+        dataset = Path(self.tmp) / "mytable"
+        self.loader.load(_df(), {}, table=str(dataset))
+        self.assertTrue(dataset.is_dir())
+        self.assertEqual(len(list(dataset.glob("part-*.parquet"))), 1)
 
     def test_partitioned_write(self):
         root = str(Path(self.tmp) / "dataset")
@@ -164,24 +166,50 @@ class TestParquetLoaderRoundTrip(unittest.TestCase):
         self.assertEqual(len(back), 5)
         self.assertEqual(sorted(back["id"]), [1, 2, 3, 4, 5])
 
-    def test_write_failure_does_not_corrupt_existing_dataset(self):
-        # A failed part write must leave the existing dataset intact and add no
-        # readable or leftover part — each chunk is its own atomic part file.
+    def test_single_file_write_failure_does_not_corrupt(self):
+        # A .parquet path is a single file. A failed write must leave the prior
+        # file byte-for-byte intact (atomic temp+replace) and drop no temp.
         import pyarrow.parquet as pq
 
         path = str(Path(self.tmp) / "safe.parquet")
         self.loader.load(_df(), {"path": path}, if_exists="append")
-        self.assertEqual(sorted(pd.read_parquet(path)["id"]), [1, 2, 3])
+        original = Path(path).read_bytes()
 
-        with mock.patch.object(
-                pq, "write_table", side_effect=OSError("simulated disk failure")):
+        real_write = pq.write_table
+
+        def boom(table, where, *a, **k):
+            real_write(table, where, *a, **k)  # write the temp sibling first
+            raise OSError("simulated disk failure")  # ...then fail before replace
+
+        with mock.patch.object(pq, "write_table", side_effect=boom):
             with self.assertRaises(OSError):
                 self.loader.load(pd.DataFrame({"id": [9], "name": ["z"]}),
                                  {"path": path}, if_exists="append")
 
-        # Prior parts untouched; the failed write left no temp or partial part.
+        self.assertEqual(Path(path).read_bytes(), original)
         self.assertEqual(sorted(pd.read_parquet(path)["id"]), [1, 2, 3])
-        self.assertEqual(list(Path(path).glob("*.tmp-*")), [])
+        self.assertEqual(list(Path(self.tmp).glob("safe.parquet.tmp-*")), [])
+
+    def test_dataset_mode_writes_one_part_per_call(self):
+        # A directory path (no suffix) writes one atomic part per call: O(1).
+        path = str(Path(self.tmp) / "events")
+        self.loader.load(_df(), {"path": path}, if_exists="append")
+        self.loader.load(pd.DataFrame({"id": [4, 5], "name": ["d", "e"]}),
+                         {"path": path}, if_exists="append")
+        self.assertTrue(Path(path).is_dir())
+        self.assertEqual(len(list(Path(path).glob("part-*.parquet"))), 2)
+        self.assertEqual(sorted(pd.read_parquet(path)["id"]), [1, 2, 3, 4, 5])
+
+    def test_compact_consolidates_dataset_parts(self):
+        path = str(Path(self.tmp) / "events")
+        self.loader.load(_df(), {"path": path}, if_exists="append")
+        self.loader.load(pd.DataFrame({"id": [4], "name": ["d"]}),
+                         {"path": path}, if_exists="append")
+        self.assertEqual(len(list(Path(path).glob("part-*.parquet"))), 2)
+        rows = ParquetLoader.compact(path)
+        self.assertEqual(rows, 4)
+        self.assertEqual(len(list(Path(path).glob("part-*.parquet"))), 1)
+        self.assertEqual(sorted(pd.read_parquet(path)["id"]), [1, 2, 3, 4])
 
 
 class TestSQLLoaderSQLiteRoundTrip(unittest.TestCase):
