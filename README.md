@@ -188,6 +188,9 @@ data flow, module map, and extension guide.
 
 **Data observability**
 - Freshness monitoring, volume anomaly detection, distribution drift alerts
+- Null-spike detection on critical fields; **business-key duplicate detection**
+  (catches same-key-different-timestamp duplicates that row counts and full-row
+  dedup miss — configure `observability.business_keys`)
 - Column-level data lineage graph with HTML visualisation
 - Quality scoring, anomaly alerts, SLA monitoring, run metrics
 - Prometheus `/metrics/prometheus` endpoint for scraping, plus Grafana dashboard export
@@ -350,7 +353,7 @@ data-governance-pipeline/
 |   +-- security/                     # RBAC access policies
 |   |   +-- access_policy.py
 |   +-- monitoring/                   # SLA, metrics, observability
-|   |   +-- observability.py          # Freshness, volume, drift
+|   |   +-- observability.py          # Freshness, volume, drift, null-spike, dup-keys
 |   |   +-- sla_monitor.py
 |   |   +-- metrics_collector.py
 |   +-- lineage/                      # OpenLineage event emitter

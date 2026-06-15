@@ -25,6 +25,10 @@ Revision history
                    observe() (df[col] -> DataFrame); tolerate history records
                    without row_count in volume check; a critical field that
                    both spikes and breaches the floor now reports HIGH.
+1.7   2026-06-15   Add business-key duplicate detection: a declared key that
+                   repeats (same key, differing timestamps) is flagged even
+                   though row counts and full-row dedup miss it; a rising
+                   duplicate rate vs the previous run escalates to HIGH.
 """
 
 import json
@@ -55,6 +59,8 @@ OBSERVER_CONFIG_KEYS = (
     "freshness_threshold_hours",
     "volume_change_threshold",
     "drift_threshold",
+    "business_keys",
+    "duplicate_key_spike",
 )
 
 
@@ -79,6 +85,8 @@ class DataObserver:
         critical_fields: list[str] | None = None,
         null_spike_threshold: float = 0.2,
         null_absolute_floor: float = 0.5,
+        business_keys: list[str] | None = None,
+        duplicate_key_spike: float = 0.01,
         dry_run: bool = False,
     ) -> None:
         self.gov = gov
@@ -95,6 +103,13 @@ class DataObserver:
         self.critical_fields = list(critical_fields or [])
         self.null_spike_threshold = null_spike_threshold
         self.null_absolute_floor = null_absolute_floor
+        # Columns forming a business/natural key that MUST be unique. Catches
+        # same-key duplicates (e.g. a source resending events with a fresh
+        # timestamp) that row-count reconciliation and full-row dedup miss.
+        self.business_keys = list(business_keys or [])
+        # A rise in the duplicate-key rate beyond this vs the previous run is
+        # flagged HIGH — catches a source that *starts* duplicating.
+        self.duplicate_key_spike = duplicate_key_spike
         self.dry_run = dry_run
         self._lock = threading.Lock()
 
@@ -164,6 +179,9 @@ class DataObserver:
         null_alerts = self._check_null_spikes(df, previous, null_rates)
         alerts.extend(null_alerts)
 
+        dup_alerts, duplicate_key_rate = self._check_duplicate_keys(df, previous)
+        alerts.extend(dup_alerts)
+
         report = {
             "dataset": dataset,
             "row_count": len(df),
@@ -172,6 +190,9 @@ class DataObserver:
             "alert_count": len(alerts),
             "observed_utc": datetime.now(timezone.utc).isoformat(),
         }
+        if duplicate_key_rate is not None:
+            # Persisted so next run can detect a *rising* duplicate rate.
+            report["duplicate_key_rate"] = duplicate_key_rate
 
         # Compute column stats here so _save_observation stays I/O-only.
         # null_rate is tracked for EVERY column (it drives null-spike
@@ -405,6 +426,61 @@ class DataObserver:
                 })
 
         return alerts
+
+    def _check_duplicate_keys(
+        self, df: "pd.DataFrame", previous: dict | None,
+    ) -> tuple[list[dict], float | None]:
+        """Detect duplicate business keys — the failure row counts can't see.
+
+        A declared business/natural key must be unique. A source that resends
+        events with the same key but a *different* timestamp produces rows that
+        are NOT full-row duplicates and do NOT change the source row count, so
+        full-row dedup, the uniqueness quality score, and source↔dest
+        reconciliation all pass while wrong data flows to gold. This checks the
+        key directly. Returns (alerts, duplicate_key_rate) — the rate is
+        persisted so the next run can detect a *rising* duplicate rate (a
+        source that just started duplicating).
+        """
+        if not self.business_keys:
+            return [], None
+
+        missing = [k for k in self.business_keys if k not in df.columns]
+        if missing:
+            return [{
+                "type": "DUPLICATE_KEYS",
+                "severity": "HIGH",
+                "message": f"Business key column(s) {missing} absent from the data",
+                "business_keys": self.business_keys,
+                "missing": missing,
+            }], None
+
+        distinct = len(df.drop_duplicates(subset=self.business_keys))
+        dup_count = len(df) - distinct
+        dup_rate = round(dup_count / len(df), 6) if len(df) else 0.0
+        prev_rate = previous.get("duplicate_key_rate") if previous else None
+
+        if dup_count == 0:
+            return [], dup_rate
+
+        # A business key is duplicated at all — a real violation. Escalate to
+        # HIGH when the rate also rose sharply vs the last run (a source that
+        # *started* duplicating), so a slow-creeping break still stands out.
+        jumped = prev_rate is not None and dup_rate - prev_rate > self.duplicate_key_spike
+        message = (
+            f"{dup_count} duplicate row(s) on business key {self.business_keys} "
+            f"({dup_rate:.1%} of rows) — same key, likely differing timestamps"
+        )
+        if jumped:
+            message += f"; duplicate rate rose from {prev_rate:.1%} to {dup_rate:.1%}"
+        return [{
+            "type": "DUPLICATE_KEYS",
+            "severity": "HIGH" if (jumped or dup_rate > 0.05) else "MEDIUM",
+            "message": message,
+            "business_keys": self.business_keys,
+            "duplicate_count": dup_count,
+            "duplicate_rate": dup_rate,
+            "prev_duplicate_rate": prev_rate,
+        }], dup_rate
 
     def _save_observation(self, report: dict) -> None:
         """Persist observation to JSONL history. Skipped when dry_run."""

@@ -367,6 +367,62 @@ class TestDataObserver(unittest.TestCase):
         self.assertEqual(len(spikes), 1)
         self.assertEqual(spikes[0]["severity"], "HIGH")
 
+    def test_duplicate_business_key_detected(self):
+        # Same business key, DIFFERENT timestamp -> not a full-row dup, row
+        # count unchanged, but a business-key violation that must be caught.
+        obs = DataObserver(
+            self.gov, history_file=self.history_file, business_keys=["order_id"],
+        )
+        df = self.pd.DataFrame({
+            "order_id": [1, 2, 2, 3],
+            "ts": ["t1", "t2", "t2b", "t3"],  # row 3 dupes order_id 2
+        })
+        report = obs.observe(df, dataset="dup_test")
+        dups = [a for a in report["alerts"] if a["type"] == "DUPLICATE_KEYS"]
+        self.assertEqual(len(dups), 1)
+        self.assertEqual(dups[0]["duplicate_count"], 1)
+        self.assertEqual(report["duplicate_key_rate"], 0.25)
+
+    def test_no_duplicate_alert_when_keys_unique(self):
+        obs = DataObserver(
+            self.gov, history_file=self.history_file, business_keys=["order_id"],
+        )
+        df = self.pd.DataFrame({"order_id": [1, 2, 3], "ts": ["a", "b", "c"]})
+        report = obs.observe(df, dataset="uniq_test")
+        dups = [a for a in report["alerts"] if a["type"] == "DUPLICATE_KEYS"]
+        self.assertEqual(len(dups), 0)
+        self.assertEqual(report["duplicate_key_rate"], 0.0)
+
+    def test_rising_duplicate_rate_escalates_to_high(self):
+        obs = DataObserver(
+            self.gov, history_file=self.history_file,
+            business_keys=["order_id"], duplicate_key_spike=0.01,
+        )
+        prev = {
+            "dataset": "rise", "row_count": 4, "column_count": 1, "alerts": [],
+            "alert_count": 0,
+            "observed_utc": datetime.now(timezone.utc).isoformat(),
+            "duplicate_key_rate": 0.0,
+        }
+        with open(self.history_file, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(prev) + "\n")
+        # A source that just started duplicating: 0% -> 50%.
+        df = self.pd.DataFrame({"order_id": [1, 1, 2, 2]})
+        report = obs.observe(df, dataset="rise")
+        dups = [a for a in report["alerts"] if a["type"] == "DUPLICATE_KEYS"]
+        self.assertEqual(len(dups), 1)
+        self.assertEqual(dups[0]["severity"], "HIGH")
+
+    def test_missing_business_key_alerts(self):
+        obs = DataObserver(
+            self.gov, history_file=self.history_file, business_keys=["order_id"],
+        )
+        df = self.pd.DataFrame({"name": ["a", "b"]})
+        report = obs.observe(df, dataset="missing_bk")
+        dups = [a for a in report["alerts"] if a["type"] == "DUPLICATE_KEYS"]
+        self.assertEqual(len(dups), 1)
+        self.assertIn("order_id", dups[0]["missing"])
+
     def test_observer_config_keys_match_constructor(self):
         # The CLI forwards config via OBSERVER_CONFIG_KEYS; if a constructor
         # parameter is renamed, this pins the drift to a CI failure instead
