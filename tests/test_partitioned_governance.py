@@ -63,6 +63,22 @@ class TestPartitionedGovernance(unittest.TestCase):
         # Re-open from disk and verify — no reliance on in-memory state.
         self.assertTrue(PartitionedLedger(self.root).verify())
 
+    def test_observe_config_runs_detectors_per_partition(self):
+        led = PartitionedLedger(self.root)
+        # A partition with a duplicate business key (same order_id) — the
+        # silent-failure detector must fire and chain into this segment.
+        df = pd.DataFrame({
+            "order_id": [1, 2, 2, 3],
+            "email": [f"u{i}@example.com" for i in range(4)],
+        })
+        out, meta = govern_partition(
+            df, "part-0000", led, observe_config={"business_keys": ["order_id"]},
+        )
+        self.assertGreaterEqual(meta["observe_alerts"], 1)
+        # The DUPLICATE_KEYS governance event is in the partition's own segment.
+        seg_file = self.root / "segment-part-0000.jsonl"
+        self.assertIn("DUPLICATE_KEYS", seg_file.read_text(encoding="utf-8"))
+
     def test_tampering_one_partition_breaks_the_whole_root(self):
         led = PartitionedLedger(self.root)
         govern_partitions(

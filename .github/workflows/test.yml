@@ -85,7 +85,7 @@ jobs:
           - name: sql-engines
             paths: tests/integration/test_container_sql_engines.py
           - name: streams-vector
-            paths: tests/integration/test_container_streams_files.py tests/integration/test_container_vector_engines.py
+            paths: tests/integration/test_container_streams_files.py tests/integration/test_container_vector_engines.py tests/integration/test_partitioned_ledger_object_store.py
           - name: emulators
             paths: tests/integration/test_emulator_engines.py
           - name: heavy

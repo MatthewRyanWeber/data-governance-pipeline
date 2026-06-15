@@ -30,6 +30,8 @@ Layer 3 — composes governance_logger, transform, partitioned_ledger.
 Revision history
 ────────────────
 1.0   2026-06-15   Initial release: govern_partition + a concurrent coordinator.
+1.1   2026-06-15   Optional observe_config runs the DataObserver per partition
+                   (dup-key / null-spike detectors) into the partition's segment.
 """
 
 import logging
@@ -50,6 +52,7 @@ def govern_partition(
     *,
     pii_strategy: str = "mask",
     skip_pii: bool = False,
+    observe_config: dict | None = None,
     dry_run: bool = False,
 ):
     """Govern ONE partition independently and write its audit chain to a segment.
@@ -58,7 +61,14 @@ def govern_partition(
     mutable state with other partitions — its events go to its own ledger
     segment (a distinct file), and its ancillary reports to its own log dir.
 
-    Returns (governed_df, meta) where meta carries the segment id and row count.
+    ``observe_config`` (an observability config block — business_keys,
+    critical_fields, …) runs the DataObserver on the governed partition, so the
+    silent-failure detectors (duplicate business keys, null spikes/floors) cover
+    each partition and their alerts chain into the partition's segment. The
+    absolute checks (dup-keys, null-floor) act per partition immediately;
+    baseline checks (volume/drift) build per-partition history.
+
+    Returns (governed_df, meta).
     """
     from pipeline.governance_logger import GovernanceLogger
     from pipeline.transform import Transformer
@@ -77,11 +87,21 @@ def govern_partition(
     transformer = Transformer(gov)
     governed = transformer.transform(df, pii_findings, pii_strategy, drop_cols=[])
 
+    observe_alerts = 0
+    if observe_config:
+        from pipeline.monitoring.observability import DataObserver, OBSERVER_CONFIG_KEYS
+        observer = DataObserver(
+            gov, dry_run=dry_run,
+            **{k: observe_config[k] for k in OBSERVER_CONFIG_KEYS if k in observe_config},
+        )
+        observe_alerts = observer.observe(governed, dataset=segment_id)["alert_count"]
+
     return governed, {
         "segment_id": segment_id,
         "rows_in": len(df),
         "rows_out": len(governed),
         "pii_actions": dict(transformer.pii_actions),
+        "observe_alerts": observe_alerts,
     }
 
 
