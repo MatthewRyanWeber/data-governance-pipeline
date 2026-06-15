@@ -15,6 +15,9 @@ all of these; each audience has one or two relevant docs.
 1. [GOVERNANCE.md](GOVERNANCE.md) — the regulation → code → artifact map.
    For each GDPR/CCPA/HIPAA obligation: the API that satisfies it and the
    audit artifact it produces, with real ledger output.
+2. [examples/sample_run/](../examples/sample_run/) — the **actual artifacts**
+   of a real run (hash-chained ledger + anchor, PII-masked events, metrics),
+   committed as evidence, with a snippet to verify the chain yourself.
 2. [CLOUD_VERIFICATION.md](CLOUD_VERIFICATION.md) — the log of which cloud
    destinations have been verified against the live service, and how the
    weekly verification stays green without spamming.

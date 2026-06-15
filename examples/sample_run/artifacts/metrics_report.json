@@ -1,0 +1,17 @@
+{
+  "total_duration_sec": 1.21,
+  "rows_input": 0,
+  "rows_output": 0,
+  "rows_dlq": 0,
+  "error_rate": 0.0,
+  "overall_rows_per_sec": 0.0,
+  "stages": {
+    "extract": {
+      "start": 395728.0890597,
+      "duration_sec": null,
+      "rows": 0
+    }
+  },
+  "pipeline_id": "6fed9b42-965a-4ce5-8957-38c73f4a3960",
+  "generated_utc": "2026-06-15T01:18:49.498420+00:00"
+}

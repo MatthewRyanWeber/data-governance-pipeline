@@ -1,0 +1,1 @@
+{"db_name": "customers.db", "observability": {"critical_fields": ["email"], "null_absolute_floor": 0.5}}
