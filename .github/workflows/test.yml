@@ -61,11 +61,14 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      - name: Install base deps only (no optional loader SDKs)
+      - name: Install deps (test infra present; loader SDKs hidden by the plugin)
         run: |
-          pip install -e .
-          pip install pytest pandas pyarrow
+          pip install -e ".[dev]"
+          pip install pyarrow duckdb paramiko boto3
       - name: Run loader tests with optional deps blocked
+        # The block_optional_deps plugin makes the optional loader SDKs
+        # un-importable at runtime, so the deps-absent path runs even though
+        # the test-infra deps (hypothesis, etc.) remain available.
         run: >
           python -m pytest tests/test_loaders -q --tb=short
           -p scripts.block_optional_deps -m "not slow"

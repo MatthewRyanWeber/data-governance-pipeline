@@ -75,6 +75,8 @@ class TestVerificationTiers(unittest.TestCase):
         # db_type must appear in some tests/integration file. Cloud and
         # experimental tiers are exempt (credential-gated / unproven by design).
         blobs = [p.read_text(encoding="utf-8") for p in _INTEGRATION_FILES if p.exists()]
+        if not blobs:
+            self.skipTest("integration test files not present in this tree")
         for db_type, tier in _VERIFICATION_TIER.items():
             if tier not in (TIER_CORE, TIER_EMULATOR):
                 continue
@@ -87,6 +89,10 @@ class TestVerificationTiers(unittest.TestCase):
                 f"real test or demote it to cloud/experimental.",
             )
 
+    @unittest.skipUnless(
+        _README.exists(),
+        "README.md not present in this tree (e.g. a minimal Docker image)",
+    )
     def test_readme_counts_match_registry(self):
         counts = Counter(_VERIFICATION_TIER.values())
         marker = (
