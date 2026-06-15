@@ -57,6 +57,12 @@ ledger.seal()
 assert ledger.verify()
 ```
 
+This exact flow is verified by `tests/integration/test_partitioned_governance_spark.py`
+(a real PySpark local-mode job: cloudpickled per-partition function, separate
+worker processes, segments composed into a verified Merkle root) and by a
+`ProcessPoolExecutor` test that proves the same isolation/serialization without
+a JVM.
+
 ### Local / non-distributed
 
 `govern_partitions(partitions, ledger)` is the reference coordinator — it fans

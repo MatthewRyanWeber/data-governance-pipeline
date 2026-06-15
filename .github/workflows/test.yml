@@ -90,6 +90,8 @@ jobs:
             paths: tests/integration/test_emulator_engines.py
           - name: heavy
             paths: tests/integration/test_container_heavy_engines.py
+          - name: spark
+            paths: tests/integration/test_partitioned_governance_spark.py
     steps:
       - uses: actions/checkout@v6
 
@@ -105,10 +107,21 @@ jobs:
           sudo apt-get update
           sudo ACCEPT_EULA=Y apt-get install -y msodbcsql18 unixodbc-dev
 
+      - name: Set up Java for Spark
+        if: matrix.group.name == 'spark'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
       - name: Install dependencies
         run: |
           pip install -e ".[dev,integration]"
           pip install "testcontainers[postgres,mysql,mongodb]" pymysql
+
+      - name: Install PySpark
+        if: matrix.group.name == 'spark'
+        run: pip install pyspark
 
       - name: Run real-engine integration tests
         # Docker is available on GitHub's Linux runners; testcontainers
