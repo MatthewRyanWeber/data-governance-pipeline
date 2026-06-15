@@ -287,7 +287,10 @@ def _iter_source_chunks(source, config, gov, chunk_size):
 
     else:
         from pipeline.extract import Extractor
-        extractor = Extractor(gov)
+        # compute_engine="duckdb" reads delimited text via DuckDB's fast
+        # multithreaded reader; rows yielded are plain pandas, so governance
+        # downstream is unchanged. Defaults to pandas.
+        extractor = Extractor(gov, engine=config.get("compute_engine", "pandas"))
         yield from extractor.chunks(source_str, chunk_size=chunk_size)
 
 

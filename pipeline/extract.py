@@ -13,6 +13,9 @@ Revision history
 1.0   2026-06-07   Initial release.
 1.1   2026-06-08   Refactored if/elif dispatch into _FORMAT_REGISTRY.
 1.2   2026-06-09   Consolidated chunks() via _CHUNK_READERS dict.
+1.3   2026-06-15   Opt-in DuckDB fast path for chunked CSV/TSV reads (engine=
+                   "duckdb"): multithreaded vectorized read streamed as pandas
+                   chunks, so governance downstream is unchanged. pandas default.
 """
 
 import io
@@ -23,7 +26,7 @@ from typing import TYPE_CHECKING, Callable, Iterator, Optional
 
 from pipeline.compression import CompressionHandler
 from pipeline.constants import (
-    DEFAULT_CHUNK_SIZE, HAS_AVRO, HAS_ORC, HAS_PYARROW, HAS_YAML,
+    DEFAULT_CHUNK_SIZE, HAS_AVRO, HAS_DUCKDB, HAS_ORC, HAS_PYARROW, HAS_YAML,
 )
 from pipeline.helpers import flatten_record as _flatten_record
 
@@ -315,6 +318,7 @@ class Extractor:
         join_sep: str = ",",
         max_depth: int = 20,
         sep: str = "__",
+        engine: str = "pandas",
     ) -> None:
         self.gov = gov
         self._compressor = CompressionHandler()
@@ -322,6 +326,12 @@ class Extractor:
         self._join_sep = join_sep
         self._max_depth = max_depth
         self._sep = sep
+        # Compute engine for the chunked read fast path. "duckdb" reads CSV/TSV
+        # via DuckDB's multithreaded vectorized reader (faster on large files);
+        # the rows it yields are plain pandas, so every downstream governance
+        # stage is byte-for-byte unchanged. Falls back to pandas when DuckDB is
+        # absent or the format isn't supported on the fast path.
+        self.engine = engine if (engine == "duckdb" and HAS_DUCKDB) else "pandas"
 
     def _flatten_kw(self) -> dict:
         return {"separator": self._sep}
@@ -421,6 +431,33 @@ class Extractor:
         ".ndjson": lambda p, sz: __import__("pandas").read_json(p, lines=True, chunksize=sz),
     }
 
+    def _duckdb_text_chunks(self, path: str, real_ext: str, chunk_size: int) -> Iterator:
+        """Stream a CSV/TSV via DuckDB's multithreaded reader as pandas chunks.
+
+        delim is internal (',' or '\\t'), never user input; the path is bound as
+        a parameter. Each Arrow batch becomes a pandas chunk so the governance
+        pipeline downstream is unchanged.
+        """
+        import duckdb
+
+        delim = "\t" if real_ext == ".tsv" else ","
+        con = duckdb.connect()
+        try:
+            query = f"SELECT * FROM read_csv_auto(?, delim='{delim}', header=TRUE)"
+            reader = con.execute(query, [path]).to_arrow_reader(chunk_size)
+            i = 0
+            for batch in reader:
+                chunk = batch.to_pandas()
+                if chunk.empty:
+                    continue
+                self.gov.extract_event("CHUNK_EXTRACTED", {
+                    "chunk_index": i, "rows": len(chunk), "engine": "duckdb",
+                })
+                yield chunk
+                i += 1
+        finally:
+            con.close()
+
     def chunks(self, path: str, chunk_size: int = DEFAULT_CHUNK_SIZE) -> Iterator:
         """Yield the source file in row-count chunks."""
         real_ext = self._compressor.inner_extension(path)
@@ -428,6 +465,14 @@ class Extractor:
         self.gov.extract_event("CHUNKED_EXTRACT_START", {
             "source": path, "chunk_size": chunk_size,
         })
+
+        # DuckDB fast path for delimited text: multithreaded, vectorized read
+        # streamed as Arrow batches -> pandas. Governance runs on identical
+        # pandas downstream. Only engaged when explicitly selected.
+        if (self.engine == "duckdb" and not is_compressed
+                and real_ext in (".csv", ".tsv")):
+            yield from self._duckdb_text_chunks(path, real_ext, chunk_size)
+            return
 
         reader_factory = self._CHUNK_READERS.get(real_ext) if not is_compressed else None
         if reader_factory is not None:

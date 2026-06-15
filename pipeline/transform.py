@@ -13,6 +13,10 @@ Revision history
                    nested PII (user → user__email) is masked; flatten_nested
                    honours its sep/max_level parameters and only processes
                    columns that actually contain dicts/lists.
+1.2   2026-06-15   Masking skips null cells — a missing PII value is no longer
+                   turned into a MASKED_ token (it inflated the non-null count
+                   and diverged by reader null representation). Masked output is
+                   now identical across compute engines.
 """
 
 import re
@@ -236,7 +240,13 @@ class Transformer:
 
         for field in {f["field"]: f for f in pii_findings if f["field"] in df.columns}:
             if pii_strategy == "mask":
-                df[field] = df[field].apply(mask_value)
+                # Mask only present values: masking a null/absent cell would
+                # fabricate a token for data that isn't there (and inflate the
+                # non-null count) — and it makes the masked output identical
+                # regardless of how the reader represents null (pandas NaN vs
+                # DuckDB None), so the compute engine can never change it.
+                present = df[field].notna()
+                df.loc[present, field] = df.loc[present, field].apply(mask_value)
                 self.gov.pii_action(field, "MASKED")
                 self.pii_actions[field] = "MASKED"
             elif pii_strategy == "drop":
