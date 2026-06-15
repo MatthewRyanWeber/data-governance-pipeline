@@ -9,6 +9,12 @@ Revision history
                    referencing __noop__; SQLAlchemy engines disposed via
                    _engine_scope.
 1.2   2026-06-12   Loader contract: dry-run returns 0 (was None); keyless upsert raises via _require_upsert_keys (was silent append).
+1.3   2026-06-14   R-2: _upsert drops the stage in finally so a MERGE failure no
+                   longer leaks the staging table permanently. R-1: _s3_copy no
+                   longer falls back to append-on-error (re-append duplicated the
+                   frame); the COPY error propagates in the append case while the
+                   'replace' stage-copy keeps the safe fallback. R-3: staging
+                   table name and S3 key bound to the 127-char Redshift limit.
 """
 
 import os
@@ -25,6 +31,11 @@ if TYPE_CHECKING:
     from pipeline.governance_logger import GovernanceLogger
 
 logger = logging.getLogger(__name__)
+
+# Redshift identifiers cap at 127 chars. The staging table appends
+# "__stage__<epoch>" (~18 chars) to the table name, so bound the table
+# portion well under the limit to leave room for the suffix and quoting.
+_MAX_STAGE_TABLE_LEN = 100
 
 
 class RedshiftLoader(BaseLoader):
@@ -122,7 +133,10 @@ class RedshiftLoader(BaseLoader):
         bucket = cfg["s3_bucket"]
         prefix = cfg.get("s3_prefix", "redshift_stage/")
         region = cfg.get("aws_region", "us-east-1")
-        key = f"{prefix}{table}_{int(time.time())}.csv.gz"
+        # Bound the table portion of the S3 key: an unbounded name (plus the
+        # downstream staging table built from it) can blow past Redshift's
+        # 127-char identifier limit on long table names.
+        key = f"{prefix}{table[:_MAX_STAGE_TABLE_LEN]}_{int(time.time())}.csv.gz"
 
         with tempfile.NamedTemporaryFile(suffix=".csv.gz", delete=False) as tmp:
             tmp_path = tmp.name
@@ -182,8 +196,22 @@ class RedshiftLoader(BaseLoader):
             logger.info("[REDSHIFT] COPY INTO %s -- %s rows", fqt, f"{len(df):,}")
 
         except Exception as exc:
-            logger.warning("[REDSHIFT] S3 COPY failed -- falling back to to_sql(): %s", exc)
-            self._sql_fallback(df, cfg, table, if_exists)
+            # A transient COPY failure in the append path may have already
+            # landed some rows; re-running to_sql(append) would duplicate the
+            # whole frame. Only the 'replace' stage-copy path (which truncates
+            # on write) can safely fall back — append must propagate.
+            if if_exists == "replace":
+                logger.warning(
+                    "[REDSHIFT] S3 COPY failed -- falling back to to_sql(): %s",
+                    exc,
+                )
+                self._sql_fallback(df, cfg, table, if_exists)
+            else:
+                logger.error(
+                    "[REDSHIFT] S3 COPY failed in append mode -- not falling "
+                    "back to avoid re-appending landed rows: %s", exc,
+                )
+                raise
         finally:
             cur.close()
             conn.close()
@@ -206,7 +234,9 @@ class RedshiftLoader(BaseLoader):
 
     def _upsert(self, df, cfg, table, natural_keys):
         schema = cfg.get("schema", "public")
-        tmp_table = f"{table}__stage__{int(time.time())}"
+        # Bound the table portion: an unbounded name + suffix can exceed
+        # Redshift's 127-char identifier limit.
+        tmp_table = f"{table[:_MAX_STAGE_TABLE_LEN]}__stage__{int(time.time())}"
         fqt = f'"{schema}"."{table}"'
         fqt_tmp = f'"{schema}"."{tmp_table}"'
 
@@ -250,7 +280,6 @@ class RedshiftLoader(BaseLoader):
                 WHEN NOT MATCHED THEN INSERT ({all_cols}) VALUES ({stage_cols})
             """
             cur.execute(merge_sql)
-            cur.execute(f"DROP TABLE IF EXISTS {fqt_tmp}")
             conn.commit()
             logger.info("[REDSHIFT] MERGE INTO %s -- %s rows", fqt, f"{len(df):,}")
             self.gov.transformation_applied(
@@ -259,6 +288,15 @@ class RedshiftLoader(BaseLoader):
                  "rows": len(df)},
             )
         finally:
+            # Drop the stage in finally so a MERGE failure cannot leak the
+            # staging table permanently; this DROP commits as its own unit.
+            try:
+                cur.execute(f"DROP TABLE IF EXISTS {fqt_tmp}")
+                conn.commit()
+            except Exception as exc:
+                logger.warning(
+                    "[REDSHIFT] Could not drop stage %s: %s", fqt_tmp, exc,
+                )
             cur.close()
             conn.close()
 

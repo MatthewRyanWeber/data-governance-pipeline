@@ -12,6 +12,8 @@ Revision history
                    injection risk, a Spark parse error, and unbounded in
                    size); all-key MERGE omits WHEN MATCHED.
 1.2   2026-06-12   Loader contract: dry-run returns 0 (was None); keyless upsert raises via _require_upsert_keys (was silent append).
+1.3   2026-06-14   Staging name bounds the table portion so a long table name
+                   cannot exceed the identifier length limit.
 """
 
 import logging
@@ -216,7 +218,9 @@ class DatabricksLoader(BaseLoader):
         # literals are an injection/escaping hazard, serialize the whole frame
         # into one statement, and the typed temp-view DDL was a Spark parse
         # error in the first place.
-        stage_table = f"_pipeline_stage_{table}_{uuid.uuid4().hex[:8]}"
+        # Bound the table portion of the staging name so a long source table
+        # cannot push the identifier past the platform's length limit.
+        stage_table = f"_pipeline_stage_{table[:100]}_{uuid.uuid4().hex[:8]}"
         fqt_stage = self._fqt(cfg, stage_table)
         conn = self._connect(cfg)
         cur = conn.cursor()
@@ -249,6 +253,10 @@ class DatabricksLoader(BaseLoader):
                 {matched_part}
                 WHEN NOT MATCHED THEN INSERT ({all_cols}) VALUES ({stage_cols})
             """
+            # Delta has no multi-statement transaction, so a MERGE that fails
+            # part-way can leave partial state in the target — this is inherent
+            # to the platform and not recoverable here. The staging table is
+            # still dropped in finally regardless of outcome.
             cur.execute(merge_sql)
             version = self._table_version(cur, fqt)
             logger.info("[DATABRICKS] MERGE INTO %s -- %s rows (Delta version %s)",

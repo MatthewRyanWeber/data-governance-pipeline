@@ -92,7 +92,9 @@ class TestRedshiftS3Copy(unittest.TestCase):
         # Staged object is cleaned up afterwards.
         s3.delete_object.assert_called_once()
 
-    def test_copy_without_credentials_falls_back(self):
+    def test_copy_failure_raises_in_append_mode(self):
+        # Append must NOT silently fall back to a SQL re-append on a COPY
+        # failure — that would duplicate any rows that already landed.
         s3 = MagicMock()
         cfg = {"host": "h", "database": "d", "user": "u", "password": "p",
                "s3_bucket": "b"}  # no iam_role, no keys
@@ -100,7 +102,21 @@ class TestRedshiftS3Copy(unittest.TestCase):
              patch.dict("os.environ", {}, clear=True), \
              patch.object(self.loader, "_connect", return_value=self.conn), \
              patch.object(self.loader, "_sql_fallback") as fb:
-            self.loader.load(_DF, cfg, "events")
+            with self.assertRaises(Exception):
+                self.loader.load(_DF, cfg, "events")
+            fb.assert_not_called()
+
+    def test_copy_failure_falls_back_in_replace_mode(self):
+        # Replace can safely fall back to a SQL write — it overwrites, so a
+        # re-write cannot duplicate.
+        s3 = MagicMock()
+        cfg = {"host": "h", "database": "d", "user": "u", "password": "p",
+               "s3_bucket": "b"}
+        with patch("boto3.client", return_value=s3), \
+             patch.dict("os.environ", {}, clear=True), \
+             patch.object(self.loader, "_connect", return_value=self.conn), \
+             patch.object(self.loader, "_sql_fallback") as fb:
+            self.loader.load(_DF, cfg, "events", if_exists="replace")
         fb.assert_called_once()
 
 

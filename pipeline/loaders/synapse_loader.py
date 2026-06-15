@@ -10,6 +10,14 @@ Revision history
                    all-key MERGE omits WHEN MATCHED instead of referencing
                    __noop__; SQLAlchemy engines disposed via _engine_scope.
 1.2   2026-06-12   Loader contract: dry-run returns 0 (was None); keyless upsert raises via _require_upsert_keys (was silent append).
+1.3   2026-06-14   SY-2: _upsert drops the stage in finally so a MERGE failure no
+                   longer leaks the staging table. SY-1: _blob_copy no longer
+                   falls back to append-on-error (re-append duplicated the
+                   frame); the COPY error propagates in the append case while the
+                   'replace' stage-copy keeps the safe fallback. SY-3: staging
+                   table name and blob name bound to the 128-char limit. SY-4:
+                   blob_client initialised to None so an upload-setup failure no
+                   longer raises NameError in the cleanup finally.
 """
 
 import time
@@ -23,6 +31,11 @@ if TYPE_CHECKING:
     from pipeline.governance_logger import GovernanceLogger
 
 logger = logging.getLogger(__name__)
+
+# SQL Server / Synapse identifiers cap at 128 chars. The staging table
+# appends "__stage__<epoch>" (~18 chars) to the table name, so bound the
+# table portion under the limit to leave room for the suffix and bracketing.
+_MAX_STAGE_TABLE_LEN = 100
 
 
 class SynapseLoader(BaseLoader):
@@ -113,10 +126,18 @@ class SynapseLoader(BaseLoader):
         container = cfg["storage_container"]
         sas_token = cfg["storage_sas_token"]
         schema = cfg.get("schema", "dbo")
-        blob_name = f"synapse_stage/{table}_{int(time.time())}.csv.gz"
+        # Bound the table portion: an unbounded name + downstream staging
+        # table can exceed the 128-char identifier limit.
+        blob_name = (
+            f"synapse_stage/{table[:_MAX_STAGE_TABLE_LEN]}_"
+            f"{int(time.time())}.csv.gz"
+        )
         blob_url = (
             f"https://{account}.blob.core.windows.net/{container}/{blob_name}"
         )
+        # Bind before the try: if BlobServiceClient/get_blob_client throws, the
+        # cleanup finally must not raise NameError and mask the real error.
+        blob_client = None
         with tempfile.NamedTemporaryFile(suffix=".csv.gz", delete=False) as tmp:
             tmp_path = tmp.name
         df.to_csv(tmp_path, index=False, compression="gzip")
@@ -144,14 +165,31 @@ class SynapseLoader(BaseLoader):
             conn.commit()
             logger.info("[SYNAPSE] COPY INTO %s -- %s rows", fqt, f"{len(df):,}")
         except Exception as exc:
-            logger.warning("[SYNAPSE] COPY INTO failed -- falling back to to_sql(): %s", exc)
-            self._sql_fallback(df, cfg, table, if_exists)
+            # A transient COPY failure in the append path may have already
+            # landed some rows; re-running to_sql(append) would duplicate the
+            # whole frame. Only the 'replace' stage-copy path (which truncates
+            # on write) can safely fall back — append must propagate.
+            if if_exists == "replace":
+                logger.warning(
+                    "[SYNAPSE] COPY INTO failed -- falling back to to_sql(): %s",
+                    exc,
+                )
+                self._sql_fallback(df, cfg, table, if_exists)
+            else:
+                logger.error(
+                    "[SYNAPSE] COPY INTO failed in append mode -- not falling "
+                    "back to avoid re-appending landed rows: %s", exc,
+                )
+                raise
         finally:
             cur.close()
             conn.close()
             try:
                 os.unlink(tmp_path)
-                blob_client.delete_blob()
+                # blob_client may be None if BlobServiceClient setup threw
+                # before assignment — guard so cleanup never raises NameError.
+                if blob_client is not None:
+                    blob_client.delete_blob()
             except Exception as exc:
                 logger.debug("Cleanup failed: %s", exc)
 
@@ -179,7 +217,9 @@ class SynapseLoader(BaseLoader):
     def _upsert(self, df, cfg, table, natural_keys):
         import pyodbc as _pyodbc
         schema = cfg.get("schema", "dbo")
-        tmp_table = f"{table}__stage__{int(time.time())}"
+        # Bound the table portion: an unbounded name + suffix can exceed the
+        # 128-char identifier limit.
+        tmp_table = f"{table[:_MAX_STAGE_TABLE_LEN]}__stage__{int(time.time())}"
         fqt = f"[{schema}].[{table}]"
         fqt_tmp = f"[{schema}].[{tmp_table}]"
         with self._engine_scope(cfg) as engine:
@@ -215,7 +255,6 @@ class SynapseLoader(BaseLoader):
                 f"VALUES ({stage_cols});"
             )
             cur.execute(merge_sql)
-            cur.execute(f"DROP TABLE IF EXISTS {fqt_tmp}")
             conn.commit()
             logger.info("[SYNAPSE] MERGE INTO %s -- %s rows", fqt, f"{len(df):,}")
             self.gov.transformation_applied(
@@ -224,6 +263,15 @@ class SynapseLoader(BaseLoader):
                  "rows": len(df)},
             )
         finally:
+            # Drop the stage in finally so a MERGE failure cannot leak the
+            # staging table permanently; this DROP commits as its own unit.
+            try:
+                cur.execute(f"DROP TABLE IF EXISTS {fqt_tmp}")
+                conn.commit()
+            except Exception as exc:
+                logger.warning(
+                    "[SYNAPSE] Could not drop stage %s: %s", fqt_tmp, exc,
+                )
             cur.close()
             conn.close()
 

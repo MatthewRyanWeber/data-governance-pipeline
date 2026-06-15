@@ -11,6 +11,11 @@ Revision history
 1.2   2026-06-11   Upsert staging table is dropped in a finally block so a
                    failed MERGE no longer leaks the stage table.
 1.3   2026-06-12   Loader contract: dry-run returns 0 (was None); keyless upsert raises via _require_upsert_keys (was silent append).
+1.4   2026-06-14   Write path forces autocommit=False so drop/create/insert/merge
+                   commit atomically (a failed step after the replace-drop no
+                   longer loses the target table); rollback on error; staging
+                   name bounded to HANA's 127-char limit; CREATE SCHEMA runs
+                   once per load, not for the stage table.
 """
 
 import logging
@@ -47,28 +52,40 @@ class HanaLoader(BaseLoader):
                 "Run: pip install hdbcli"
             )
 
-    def _connect(self, cfg: dict):
-        """Return a live hdbcli connection."""
+    def _connect(self, cfg: dict, for_write: bool = False):
+        """Return a live hdbcli connection.
+
+        for_write forces autocommit off regardless of cfg: the load/upsert path
+        spans a drop + create + insert + merge that must commit as one unit, or
+        a failure after the replace-drop would leave the target table gone with
+        nothing recreated.
+        """
         import hdbcli.dbapi as _hdb
+        autocommit = False if for_write else cfg.get("autocommit", True)
         return _hdb.connect(
             address=cfg["host"],
             port=int(cfg.get("port", 443)),
             user=cfg["user"],
             password=cfg["password"],
             encrypt=cfg.get("encrypt", True),
-            autocommit=cfg.get("autocommit", True),
+            autocommit=autocommit,
         )
 
     def _col_def(self, col: str, dtype: str) -> str:
         sql_type = self._DTYPE_MAP.get(dtype, "NVARCHAR(5000)")
         return f'"{col}" {sql_type}'
 
-    def _ensure_table(self, cur, schema, table, df):
-        """CREATE TABLE IF NOT EXISTS in the target schema."""
+    def _ensure_table(self, cur, schema, table, df, ensure_schema: bool = True):
+        """CREATE TABLE IF NOT EXISTS in the target schema.
+
+        ensure_schema is skipped for the stage table: the schema is already
+        guaranteed by the target-table call earlier in the same load.
+        """
         cols = ", ".join(
             self._col_def(c, str(df[c].dtype)) for c in df.columns
         )
-        cur.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
+        if ensure_schema:
+            cur.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
         cur.execute(
             f'CREATE TABLE IF NOT EXISTS "{schema}"."{table}" ({cols})'
         )
@@ -88,8 +105,10 @@ class HanaLoader(BaseLoader):
     def _upsert(self, cur, schema, table, df, natural_keys):
         """HANA MERGE INTO via staging table."""
         import uuid
-        stage = f"{table}__stage_{uuid.uuid4().hex[:8]}"
-        self._ensure_table(cur, schema, stage, df)
+        # Bound the table portion: HANA caps identifiers at 127 chars and the
+        # "__stage_" + 8-hex-char suffix must fit alongside it.
+        stage = f"{table[:100]}__stage_{uuid.uuid4().hex[:8]}"
+        self._ensure_table(cur, schema, stage, df, ensure_schema=False)
         self._insert(cur, schema, stage, df)
 
         non_keys = [c for c in df.columns if c not in natural_keys]
@@ -128,7 +147,10 @@ class HanaLoader(BaseLoader):
             return 0
         self._require_upsert_keys(if_exists, natural_keys)
         self._validate_config(cfg, ["host", "user", "password"])
-        conn = self._connect(cfg)
+        # for_write forces autocommit off: the replace-drop, create, insert and
+        # merge must commit as one unit so a mid-sequence failure cannot leave
+        # the target table dropped with nothing recreated.
+        conn = self._connect(cfg, for_write=True)
         cur = conn.cursor()
 
         try:
@@ -142,6 +164,9 @@ class HanaLoader(BaseLoader):
                 self._insert(cur, schema, table, df)
 
             conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             cur.close()
             conn.close()

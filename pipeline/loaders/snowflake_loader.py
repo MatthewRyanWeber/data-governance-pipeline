@@ -10,6 +10,11 @@ Revision history
                    temp CSV no longer leaks when _connect fails; SQLAlchemy
                    engines disposed via _engine_scope.
 1.2   2026-06-12   Loader contract: dry-run returns 0 (was None); keyless upsert raises via _require_upsert_keys (was silent append).
+1.3   2026-06-14   Bulk-load fallback now guards only PUT+COPY: a post-COPY
+                   REMOVE/commit failure propagates instead of re-appending the
+                   whole frame; staging name bounded to fit the 128-char limit;
+                   upsert drops the stage table in finally so a MERGE failure
+                   cannot leak it.
 """
 
 import time
@@ -143,15 +148,7 @@ class SnowflakeLoader(BaseLoader):
             schema = cfg.get("schema", "PUBLIC")
             fqt = f'"{cfg["database"]}"."{schema}"."{table.upper()}"'
 
-            self._ensure_table(cur, df, fqt, if_exists)
-
             stage = f"@%{table.upper()}"
-            cur.execute(
-                f"PUT file://{tmp_path} {stage} "
-                "AUTO_COMPRESS=FALSE OVERWRITE=TRUE"
-            )
-            logger.info("[SNOWFLAKE] PUT %s -> %s", stage_file, stage)
-
             col_list = ", ".join(f'"{c}"' for c in df.columns)
             file_fmt = (
                 "FILE_FORMAT = (TYPE=CSV SKIP_HEADER=1 "
@@ -162,8 +159,25 @@ class SnowflakeLoader(BaseLoader):
                 f"COPY INTO {fqt} ({col_list}) "
                 f"FROM {stage}/{stage_file} " + file_fmt
             )
-            cur.execute(copy_sql)
-            result = cur.fetchone()
+
+            # Fallback to to_sql() is only safe while no rows have landed in
+            # the target. Once COPY INTO succeeds, re-running to_sql() on the
+            # same frame double-loads every row, so a failure in REMOVE or
+            # commit (which run after COPY) must NOT fall back — it propagates.
+            try:
+                self._ensure_table(cur, df, fqt, if_exists)
+                cur.execute(
+                    f"PUT file://{tmp_path} {stage} "
+                    "AUTO_COMPRESS=FALSE OVERWRITE=TRUE"
+                )
+                logger.info("[SNOWFLAKE] PUT %s -> %s", stage_file, stage)
+                cur.execute(copy_sql)
+                result = cur.fetchone()
+            except Exception as exc:
+                logger.warning("[SNOWFLAKE] COPY INTO failed -- falling back to to_sql(): %s", exc)
+                self._sql_fallback(df, cfg, table, if_exists)
+                return len(df)
+
             # COPY INTO returns the true rows_loaded in column 3 — return it
             # so a partial load (e.g. ON_ERROR=CONTINUE) is reported
             # honestly rather than as len(df).
@@ -171,13 +185,11 @@ class SnowflakeLoader(BaseLoader):
             logger.info("[SNOWFLAKE] COPY INTO %s -- %s rows loaded",
                         table.upper(), f"{rows:,}")
 
+            # Post-load steps: a failure here means rows are already committed
+            # or in the target, so we let it propagate rather than re-append.
             cur.execute(f"REMOVE {stage}/{stage_file}")
             conn.commit()
             return rows
-        except Exception as exc:
-            logger.warning("[SNOWFLAKE] COPY INTO failed -- falling back to to_sql(): %s", exc)
-            self._sql_fallback(df, cfg, table, if_exists)
-            return len(df)
         finally:
             cur.close()
             conn.close()
@@ -209,7 +221,9 @@ class SnowflakeLoader(BaseLoader):
     # ── MERGE upsert ──────────────────────────────────────────────────────
 
     def _upsert(self, df, cfg, table, natural_keys):
-        tmp_table = f"{table.upper()}__STAGE__{int(time.time())}"
+        # Bound the table portion: Snowflake identifiers cap at 128 chars and
+        # the __STAGE__<epoch> suffix must always fit within that limit.
+        tmp_table = f"{table.upper()[:100]}__STAGE__{int(time.time())}"
         schema = cfg.get("schema", "PUBLIC")
         fqt = f'"{cfg["database"]}"."{schema}"."{table.upper()}"'
         fqt_tmp = f'"{cfg["database"]}"."{schema}"."{tmp_table}"'
@@ -266,8 +280,6 @@ class SnowflakeLoader(BaseLoader):
             """
             cur.execute(merge_sql)
             conn.commit()
-            cur.execute(f"DROP TABLE IF EXISTS {fqt_tmp}")
-            conn.commit()
             logger.info("[SNOWFLAKE] MERGE INTO %s complete.", table.upper())
 
             self.gov.transformation_applied(
@@ -276,6 +288,12 @@ class SnowflakeLoader(BaseLoader):
                  "rows": len(df)},
             )
         finally:
+            # Drop the stage in finally so a MERGE failure cannot leak it.
+            try:
+                cur.execute(f"DROP TABLE IF EXISTS {fqt_tmp}")
+                conn.commit()
+            except Exception as exc:
+                logger.warning("[SNOWFLAKE] Staging table cleanup failed: %s", exc)
             cur.close()
             conn.close()
 
