@@ -159,6 +159,9 @@ data flow, module map, and extension guide.
 - 17 source file formats plus SQL tables, Kafka, Kinesis, Pub/Sub, and QuickBooks Online — full reference in [docs/SOURCES.md](docs/SOURCES.md)
 - 41 destinations across four verification tiers (26 core real-engine-verified, 3 emulator, 10 cloud-credential, 2 experimental — see Supported Destinations)
 - Chunked parallel processing, compression (gz/bz2/zip/zstd/lz4), incremental loading, checkpoint/resume
+- Optional DuckDB read engine (`compute_engine: duckdb`) for ~2x faster
+  delimited-text ingestion; rows are handed to the *same* governance stages, so
+  output is byte-identical (enforced by `tests/test_compute_engine_equivalence.py`)
 - Modular architecture: 138 Python modules across 15 subpackages with a 7-layer import DAG
 
 **Data governance -- GDPR / CCPA**
