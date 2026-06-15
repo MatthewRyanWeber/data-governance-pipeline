@@ -394,6 +394,46 @@ class TestUpsertCapabilityGuard(unittest.TestCase):
         self.assertIn("append-only", str(ctx.exception))
 
 
+class TestReplaceClearsOnceAcrossChunks(unittest.TestCase):
+    """'replace' must clear the destination on the first chunk only; later
+    chunks append, or a multi-chunk replace keeps just the last chunk."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        import pipeline.run_state as run_state_module
+        self._orig = run_state_module.CHECKPOINT_FILE
+        run_state_module.CHECKPOINT_FILE = Path(self.tmpdir) / "checkpoint.json"
+
+    def tearDown(self):
+        import pipeline.run_state as run_state_module
+        run_state_module.CHECKPOINT_FILE = self._orig
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    @patch("pipeline.extract.Extractor")
+    @patch("pipeline.cli._make_loader")
+    @patch("pipeline.cli._transform_chunk", side_effect=lambda chunk, *a, **kw: chunk)
+    def test_replace_then_append(self, mock_tx, mock_make_loader, mock_extractor_cls):
+        from pipeline.run_state import RunStateManager
+        loader = MagicMock()
+        loader.SUPPORTS_UPSERT = True
+        mock_make_loader.return_value = (loader, False)
+        mock_extractor_cls.return_value.chunks.return_value = iter([
+            pd.DataFrame({"a": range(3)}),
+            pd.DataFrame({"a": range(3)}),
+            pd.DataFrame({"a": range(3)}),
+        ])
+        sm = RunStateManager(state_dir=Path(self.tmpdir) / "rs")
+        args = argparse.Namespace(
+            source="d.csv", destination="postgresql", table="t",
+            config_path="", dry_run=False, skip_pii=True, verify=False,
+            transform_config=None, chunk_size=3,
+        )
+        _run_chunked("d.csv", args, {"if_exists": "replace"},
+                     MagicMock(), MagicMock(), state_manager=sm)
+        modes = [c.kwargs.get("if_exists") for c in loader.load.call_args_list]
+        self.assertEqual(modes, ["replace", "append", "append"])
+
+
 class TestChunkLoadHonorsUpsertKeys(unittest.TestCase):
     """Each chunk must load with the configured if_exists/natural_keys so a
     crash-resume re-run of a chunk is idempotent (exactly-once), not a

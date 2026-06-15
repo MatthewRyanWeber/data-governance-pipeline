@@ -33,6 +33,9 @@ Revision history
                    materialization); fail fast when natural_keys targets an
                    append-only destination (SUPPORTS_UPSERT); memoize PII
                    detection per schema and lock the transform-config cache.
+1.10  2026-06-14   'replace' clears the destination once on the first chunk
+                   written, then appends — a multi-chunk replace previously
+                   kept only the last chunk (data loss across every loader).
 """
 
 import argparse
@@ -409,13 +412,24 @@ def _run_chunked(
             )
         if_exists = "upsert"
 
+    # 'replace' must clear the destination exactly ONCE — on the first chunk
+    # written this run — then every later chunk appends; otherwise a multi-chunk
+    # load keeps only the LAST chunk. On resume we never replace (that would drop
+    # the rows loaded before the crash). Applies to every loader, not just one.
+    replace_pending = (if_exists == "replace" and resume_from_chunk < 0)
+
     def _load_chunk(chunk_df):
+        nonlocal replace_pending
         if uses_mongo:
             # Mongo signature: load(df, cfg, collection) — no if_exists.
             loader.load(chunk_df, config, table_name)
-        else:
-            loader.load(chunk_df, config, table_name,
-                        if_exists=if_exists, natural_keys=natural_keys)
+            return
+        mode = if_exists
+        if if_exists == "replace":
+            mode = "replace" if replace_pending else "append"
+        loader.load(chunk_df, config, table_name,
+                    if_exists=mode, natural_keys=natural_keys)
+        replace_pending = False
 
     if resume_from_chunk >= 0 and not natural_keys and \
             if_exists == "append" and not uses_mongo:

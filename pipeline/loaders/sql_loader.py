@@ -17,7 +17,6 @@ Revision history
                    connection identity so streaming chunk loads reuse one pool.
 """
 
-import hashlib
 import time
 import uuid
 import logging
@@ -190,17 +189,12 @@ class SQLLoader(BaseLoader):
             self._load_with_retry(new_df, engine, table, "replace", schema)
             return
 
-        # Unique per run + thread so two parallel workers upserting into the
-        # same destination table never share (and clobber) one staging table
-        # mid DELETE/INSERT. Built from a SHORT hash of the target table plus a
-        # run-id fragment and a per-call uuid fragment so it stays well under
-        # the 63-char identifier limit (Postgres/MySQL) for ANY table name,
-        # while remaining a valid, collision-resistant identifier.
-        run_context = getattr(self.gov, "run_context", None)
-        run_id = getattr(run_context, "pipeline_id", "") if run_context else ""
-        run_token = "".join(c for c in str(run_id) if c.isalnum())[:8]
-        table_tag = hashlib.sha1(table.encode("utf-8")).hexdigest()[:8]
-        staging = f"_dgp_stg_{table_tag}_{run_token}_{uuid.uuid4().hex[:8]}"
+        # Unique per call (a fresh uuid fragment) so two parallel workers
+        # upserting into the same destination table never share (and clobber)
+        # one staging table mid DELETE/INSERT. Keep the target table name
+        # (truncated) for readability, and bound the whole identifier well
+        # under the 63-char limit (Postgres/MySQL) for ANY table name.
+        staging = f"_stg_{table[:40]}_{uuid.uuid4().hex[:10]}"
         validate_sql_identifier(staging, "staging table")
 
         def q(name):
