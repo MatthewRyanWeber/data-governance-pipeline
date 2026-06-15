@@ -32,6 +32,7 @@ def __getattr__(name: str):
         "DataEnricher": "pipeline.data_enricher",
         "ReferentialIntegrityChecker": "pipeline.referential_integrity",
         "IncrementalFilter": "pipeline.incremental_filter",
+        "PartitionedLedger": "pipeline.partitioned_ledger",
         "CompressionHandler": "pipeline.compression",
         "SecretsManager": "pipeline.secrets_manager",
         "RunContext": "pipeline.constants",
