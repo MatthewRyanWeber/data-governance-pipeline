@@ -138,7 +138,7 @@ imports and keeps dependency relationships explicit.
 ```
   Layer 6  ORCHESTRATION       cli, api, scheduler, service, watchdog
   Layer 5  ADVANCED            reversible loads, DLQ replay, NL builder
-  Layer 4  LOADERS             40 destinations across 3 verification tiers
+  Layer 4  LOADERS             41 destinations across 4 verification tiers
   Layer 3  DOMAIN SERVICES     privacy, quality, catalog, security,
                                monitoring, lineage, versioning, ml_governance,
                                reporting, streaming, extractors
@@ -157,7 +157,7 @@ data flow, module map, and extension guide.
 
 **ETL core**
 - 17 source file formats plus SQL tables, Kafka, Kinesis, Pub/Sub, and QuickBooks Online — full reference in [docs/SOURCES.md](docs/SOURCES.md)
-- 40 destinations across three verification tiers (26 core, 5 emulator-verified, 9 cloud-credential — see Supported Destinations)
+- 41 destinations across four verification tiers (26 core real-engine-verified, 3 emulator, 10 cloud-credential, 2 experimental — see Supported Destinations)
 - Chunked parallel processing, compression (gz/bz2/zip/zstd/lz4), incremental loading, checkpoint/resume
 - Modular architecture: 138 Python modules across 15 subpackages with a 7-layer import DAG
 
@@ -223,8 +223,10 @@ data flow, module map, and extension guide.
 Every destination carries a **verification tier** that states honestly how
 it is tested.  `pipeline destinations` prints this catalog; the
 `/destinations` API endpoint serves it as JSON. (The CLI lists 42 rows —
-the 40 destinations below plus protocol aliases such as `postgres` and
-`gcs`.)
+41 distinct destinations across four tiers below, plus the `postgres` alias
+of PostgreSQL.)
+
+<!-- TIER-COUNTS: core=27 emulator=3 cloud=10 experimental=2 -->
 
 ### Core — tested against a real engine in CI on every push (26)
 
@@ -235,7 +237,7 @@ the 40 destinations below plus protocol aliases such as `postgres` and
 | Wire-compatible | Azure Synapse (T-SQL via real SQL Server), Yellowbrick (PostgreSQL protocol), CockroachDB |
 | Geo / vector SQL | PostGIS, pgvector |
 | Data lake formats | Parquet, Delta Lake, Apache Iceberg |
-| Object storage | S3 / GCS (MinIO), Azure Blob (Azurite), SFTP |
+| Object storage | S3 (MinIO), Azure Blob (Azurite), SFTP |
 | Streaming | Kafka (Redpanda) |
 | NoSQL / vector | MongoDB, Chroma, LanceDB, Qdrant, Weaviate, Milvus |
 
@@ -247,26 +249,33 @@ Confirmed live-service verifications are logged in
 [docs/CLOUD_VERIFICATION.md](docs/CLOUD_VERIFICATION.md) (MotherDuck and
 Databricks: both CI-confirmed 2026-06-13).
 
-### Emulator-verified — mechanics proven, vendor quirks not (5)
+### Emulator-verified — mechanics proven, vendor quirks not (3)
 
 | Destination | Emulator | Not covered |
 |-------------|----------|-------------|
 | Snowflake | fakesnow | stages/PUT+COPY bulk path, warehouses, roles |
 | BigQuery | goccy/bigquery-emulator | LOAD jobs, slots, IAM |
 | Pinecone | pinecone-local | serverless scaling, pod indexes |
-| Microsoft Fabric | Azurite (storage path) | Fabric/OneLake semantics |
-| Athena | MinIO (S3 half) | the Athena query API |
 
-### Cloud-credential — verified against the live service when secrets are configured (9)
+### Cloud-credential — verified against the live service when secrets are configured (10)
 
-Redshift, Databricks, Firebolt, SAP HANA, SAP Datasphere, MotherDuck,
-QuickBooks Online (sandbox), Snowflake Vector, BigQuery Vector.
+GCS (gcsfs), Redshift, Databricks, Firebolt, SAP HANA, SAP Datasphere,
+MotherDuck, QuickBooks Online (sandbox), Snowflake Vector, BigQuery Vector.
 
 The weekly `integration-cloud` workflow runs each of these the moment its
 repository secrets exist — adding a credential automatically upgrades that
 destination's verification. Without credentials they are mock-tested only
 (every loader passes the shared behavioral contract in
 `tests/test_loaders/test_loader_contract.py`).
+
+### Experimental — wired and mock-tested only, no engine/emulator proof (2)
+
+| Destination | Status |
+|-------------|--------|
+| Microsoft Fabric | Loader wired; only the shared mock/contract suite runs it. No Fabric/OneLake test exists yet — do not rely on it in production. |
+| Athena | Loader wired; only the shared mock/contract suite runs it. No Athena query-API test exists yet. |
+
+Resolving an experimental destination logs a warning to that effect.
 
 ---
 

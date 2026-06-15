@@ -2563,8 +2563,9 @@ class TestVerificationTiers(unittest.TestCase):
     def test_tiers_are_valid_values(self):
         from pipeline.loaders import (
             _VERIFICATION_TIER, TIER_CORE, TIER_EMULATOR, TIER_CLOUD,
+            TIER_EXPERIMENTAL,
         )
-        valid = {TIER_CORE, TIER_EMULATOR, TIER_CLOUD}
+        valid = {TIER_CORE, TIER_EMULATOR, TIER_CLOUD, TIER_EXPERIMENTAL}
         for db_type, tier in _VERIFICATION_TIER.items():
             self.assertIn(tier, valid, f"{db_type} has invalid tier {tier!r}")
 

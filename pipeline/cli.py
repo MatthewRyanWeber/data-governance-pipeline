@@ -140,7 +140,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="List every supported destination and its verification tier",
     )
     dest_parser.add_argument(
-        "--tier", choices=["core", "emulator", "cloud"],
+        "--tier", choices=["core", "emulator", "cloud", "experimental"],
         help="Show only destinations in this tier",
     )
 
@@ -781,6 +781,8 @@ def _cmd_destinations(args: argparse.Namespace) -> None:
                     "vendor-specific behaviour is not covered",
         "cloud": "CLOUD-CREDENTIAL — verified against the live service only "
                  "when credentials are configured",
+        "experimental": "EXPERIMENTAL — wired and mock-tested only; no engine "
+                        "or emulator test runs it yet",
     }
 
     entries = destination_catalog()

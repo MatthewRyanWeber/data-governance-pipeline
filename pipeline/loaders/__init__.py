@@ -100,6 +100,7 @@ _LAZY_DISPATCH: dict[str, tuple[str, str, bool, bool]] = {
 TIER_CORE = "core"
 TIER_EMULATOR = "emulator"
 TIER_CLOUD = "cloud"
+TIER_EXPERIMENTAL = "experimental"  # wired + mock/contract-tested, no engine proof yet
 
 _VERIFICATION_TIER: dict[str, str] = {
     # Real engine in CI (testcontainers or embedded)
@@ -114,7 +115,6 @@ _VERIFICATION_TIER: dict[str, str] = {
     "deltalake":        TIER_CORE,
     "iceberg":          TIER_CORE,       # pyiceberg + SQLite catalog, fully local
     "s3":               TIER_CORE,       # MinIO
-    "gcs":              TIER_CORE,       # MinIO (S3-compatible API path)
     "azure_blob":       TIER_CORE,       # Azurite
     "kafka":            TIER_CORE,       # Redpanda
     "clickhouse":       TIER_CORE,
@@ -135,9 +135,12 @@ _VERIFICATION_TIER: dict[str, str] = {
     "snowflake":        TIER_EMULATOR,   # fakesnow
     "bigquery":         TIER_EMULATOR,   # goccy/bigquery-emulator
     "pinecone":         TIER_EMULATOR,   # pinecone-local
-    "fabric":           TIER_EMULATOR,   # Azurite covers the storage path
-    "athena":           TIER_EMULATOR,   # MinIO covers the S3 half
+    # Experimental — wired and mock/contract-tested, but no emulator/engine
+    # test actually drives them yet (don't rely on these in production).
+    "fabric":           TIER_EXPERIMENTAL,
+    "athena":           TIER_EXPERIMENTAL,
     # Cloud-credential — verified when secrets are provided
+    "gcs":              TIER_CLOUD,      # gcsfs (GCS-native API; not S3-compatible)
     "redshift":         TIER_CLOUD,
     "databricks":       TIER_CLOUD,
     "firebolt":         TIER_CLOUD,
@@ -172,7 +175,7 @@ def destination_catalog() -> list[dict]:
 
     Each entry: {"db_type": str, "loader_class": str, "tier": str}.
     """
-    tier_order = {TIER_CORE: 0, TIER_EMULATOR: 1, TIER_CLOUD: 2}
+    tier_order = {TIER_CORE: 0, TIER_EMULATOR: 1, TIER_CLOUD: 2, TIER_EXPERIMENTAL: 3}
     entries = [
         {
             "db_type": key,
@@ -246,6 +249,12 @@ def resolve_loader(db_type: str) -> tuple[type, bool, bool]:
             "Destination '%s' is cloud-credential tier: it is verified "
             "against the live service only when credentials are configured "
             "in the integration-cloud workflow.", key,
+        )
+    elif tier == TIER_EXPERIMENTAL:
+        logger.warning(
+            "Destination '%s' is EXPERIMENTAL: wired and mock-tested only — no "
+            "emulator or engine test drives it. Do not rely on it in "
+            "production until it earns a higher tier.", key,
         )
     return loader_class, needs_db_type, uses_mongo
 

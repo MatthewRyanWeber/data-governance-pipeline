@@ -169,7 +169,7 @@ class TestDestinationsEndpoint:
             body = await resp.get_json()
             assert body["count"] == len(_LAZY_DISPATCH)
             tiers = {e["tier"] for e in body["destinations"]}
-            assert tiers == {"core", "emulator", "cloud"}
+            assert tiers == {"core", "emulator", "cloud", "experimental"}
 
     @pytest.mark.asyncio
     async def test_tier_filter(self):
