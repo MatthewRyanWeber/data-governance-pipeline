@@ -26,6 +26,9 @@ Revision history
                    GovernanceLogger is now a thin facade (event vocabulary +
                    delegation); the public attribute/method surface is kept
                    via delegating properties so call sites are unchanged.
+4.6   2026-06-15   Optional `ledger` injection so a per-partition run can write
+                   its audit chain into a PartitionedLedger segment (Path A);
+                   defaults to the single-file ledger.
 """
 
 import getpass
@@ -119,6 +122,7 @@ class GovernanceLogger:
         run_context: RunContext | None = None,
         dry_run: bool = False,
         verify_integrity: bool = False,
+        ledger=None,
     ) -> None:
         self.run_context = run_context or default_run_context()
         self.dry_run = dry_run
@@ -159,7 +163,11 @@ class GovernanceLogger:
         # aggregation buffers.  GovernanceLogger is now a thin facade over
         # these plus RunArtifacts and ReportWriter — the public attributes
         # below are kept as delegating properties for back-compat.
-        self._ledger = LedgerWriter(
+        # The ledger can be injected so a per-partition run writes its audit
+        # chain into a PartitionedLedger segment instead of this run's single
+        # file — the seam that lets governance run inside a distributed engine
+        # (Path A). Defaults to the standard single-file ledger.
+        self._ledger = ledger if ledger is not None else LedgerWriter(
             self.artifacts,
             dry_run=dry_run,
             verify_integrity=verify_integrity,

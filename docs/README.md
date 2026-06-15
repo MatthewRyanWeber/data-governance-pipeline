@@ -39,3 +39,6 @@ all of these; each audience has one or two relevant docs.
    it, and the family contract + verification tier it must earn.
 3. [SCOPE.md](SCOPE.md) — check a proposed feature against the boundary
    before building it.
+4. [DISTRIBUTED_GOVERNANCE.md](DISTRIBUTED_GOVERNANCE.md) — running this
+   pipeline's governance per-partition under Spark/Ray/Dask at distributed
+   scale, with a partitionable Merkle-root audit ledger (Path A).
