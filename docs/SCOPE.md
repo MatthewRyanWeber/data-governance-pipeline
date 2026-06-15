@@ -40,6 +40,12 @@ data movement but doesn't serve governance, it's out.
 - **Not a multi-tenant SaaS platform.** Multi-tenancy scopes the catalog
   and lineage; it is not a hosted control plane with billing and RBAC for
   external customers.
+- **Not a distributed big-data engine.** It is a single-process, streaming,
+  checkpointed pipeline sized for roughly the **1 GB–1 TB/day** range — flat
+  memory, per-chunk processing, resume-from-last-chunk. At ~100 TB/day you
+  want Spark/Flink and partition-level parallelism; the right move there is to
+  apply this pipeline's *governance* per partition under such an engine, not
+  to scale this process up.
 
 ## On the breadth (Epic EHR, QuickBooks, 9 vector DBs)
 

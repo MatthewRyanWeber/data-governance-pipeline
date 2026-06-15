@@ -17,6 +17,10 @@ Revision history
                    corruption-tolerant read — a crash mid-write or a
                    truncated file no longer corrupts the watermark or
                    crashes the next run.
+1.3   2026-06-15   Late-arriving data is no longer dropped silently: rows below
+                   the watermark are counted in the ledger every run, and an
+                   optional dlq= routes them for recovery (a delayed event or
+                   backfill arriving after the watermark moved on).
 """
 
 import json
@@ -79,8 +83,16 @@ class IncrementalFilter:
             self.gov.watermark_event("READ", col, wm)
         return wm
 
-    def filter(self, df, col: str, last_wm, source: str):
-        """Filter df to rows where col > last_wm."""
+    def filter(self, df, col: str, last_wm, source: str, dlq=None):
+        """Filter df to rows where col > last_wm.
+
+        Rows whose watermark value is strictly OLDER than ``last_wm`` are
+        excluded — but they are no longer dropped silently: their count is
+        recorded in the ledger every run, and if a ``dlq`` is supplied the
+        late/out-of-order rows are routed there for recovery (a delayed event
+        or backfill arriving after the watermark moved on would otherwise
+        vanish with no trace — the late-arriving-data failure mode).
+        """
         import pandas as pd
 
         if last_wm is None:
@@ -99,6 +111,7 @@ class IncrementalFilter:
                     last_wm, col,
                 )
                 return df
+            self._handle_late_arrivals(df, df[col] < numeric_watermark, col, last_wm, dlq)
             df = df[df[col] > numeric_watermark].copy()
         else:
             try:
@@ -108,6 +121,7 @@ class IncrementalFilter:
                     "Watermark %r for '%s' is not datetime-like: %s — raw comparison.",
                     last_wm, col, exc,
                 )
+                self._handle_late_arrivals(df, df[col] < last_wm, col, last_wm, dlq)
                 df = df[df[col] > last_wm].copy()
             else:
                 parsed = pd.to_datetime(df[col], errors="coerce")
@@ -121,11 +135,43 @@ class IncrementalFilter:
                         "datetime — including them in this run.",
                         unparseable_count, col,
                     )
+                self._handle_late_arrivals(df, parsed < watermark_value, col, last_wm, dlq)
                 df = df[(parsed > watermark_value) | unparseable_mask].copy()
 
         self.gov.watermark_event("READ", col, last_wm, filtered=before - len(df))
         logger.info("[INCREMENTAL] Filtered %d rows | %d new", before - len(df), len(df))
         return df
+
+    def _handle_late_arrivals(self, df, late_mask, col: str, last_wm, dlq) -> None:
+        """Surface rows below the watermark instead of dropping them silently.
+
+        For a source that re-reads its full history every run, these are simply
+        already-processed rows; for an incremental-at-source feed they are
+        late/out-of-order arrivals. The filter can't tell which, so it records
+        the count in the ledger every run (durable, never silent) and — only
+        when a DLQ is provided — routes the rows there so a genuine late arrival
+        is recoverable rather than lost.
+        """
+        late_count = int(late_mask.sum())
+        if late_count == 0:
+            return
+        self.gov.watermark_event("LATE_ARRIVAL", col, last_wm, filtered=late_count)
+        if dlq is not None:
+            late_indices = df.index[late_mask].tolist()
+            dlq.write(df, late_indices,
+                      reason=f"late_arrival: {col} older than watermark {last_wm}")
+            logger.warning(
+                "[INCREMENTAL] %d row(s) in '%s' are older than the watermark %r "
+                "(late/out-of-order) — routed to the DLQ for recovery instead of "
+                "being dropped.", late_count, col, last_wm,
+            )
+        else:
+            logger.info(
+                "[INCREMENTAL] %d row(s) in '%s' are older than the watermark %r "
+                "and were excluded (already processed, or late/out-of-order — pass "
+                "dlq= to capture late arrivals for recovery).",
+                late_count, col, last_wm,
+            )
 
     def update_watermark(self, df, col: str, source: str) -> None:
         if col not in df.columns or df.empty:

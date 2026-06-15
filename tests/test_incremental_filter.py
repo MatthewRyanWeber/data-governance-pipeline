@@ -54,6 +54,35 @@ class TestIncrementalFilter(unittest.TestCase):
         # Watermark is the max timestamp, ISO formatted.
         self.assertTrue(wm.startswith("2024-03-01"))
 
+    def test_late_arrival_recorded_in_ledger(self):
+        # Rows below the watermark (late / out-of-order) are no longer dropped
+        # silently — a LATE_ARRIVAL event carries the count.
+        df = pd.DataFrame({"updated_at": ["2024-01-01", "2024-01-05", "2024-03-01"]})
+        self.inc.filter(df, "updated_at", "2024-02-01", "data.csv")
+        late = [c for c in self.gov.watermark_event.call_args_list
+                if c.args[0] == "LATE_ARRIVAL"]
+        self.assertEqual(len(late), 1)
+        self.assertEqual(late[0].kwargs.get("filtered"), 2)
+
+    def test_late_arrival_routed_to_dlq(self):
+        dlq = MagicMock()
+        df = pd.DataFrame({"updated_at": ["2024-01-01", "2024-03-01"]})
+        self.inc.filter(df, "updated_at", "2024-02-01", "data.csv", dlq=dlq)
+        dlq.write.assert_called_once()
+        self.assertEqual(dlq.write.call_args.args[1], [0])  # the one late row's index
+
+    def test_no_late_arrival_when_all_rows_newer(self):
+        df = pd.DataFrame({"updated_at": ["2024-03-01", "2024-04-01"]})
+        self.inc.filter(df, "updated_at", "2024-02-01", "data.csv")
+        actions = [c.args[0] for c in self.gov.watermark_event.call_args_list]
+        self.assertNotIn("LATE_ARRIVAL", actions)
+
+    def test_late_arrival_numeric_watermark(self):
+        df = pd.DataFrame({"version": [1, 5, 10]})  # version 1 is below watermark 4
+        self.inc.filter(df, "version", 4, "data.csv")
+        actions = [c.args[0] for c in self.gov.watermark_event.call_args_list]
+        self.assertIn("LATE_ARRIVAL", actions)
+
     def test_update_watermark_numeric(self):
         df = pd.DataFrame({"version": [3, 7, 5]})
         self.inc.update_watermark(df, "version", "data.csv")
