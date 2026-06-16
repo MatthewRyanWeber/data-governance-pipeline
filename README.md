@@ -157,7 +157,7 @@ data flow, module map, and extension guide.
 
 **ETL core**
 - 17 source file formats plus SQL tables, Kafka, Kinesis, Pub/Sub, and QuickBooks Online — full reference in [docs/SOURCES.md](docs/SOURCES.md)
-- 41 destinations across four verification tiers (27 core real-engine-verified, 3 emulator, 10 cloud-credential, 1 experimental — see Supported Destinations)
+- 41 destinations across four verification tiers (28 core real-engine-verified, 3 emulator, 9 cloud-credential, 1 experimental — see Supported Destinations)
 - Chunked parallel processing, compression (gz/bz2/zip/zstd/lz4), incremental loading, checkpoint/resume
 - Optional DuckDB read engine (`compute_engine: duckdb`) for ~2x faster
   delimited-text ingestion; rows are handed to the *same* governance stages, so
@@ -252,9 +252,9 @@ it is tested.  `pipeline destinations` prints this catalog; the
 41 distinct destinations across four tiers below, plus the `postgres` alias
 of PostgreSQL.)
 
-<!-- TIER-COUNTS: core=28 emulator=3 cloud=10 experimental=1 -->
+<!-- TIER-COUNTS: core=29 emulator=3 cloud=9 experimental=1 -->
 
-### Core — tested against a real engine in CI on every push (27)
+### Core — tested against a real engine in CI on every push (28)
 
 | Category | Destinations |
 |----------|-------------|
@@ -263,7 +263,7 @@ of PostgreSQL.)
 | Wire-compatible | Azure Synapse (T-SQL via real SQL Server), Yellowbrick (PostgreSQL protocol), CockroachDB |
 | Geo / vector SQL | PostGIS, pgvector |
 | Data lake formats | Parquet, Delta Lake, Apache Iceberg |
-| Object storage | S3 (MinIO), Azure Blob (Azurite), SFTP, Microsoft Fabric / OneLake (ADLS via Azurite) |
+| Object storage | S3 (MinIO), Azure Blob (Azurite), GCS (fake-gcs-server), SFTP, Microsoft Fabric / OneLake (ADLS via Azurite) |
 | Streaming | Kafka (Redpanda) |
 | NoSQL / vector | MongoDB, Chroma, LanceDB, Qdrant, Weaviate, Milvus |
 
@@ -283,10 +283,10 @@ Databricks: both CI-confirmed 2026-06-13).
 | BigQuery | goccy/bigquery-emulator | LOAD jobs, slots, IAM |
 | Pinecone | pinecone-local | serverless scaling, pod indexes |
 
-### Cloud-credential — verified against the live service when secrets are configured (10)
+### Cloud-credential — verified against the live service when secrets are configured (9)
 
-GCS (gcsfs), Redshift, Databricks, Firebolt, SAP HANA, SAP Datasphere,
-MotherDuck, QuickBooks Online (sandbox), Snowflake Vector, BigQuery Vector.
+Redshift, Databricks, Firebolt, SAP HANA, SAP Datasphere, MotherDuck,
+QuickBooks Online (sandbox), Snowflake Vector, BigQuery Vector.
 
 The weekly `integration-cloud` workflow runs each of these the moment its
 repository secrets exist — adding a credential automatically upgrades that
@@ -392,7 +392,7 @@ data-governance-pipeline/
 |   +-- test_loaders/                 # Per-loader tests + the shared loader contract
 |   |   +-- test_loader_contract.py   # Family contract enforced on every registry entry
 |   +-- test_extensions/              # Governance, HIPAA, compliance, Grafana
-|   +-- integration/                  # 61 live-engine tests (containers + emulators)
+|   +-- integration/                  # 63 live-engine tests (containers + emulators)
 |   +-- test_property_based.py        # Hypothesis property-based testing (deterministic)
 +-- docs/                             # Legal, architecture, and extension docs
 |   +-- ARCHITECTURE.md               # Full architecture reference

@@ -49,10 +49,11 @@ _EXPECTED_TIER = {
     "qdrant": "core", "weaviate": "core", "milvus": "core", "oracle": "core",
     "db2": "core", "synapse": "core", "yellowbrick": "core",
     "fabric": "core",  # MicrosoftFabricLoader driven against Azurite (ADLS)
+    "gcs": "core",     # S3Loader gcs provider driven against fake-gcs-server
     # emulator
     "snowflake": "emulator", "bigquery": "emulator", "pinecone": "emulator",
     # cloud — credential-gated
-    "gcs": "cloud", "redshift": "cloud", "databricks": "cloud", "firebolt": "cloud",
+    "redshift": "cloud", "databricks": "cloud", "firebolt": "cloud",
     "hana": "cloud", "datasphere": "cloud", "motherduck": "cloud",
     "quickbooks": "cloud", "snowflake_vector": "cloud", "bigquery_vector": "cloud",
     # experimental — wired + mock-tested only, no engine/emulator proof

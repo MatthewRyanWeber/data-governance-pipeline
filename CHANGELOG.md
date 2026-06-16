@@ -5,6 +5,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [4.29.0] — 2026-06-16
+
+Another destination crosses from credential-gated to verified against a real
+engine in CI.
+
+### Changed
+- **Google Cloud Storage promoted cloud → core.** A new integration test drives
+  the real `S3Loader` GCS provider (gcsfs) against **fake-gcs-server** — the
+  standard local GCS API server, the GCS analogue of MinIO (S3) and Azurite
+  (Azure), both already core — writing parquet and CSV and reading each back via
+  the server's raw JSON API (a different client than the write). Runs in CI on
+  every push (`streams-vector` group). Core 28 → 29; cloud 10 → 9.
+
+### Added
+- `gcsfs` added to the `integration` extra so the GCS engine test installs in CI.
+
 ## [4.28.0] — 2026-06-16
 
 Proven depth catches up to surface area: a destination moves from "wired but

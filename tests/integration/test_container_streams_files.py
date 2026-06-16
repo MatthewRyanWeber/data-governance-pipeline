@@ -243,6 +243,80 @@ class TestMinIOS3Integration(unittest.TestCase):
 
 @pytest.mark.integration
 @unittest.skipUnless(DOCKER, "Docker engine not available")
+class TestGCSFakeServerIntegration(unittest.TestCase):
+    """GCS via the S3Loader gcs provider, against fake-gcs-server.
+
+    fake-gcs-server is the standard local Google Cloud Storage API server (the
+    GCS analogue of MinIO for S3 / Azurite for Azure, both already core). The
+    loader writes through gcsfs; read-back is via the server's raw JSON API — a
+    different client than the write — so the round-trip is genuinely verified.
+    """
+
+    BUCKET = "it-gcs"
+
+    @classmethod
+    def setUpClass(cls):
+        from testcontainers.core.container import DockerContainer
+        from testcontainers.core.waiting_utils import wait_for_logs
+        cls.container = (
+            DockerContainer("fsouza/fake-gcs-server:latest")
+            .with_command("-scheme http -host 0.0.0.0 -port 4443 -backend memory")
+            .with_exposed_ports(4443)
+        )
+        cls.container.start()
+        wait_for_logs(cls.container, "server started", timeout=60)
+        cls.endpoint = f"http://127.0.0.1:{cls.container.get_exposed_port(4443)}"
+        import requests
+        resp = requests.post(
+            f"{cls.endpoint}/storage/v1/b",
+            params={"project": "test"}, json={"name": cls.BUCKET}, timeout=30,
+        )
+        assert resp.status_code == 200, resp.text
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.container.stop()
+
+    def _cfg(self, key, fmt):
+        return {
+            "bucket": self.BUCKET,
+            "key": key,
+            "format": fmt,
+            "provider": "gcs",
+            "storage_options": {
+                "project": "test",
+                "token": "anon",
+                "endpoint_url": self.endpoint,
+            },
+        }
+
+    def _read_back(self, key):
+        import requests
+        from urllib.parse import quote
+        url = f"{self.endpoint}/storage/v1/b/{self.BUCKET}/o/{quote(key, safe='')}"
+        resp = requests.get(url, params={"alt": "media"}, timeout=30)
+        resp.raise_for_status()
+        return resp.content
+
+    def test_parquet_object_round_trip(self):
+        loader = _loader("gcs")
+        rows = loader.load(_df(), self._cfg("data/people.parquet", "parquet"),
+                           table="people")
+        self.assertEqual(rows, 3)
+        out = pd.read_parquet(io.BytesIO(self._read_back("data/people.parquet")))
+        self.assertEqual(out["name"].tolist(), ["a", "b", "c"])
+
+    def test_csv_object_round_trip(self):
+        loader = _loader("gcs")
+        rows = loader.load(_df(), self._cfg("data/people.csv", "csv"),
+                           table="people")
+        self.assertEqual(rows, 3)
+        out = pd.read_csv(io.BytesIO(self._read_back("data/people.csv")))
+        self.assertEqual(out["name"].tolist(), ["a", "b", "c"])
+
+
+@pytest.mark.integration
+@unittest.skipUnless(DOCKER, "Docker engine not available")
 class TestAzuriteAzureBlobIntegration(unittest.TestCase):
     """azure_blob via the S3Loader azure provider, against Azurite.
 
