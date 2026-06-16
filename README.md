@@ -222,6 +222,26 @@ data flow, module map, and extension guide.
 - PrometheusExporter -- `/metrics` HTTP endpoint in Prometheus text format
 - GrafanaDashboardGenerator -- ready-to-import JSON dashboard
 
+**Performance and scale**
+- Single node: streaming, per-chunk, checkpointed (flat memory, resume from the
+  last chunk) — sized for the **~1 GB–1 TB/day** range
+- Transform PII masking is **~2.7x faster** with byte-identical output
+  (per-distinct-value masking + an `infer_dtype` pre-filter); optional DuckDB
+  read engine is **~2x faster** on delimited text — same governance stages,
+  output byte-identical (enforced by `tests/test_compute_engine_equivalence.py`)
+- Scales out (Path A): per-partition governance under Spark into a partitionable
+  Merkle ledger — no shared-writer bottleneck. Measured **governance-compute** on
+  one 12-core box (full PII masking + tamper-evident ledger, verified each run):
+  **~22k rows/s** at 100 partitions, **~100k rows/s** at 20 larger partitions
+  (the 4.5x swing is per-partition fixed cost — use fewer, larger partitions).
+  That's ~0.38–1.73 TB/day/box; **100 TB/day is ~58 such boxes**, a design
+  property (no shared write path), not a single process scaled up.
+- Honest caveat: these are governance-compute numbers in Spark local mode, **not**
+  end-to-end throughput to a destination (network + warehouse write dominate in
+  production and are destination-dependent). Full method:
+  [docs/DISTRIBUTED_GOVERNANCE.md](docs/DISTRIBUTED_GOVERNANCE.md), benchmark:
+  `scripts/bench_distributed_governance.py`
+
 ---
 
 ## Supported Destinations
