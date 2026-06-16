@@ -157,7 +157,7 @@ data flow, module map, and extension guide.
 
 **ETL core**
 - 17 source file formats plus SQL tables, Kafka, Kinesis, Pub/Sub, and QuickBooks Online — full reference in [docs/SOURCES.md](docs/SOURCES.md)
-- 41 destinations across four verification tiers (26 core real-engine-verified, 3 emulator, 10 cloud-credential, 2 experimental — see Supported Destinations)
+- 41 destinations across four verification tiers (27 core real-engine-verified, 3 emulator, 10 cloud-credential, 1 experimental — see Supported Destinations)
 - Chunked parallel processing, compression (gz/bz2/zip/zstd/lz4), incremental loading, checkpoint/resume
 - Optional DuckDB read engine (`compute_engine: duckdb`) for ~2x faster
   delimited-text ingestion; rows are handed to the *same* governance stages, so
@@ -252,9 +252,9 @@ it is tested.  `pipeline destinations` prints this catalog; the
 41 distinct destinations across four tiers below, plus the `postgres` alias
 of PostgreSQL.)
 
-<!-- TIER-COUNTS: core=27 emulator=3 cloud=10 experimental=2 -->
+<!-- TIER-COUNTS: core=28 emulator=3 cloud=10 experimental=1 -->
 
-### Core — tested against a real engine in CI on every push (26)
+### Core — tested against a real engine in CI on every push (27)
 
 | Category | Destinations |
 |----------|-------------|
@@ -263,7 +263,7 @@ of PostgreSQL.)
 | Wire-compatible | Azure Synapse (T-SQL via real SQL Server), Yellowbrick (PostgreSQL protocol), CockroachDB |
 | Geo / vector SQL | PostGIS, pgvector |
 | Data lake formats | Parquet, Delta Lake, Apache Iceberg |
-| Object storage | S3 (MinIO), Azure Blob (Azurite), SFTP |
+| Object storage | S3 (MinIO), Azure Blob (Azurite), SFTP, Microsoft Fabric / OneLake (ADLS via Azurite) |
 | Streaming | Kafka (Redpanda) |
 | NoSQL / vector | MongoDB, Chroma, LanceDB, Qdrant, Weaviate, Milvus |
 
@@ -294,12 +294,11 @@ destination's verification. Without credentials they are mock-tested only
 (every loader passes the shared behavioral contract in
 `tests/test_loaders/test_loader_contract.py`).
 
-### Experimental — wired and mock-tested only, no engine/emulator proof (2)
+### Experimental — wired and mock-tested only, no engine/emulator proof (1)
 
 | Destination | Status |
 |-------------|--------|
-| Microsoft Fabric | Loader wired; only the shared mock/contract suite runs it. No Fabric/OneLake test exists yet — do not rely on it in production. |
-| Athena | Loader wired; only the shared mock/contract suite runs it. No Athena query-API test exists yet. |
+| Athena | Loader wired; the S3 staging path can be exercised against MinIO, but the Athena query API (MSCK REPAIR) is only mock-tested — no free real engine for it. Do not rely on the query path in production. |
 
 Resolving an experimental destination logs a warning to that effect.
 
@@ -393,7 +392,7 @@ data-governance-pipeline/
 |   +-- test_loaders/                 # Per-loader tests + the shared loader contract
 |   |   +-- test_loader_contract.py   # Family contract enforced on every registry entry
 |   +-- test_extensions/              # Governance, HIPAA, compliance, Grafana
-|   +-- integration/                  # 55 live-engine tests (containers + emulators)
+|   +-- integration/                  # 61 live-engine tests (containers + emulators)
 |   +-- test_property_based.py        # Hypothesis property-based testing (deterministic)
 +-- docs/                             # Legal, architecture, and extension docs
 |   +-- ARCHITECTURE.md               # Full architecture reference

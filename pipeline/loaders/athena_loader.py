@@ -12,6 +12,9 @@ Revision history
                    under the data prefix before writing; the MSCK poll raises
                    on FAILED/CANCELLED/timeout instead of reporting success;
                    table and database are validated as SQL identifiers.
+1.3   2026-06-16   cfg['endpoint_url'] targets a non-AWS S3 (MinIO, or the
+                   integration test that verifies the staging path) on the S3
+                   data plane only — the Athena control plane is untouched.
 """
 
 import time
@@ -82,7 +85,12 @@ class AthenaLoader(BaseLoader):
         if cfg.get("aws_access_key"):
             s3_kwargs["aws_access_key_id"] = cfg["aws_access_key"]
             s3_kwargs["aws_secret_access_key"] = cfg["aws_secret_key"]
-        s3_client = boto3.client("s3", **s3_kwargs)
+        # endpoint_url targets a non-AWS S3 (MinIO, or the integration test);
+        # it applies only to the S3 data plane, not the Athena control plane.
+        s3_client_kwargs = dict(s3_kwargs)
+        if cfg.get("endpoint_url"):
+            s3_client_kwargs["endpoint_url"] = cfg["endpoint_url"]
+        s3_client = boto3.client("s3", **s3_client_kwargs)
 
         buf = io.BytesIO()
         pq.write_table(pa.Table.from_pandas(df, preserve_index=False),

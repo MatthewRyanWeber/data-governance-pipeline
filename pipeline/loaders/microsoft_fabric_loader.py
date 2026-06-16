@@ -12,6 +12,12 @@ Revision history
                    installed instead of silently degrading to parquet; parquet
                    append now reads + concatenates + rewrites instead of
                    overwriting the existing file.
+1.3   2026-06-16   cfg may carry adlfs storage options (connection_string or a
+                   storage_options dict) so the loader can target any ADLS-
+                   compatible endpoint — real OneLake or the Azurite emulator
+                   used by the integration test. Previously account_name was
+                   effectively hardcoded, leaving the write path unconfigurable
+                   and unverifiable against a real storage engine.
 """
 
 import logging
@@ -73,9 +79,19 @@ class MicrosoftFabricLoader(BaseLoader):
             f"{path.strip('/')}/{file_name}"
         )
 
-        fs_kwargs: dict = {"account_name": account_name}
-        if token:
-            fs_kwargs["credential"] = token
+        # adlfs connection options. A caller (or the Azurite integration test)
+        # can pass a full connection_string or an explicit storage_options dict
+        # to target any ADLS-compatible endpoint; otherwise fall back to the
+        # OneLake account_name + bearer token. setdefault lets storage_options
+        # win without being clobbered by the defaults.
+        fs_kwargs: dict = dict(cfg.get("storage_options") or {})
+        connection_string = cfg.get("connection_string")
+        if connection_string:
+            fs_kwargs.setdefault("connection_string", connection_string)
+        else:
+            fs_kwargs.setdefault("account_name", account_name)
+            if token:
+                fs_kwargs.setdefault("credential", token)
 
         fs = adlfs.AzureBlobFileSystem(**fs_kwargs)
 
@@ -90,7 +106,12 @@ class MicrosoftFabricLoader(BaseLoader):
                 )
             import deltalake
             abfs_path = f"abfs://{full_path.rsplit('/', 1)[0]}"
-            storage_opts = {"bearer_token": token} if token else {}
+            # For delta, storage_options are deltalake/object_store keys (a
+            # different namespace from adlfs); the caller supplies the right
+            # ones for their endpoint, with the bearer token as the default.
+            storage_opts = dict(cfg.get("storage_options") or {})
+            if token:
+                storage_opts.setdefault("bearer_token", token)
             deltalake.write_deltalake(
                 abfs_path,
                 pa.Table.from_pandas(df, preserve_index=False),

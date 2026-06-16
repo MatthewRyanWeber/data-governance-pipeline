@@ -48,6 +48,7 @@ _EXPECTED_TIER = {
     "cockroachdb": "core", "sftp": "core", "chroma": "core", "lancedb": "core",
     "qdrant": "core", "weaviate": "core", "milvus": "core", "oracle": "core",
     "db2": "core", "synapse": "core", "yellowbrick": "core",
+    "fabric": "core",  # MicrosoftFabricLoader driven against Azurite (ADLS)
     # emulator
     "snowflake": "emulator", "bigquery": "emulator", "pinecone": "emulator",
     # cloud — credential-gated
@@ -55,7 +56,7 @@ _EXPECTED_TIER = {
     "hana": "cloud", "datasphere": "cloud", "motherduck": "cloud",
     "quickbooks": "cloud", "snowflake_vector": "cloud", "bigquery_vector": "cloud",
     # experimental — wired + mock-tested only, no engine/emulator proof
-    "fabric": "experimental", "athena": "experimental",
+    "athena": "experimental",
 }
 
 

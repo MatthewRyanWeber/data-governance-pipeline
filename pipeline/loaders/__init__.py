@@ -131,13 +131,13 @@ _VERIFICATION_TIER: dict[str, str] = {
     "db2":              TIER_CORE,       # db2 community container
     "synapse":          TIER_CORE,       # T-SQL path via real SQL Server
     "yellowbrick":      TIER_CORE,       # PostgreSQL wire-compatible engine
+    "fabric":           TIER_CORE,       # Azurite (same ADLS engine as azure_blob)
     # Emulator-verified — mechanics proven, vendor quirks not
     "snowflake":        TIER_EMULATOR,   # fakesnow
     "bigquery":         TIER_EMULATOR,   # goccy/bigquery-emulator
     "pinecone":         TIER_EMULATOR,   # pinecone-local
     # Experimental — wired and mock/contract-tested, but no emulator/engine
     # test actually drives them yet (don't rely on these in production).
-    "fabric":           TIER_EXPERIMENTAL,
     "athena":           TIER_EXPERIMENTAL,
     # Cloud-credential — verified when secrets are provided
     "gcs":              TIER_CLOUD,      # gcsfs (GCS-native API; not S3-compatible)

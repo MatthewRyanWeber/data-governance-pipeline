@@ -8,13 +8,17 @@ loader (producer) and the extractor (consumer offset commit).
 Revision history
 ────────────────
 1.0   2026-06-12   Initial release.
+1.1   2026-06-16   Added a dedicated Microsoft Fabric loader test driving the
+                   real MicrosoftFabricLoader write path against Azurite (the
+                   same ADLS engine that backs the core azure_blob tier), which
+                   promotes fabric from experimental to core.
 """
 
 import io
 import json
 import os
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pandas as pd
 import pytest
@@ -293,6 +297,194 @@ class TestAzuriteAzureBlobIntegration(unittest.TestCase):
         blob = service.get_blob_client("it-container", "data/people.csv")
         out = pd.read_csv(io.BytesIO(blob.download_blob().readall()))
         self.assertEqual(out["name"].tolist(), ["a", "b", "c"])
+
+
+@pytest.mark.integration
+@unittest.skipUnless(DOCKER, "Docker engine not available")
+class TestFabricAzuriteIntegration(unittest.TestCase):
+    """Microsoft Fabric loader against Azurite.
+
+    Drives the real MicrosoftFabricLoader write path (OneLake path layout +
+    adlfs + parquet read/concat/rewrite) against Azurite — Microsoft's official
+    storage emulator, the same ADLS engine that backs the core azure_blob tier.
+    OneLake *service* semantics (auth, workspace provisioning) are out of scope,
+    exactly as real-Azure quirks are out of scope for azure_blob.
+    """
+
+    ACCOUNT = "devstoreaccount1"
+    KEY = ("Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz"
+           "4I6tq/K1SZFPTOtr/KBHBeksoGMGw==")
+    # adlfs treats the first path segment as the container; the Fabric loader
+    # builds "<workspace_id>/<lakehouse_id>.Lakehouse/...", so workspace_id is
+    # the container name and must satisfy Azure's naming rules.
+    WORKSPACE = "fabric-ws"
+    LAKEHOUSE = "lh1"
+
+    @classmethod
+    def setUpClass(cls):
+        from testcontainers.core.container import DockerContainer
+        from testcontainers.core.waiting_utils import wait_for_logs
+        cls.container = (
+            DockerContainer("mcr.microsoft.com/azure-storage/azurite:latest")
+            .with_command("azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck")
+            .with_exposed_ports(10000)
+        )
+        cls.container.start()
+        wait_for_logs(cls.container, "successfully listens", timeout=60)
+        cls.port = int(cls.container.get_exposed_port(10000))
+        cls.conn_str = (
+            "DefaultEndpointsProtocol=http;"
+            f"AccountName={cls.ACCOUNT};AccountKey={cls.KEY};"
+            f"BlobEndpoint=http://127.0.0.1:{cls.port}/{cls.ACCOUNT};"
+        )
+        from azure.storage.blob import BlobServiceClient
+        cls.service = BlobServiceClient.from_connection_string(cls.conn_str)
+        cls.service.create_container(cls.WORKSPACE)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.container.stop()
+
+    def _cfg(self):
+        return {
+            "workspace_id": self.WORKSPACE,
+            "lakehouse_id": self.LAKEHOUSE,
+            "path": "Files",
+            "format": "parquet",
+            "connection_string": self.conn_str,
+        }
+
+    def _read_back(self, table):
+        blob_path = f"{self.LAKEHOUSE}.Lakehouse/Files/{table}.parquet"
+        blob = self.service.get_blob_client(self.WORKSPACE, blob_path)
+        return pd.read_parquet(io.BytesIO(blob.download_blob().readall()))
+
+    def test_parquet_write_lands_in_onelake_path(self):
+        loader = _loader("fabric")
+        rows = loader.load(_df(), self._cfg(), table="people")
+        self.assertEqual(rows, 3)
+        out = self._read_back("people")
+        self.assertEqual(out["name"].tolist(), ["a", "b", "c"])
+
+    def test_append_reads_concats_and_rewrites(self):
+        loader = _loader("fabric")
+        loader.load(_df(), self._cfg(), table="appended")
+        # Append must not overwrite — the loader reads the existing file,
+        # concatenates, and rewrites. Expect 3 + 3 = 6 rows.
+        rows = loader.load(_df(ids=(4, 5, 6), names=("d", "e", "f")),
+                           self._cfg(), table="appended", if_exists="append")
+        self.assertEqual(rows, 3)
+        out = self._read_back("appended")
+        self.assertEqual(out["name"].tolist(), ["a", "b", "c", "d", "e", "f"])
+
+    def test_replace_overwrites_existing_file(self):
+        loader = _loader("fabric")
+        loader.load(_df(), self._cfg(), table="replaced")
+        rows = loader.load(_df(ids=(9,), names=("z",)),
+                           self._cfg(), table="replaced", if_exists="replace")
+        self.assertEqual(rows, 1)
+        out = self._read_back("replaced")
+        self.assertEqual(out["name"].tolist(), ["z"])
+
+
+@pytest.mark.integration
+@unittest.skipUnless(DOCKER, "Docker engine not available")
+class TestAthenaS3StagingIntegration(unittest.TestCase):
+    """Athena loader's S3 staging path against MinIO (a real S3 engine).
+
+    Proves the data-plane half — the parquet staging write and the replace-mode
+    prefix delete — lands correctly in a real object store. The Athena control
+    plane (start_query_execution / MSCK REPAIR) has no free real engine, so it
+    is mocked here; Athena therefore stays in the experimental tier — this test
+    is stronger evidence, not a core promotion.
+    """
+
+    ACCESS, SECRET = "it_access", "it_secret_key"
+    BUCKET = "it-athena"
+
+    @classmethod
+    def setUpClass(cls):
+        from testcontainers.core.container import DockerContainer
+        from testcontainers.core.waiting_utils import wait_for_logs
+        cls.container = (
+            DockerContainer("minio/minio:latest")
+            .with_env("MINIO_ROOT_USER", cls.ACCESS)
+            .with_env("MINIO_ROOT_PASSWORD", cls.SECRET)
+            .with_command("server /data")
+            .with_exposed_ports(9000)
+        )
+        cls.container.start()
+        wait_for_logs(cls.container, "API:", timeout=60)
+        cls.endpoint = f"http://127.0.0.1:{cls.container.get_exposed_port(9000)}"
+        import boto3
+        cls.client = boto3.client(
+            "s3", endpoint_url=cls.endpoint,
+            aws_access_key_id=cls.ACCESS, aws_secret_access_key=cls.SECRET,
+        )
+        cls.client.create_bucket(Bucket=cls.BUCKET)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.container.stop()
+
+    def _cfg(self, prefix):
+        # Each test gets its own data prefix so the shared bucket can't leak
+        # objects across tests (they run in the same class-scoped MinIO).
+        return {
+            "database": "it_db",
+            "s3_data_dir": f"s3://{self.BUCKET}/{prefix}",
+            "s3_staging_dir": f"s3://{self.BUCKET}/staging",
+            "endpoint_url": self.endpoint,
+            "aws_access_key": self.ACCESS,
+            "aws_secret_key": self.SECRET,
+            "region": "us-east-1",
+        }
+
+    def _patched_boto3(self):
+        """Patch boto3.client so 's3' hits real MinIO and 'athena' is mocked."""
+        import boto3
+        real_client = boto3.client
+
+        def _factory(service, **kw):
+            if service == "athena":
+                m = MagicMock()
+                m.start_query_execution.return_value = {"QueryExecutionId": "q1"}
+                m.get_query_execution.return_value = {
+                    "QueryExecution": {"Status": {"State": "SUCCEEDED"}}
+                }
+                return m
+            return real_client(service, **kw)
+
+        return patch("boto3.client", side_effect=_factory)
+
+    def _objects_under(self, prefix):
+        resp = self.client.list_objects_v2(Bucket=self.BUCKET, Prefix=f"{prefix}/")
+        return [o["Key"] for o in resp.get("Contents", [])]
+
+    def test_staging_write_lands_in_s3(self):
+        loader = _loader("athena")
+        with self._patched_boto3():
+            rows = loader.load(_df(), self._cfg("write"), table="people")
+        self.assertEqual(rows, 3)
+        keys = self._objects_under("write")
+        self.assertEqual(len(keys), 1)
+        obj = self.client.get_object(Bucket=self.BUCKET, Key=keys[0])
+        out = pd.read_parquet(io.BytesIO(obj["Body"].read()))
+        self.assertEqual(out["name"].tolist(), ["a", "b", "c"])
+
+    def test_replace_deletes_prior_objects(self):
+        loader = _loader("athena")
+        with self._patched_boto3():
+            loader.load(_df(), self._cfg("replace"), table="people")
+            # replace must delete the prior staged object before writing the
+            # new one — otherwise replace silently behaves like append.
+            loader.load(_df(ids=(9,), names=("z",)), self._cfg("replace"),
+                        table="people", if_exists="replace")
+        keys = self._objects_under("replace")
+        self.assertEqual(len(keys), 1)
+        obj = self.client.get_object(Bucket=self.BUCKET, Key=keys[0])
+        out = pd.read_parquet(io.BytesIO(obj["Body"].read()))
+        self.assertEqual(out["name"].tolist(), ["z"])
 
 
 if __name__ == "__main__":

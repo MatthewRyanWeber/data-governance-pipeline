@@ -5,6 +5,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [4.28.0] — 2026-06-16
+
+Proven depth catches up to surface area: a destination moves from "wired but
+unproven" to verified against a real engine in CI.
+
+### Changed
+- **Microsoft Fabric promoted experimental → core.** A dedicated integration
+  test now drives the real `MicrosoftFabricLoader` write path (OneLake path
+  layout + adlfs + parquet read/concat/rewrite, plus append and replace)
+  against **Azurite** — Microsoft's official storage emulator, the same ADLS
+  engine that already backs the core `azure_blob` tier — and runs in CI on
+  every push (`streams-vector` group). Core count 27 → 28; experimental 2 → 1.
+
+### Added
+- `MicrosoftFabricLoader` accepts adlfs storage options (`connection_string`
+  or a `storage_options` dict) so it can target any ADLS-compatible endpoint
+  (real OneLake or an emulator); previously `account_name` was effectively
+  hardcoded, leaving the write path unconfigurable and unverifiable.
+- `AthenaLoader` accepts `cfg['endpoint_url']` to target a non-AWS S3 (MinIO)
+  on the S3 data plane only. A new integration test verifies the Athena S3
+  staging write and replace-mode prefix delete against real MinIO, with the
+  Athena control plane (MSCK REPAIR) mocked — so Athena stays **experimental**
+  (its query API has no free real engine) but the storage half is now proven.
+
 ## [4.27.0] — 2026-06-16
 
 Distributed governance and silent-failure detection — governance that scales
