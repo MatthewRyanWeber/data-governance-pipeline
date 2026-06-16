@@ -35,6 +35,9 @@ Revision history
 1.2   2026-06-16   segment_id validated before deriving the per-segment log_dir,
                    with an is_relative_to guard so a crafted id cannot place the
                    partition's reports outside the ledger root.
+1.3   2026-06-16   Two guards instead of three: is_relative_to owns traversal,
+                   ledger.segment() owns the filename charset — the redundant
+                   explicit validate_segment_id call was dropped.
 """
 
 import logging
@@ -76,11 +79,12 @@ def govern_partition(
     from pipeline.governance_logger import GovernanceLogger
     from pipeline.transform import Transformer
     from pipeline.helpers import detect_pii
-    from pipeline.partitioned_ledger import validate_segment_id
 
-    # Reject "."/".." (and any non-charset id) before it becomes a path
-    # component — the per-segment log_dir below joins it onto root_dir.
-    validate_segment_id(segment_id)
+    # Two guards, each owning one property: is_relative_to stops segment_id
+    # from escaping the ledger root as a path component (the log_dir below
+    # joins it onto root_dir); ledger.segment() validates the filename charset
+    # (rejecting "."/".." and non-charset ids) and runs before GovernanceLogger
+    # is built, so no directory is ever created for a rejected id.
     log_dir = (ledger.root_dir / segment_id).resolve()
     if not log_dir.is_relative_to(ledger.root_dir.resolve()):
         raise ValueError(

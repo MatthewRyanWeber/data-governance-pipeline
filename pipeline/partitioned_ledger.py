@@ -54,9 +54,10 @@ _SEG_SUFFIX = ".jsonl"
 _ANCHOR_SUFFIX = ".jsonl.anchor"
 
 # Sentinel head for a segment whose anchor cannot be read — guarantees a leaf
-# that no intact segment can produce, so the Merkle root mismatches and verify
-# returns False (tamper) rather than the run crashing on a corrupt anchor.
-_UNREADABLE_HEAD = {"entry_count": -1, "last_hash": "<UNREADABLE>"}
+# that no intact segment can produce (a real last_hash is 64 hex chars), so the
+# Merkle root mismatches and verify returns False (tamper) rather than the run
+# crashing on a corrupt anchor. Spelling matches LedgerWriter._read_anchor.
+_UNREADABLE_HEAD = {"entry_count": -1, "last_hash": "UNREADABLE"}
 
 
 def validate_segment_id(segment_id: str) -> str:

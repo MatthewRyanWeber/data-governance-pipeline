@@ -147,8 +147,8 @@ class GovernanceLogger:
         self.artifacts.ensure_directories()
 
         self.log_file = self.artifacts.log_file
-        self.ledger_file = self.artifacts.ledger_file
-        self.ledger_anchor_file = self.artifacts.ledger_anchor_file
+        # ledger_file / ledger_anchor_file are set once below, from the ledger
+        # that actually receives events (see the collaborators block).
         self.pii_report_file = self.artifacts.pii_report_file
         self.validation_rpt_file = self.artifacts.validation_report_file
         self.profile_rpt_file = self.artifacts.profile_report_file
@@ -178,11 +178,11 @@ class GovernanceLogger:
         )
         self._buffers = AuditBuffers()
 
-        # Point the ledger-path aliases at the ledger that actually receives
-        # events. With an injected ledger (a PartitionedLedger segment) these
-        # would otherwise report this run's artifacts paths while events chain
-        # into the segment file — a confusing divergence for anything that
-        # reads gov.ledger_file. For the default ledger these are unchanged.
+        # Source the ledger-path aliases from the ledger that actually receives
+        # events, not from artifacts: an injected ledger (a PartitionedLedger
+        # segment) writes to the segment file, so reporting this run's artifacts
+        # paths here would diverge from where events really chain. For the
+        # default ledger these resolve to the artifacts paths anyway.
         self.ledger_file = self._ledger.ledger_file
         self.ledger_anchor_file = self._ledger.ledger_anchor_file
 

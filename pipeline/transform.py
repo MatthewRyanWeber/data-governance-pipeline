@@ -282,6 +282,11 @@ class Transformer:
                     token = {v: mask_value(v) for v in col.unique()}
                     df.loc[present, field] = col.map(token)
                 except TypeError:
+                    # mask_value falls back to str(value); for an unordered
+                    # collection that str isn't canonical, so two equal values
+                    # could mask to different tokens. Acceptable: reaching here
+                    # means a set/dict sits in a PII cell — already pathological
+                    # data, not a case worth a canonicalisation pass.
                     df.loc[present, field] = col.map(mask_value)
                 self.gov.pii_action(field, "MASKED")
                 self.pii_actions[field] = "MASKED"
