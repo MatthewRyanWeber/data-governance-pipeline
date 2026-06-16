@@ -7,6 +7,8 @@ tampered, dropped, added, or unsealed ledger is detected.
 Revision history
 ────────────────
 1.0   2026-06-15   Initial release.
+1.1   2026-06-16   Cover hardening: "."/".." segment ids rejected, corrupt
+                   anchor → tamper (not crash), verify is read-only.
 """
 
 import json
@@ -108,6 +110,34 @@ class TestPartitionedLedger(unittest.TestCase):
         led = PartitionedLedger(self.root)
         with self.assertRaises(ValueError):
             led.segment("../escape")
+
+    def test_dot_segment_ids_rejected(self):
+        # "." and ".." pass the charset regex but would escape the ledger root
+        # if used as a path component — must be rejected explicitly.
+        led = PartitionedLedger(self.root)
+        for bad in (".", ".."):
+            with self.assertRaises(ValueError):
+                led.segment(bad)
+
+    def test_corrupt_segment_anchor_is_tamper_not_crash(self):
+        led = self._write_segments(3, 5)
+        led.seal()
+        # Corrupt one segment's anchor file. Verification must report tamper
+        # (False), not raise on the unparseable JSON.
+        anchor = next(self.root.glob("segment-part-0001.jsonl.anchor"))
+        anchor.write_text("{not valid json", encoding="utf-8")
+        self.assertFalse(PartitionedLedger(self.root).verify())
+
+    def test_verify_does_not_mutate_anchors(self):
+        led = self._write_segments(3, 5)
+        led.seal()
+        anchors = sorted(self.root.glob("segment-*.jsonl.anchor"))
+        before = {a.name: a.read_bytes() for a in anchors}
+        # A normal (non-dry-run) ledger must still verify read-only — the
+        # crash-during-append catch-up must not fire and rewrite anchors.
+        self.assertTrue(PartitionedLedger(self.root).verify())
+        after = {a.name: a.read_bytes() for a in anchors}
+        self.assertEqual(before, after)
 
     def test_merkle_root_deterministic_and_order_independent(self):
         a = ["aa", "bb", "cc"]

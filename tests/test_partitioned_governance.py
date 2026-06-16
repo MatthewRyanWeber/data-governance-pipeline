@@ -8,6 +8,8 @@ governance (PII masking) actually applied per partition.
 Revision history
 ────────────────
 1.0   2026-06-15   Initial release.
+1.1   2026-06-16   Cover segment_id traversal rejection and gov.ledger_file
+                   pointing at the injected segment.
 """
 
 import shutil
@@ -78,6 +80,29 @@ class TestPartitionedGovernance(unittest.TestCase):
         # The DUPLICATE_KEYS governance event is in the partition's own segment.
         seg_file = self.root / "segment-part-0000.jsonl"
         self.assertIn("DUPLICATE_KEYS", seg_file.read_text(encoding="utf-8"))
+
+    def test_traversal_segment_id_rejected(self):
+        # A crafted segment_id must not place the partition's log_dir outside
+        # the ledger root.
+        led = PartitionedLedger(self.root)
+        for bad in ("..", "."):
+            with self.assertRaises(ValueError):
+                govern_partition(_frame(0, 3), bad, led)
+
+    def test_gov_ledger_file_points_at_the_segment(self):
+        # With an injected segment, gov.ledger_file must report the segment file
+        # that actually receives events — not this run's default artifacts path.
+        led = PartitionedLedger(self.root)
+        govern_partition(_frame(0, 5), "part-0000", led)
+        from pipeline.governance_logger import GovernanceLogger
+        seg = led.segment("part-0000")
+        gov = GovernanceLogger(
+            source_name="part-0000",
+            log_dir=str(self.root / "part-0000"),
+            ledger=seg,
+        )
+        self.assertEqual(Path(gov.ledger_file), Path(seg.ledger_file))
+        self.assertEqual(Path(gov.ledger_anchor_file), Path(seg.ledger_anchor_file))
 
     def test_tampering_one_partition_breaks_the_whole_root(self):
         led = PartitionedLedger(self.root)

@@ -12,6 +12,8 @@ Revision history
 1.1   2026-06-11   Numeric watermarks are now stored as native JSON numbers;
                    regression tests for numeric filtering and for NaT rows
                    being included instead of silently dropped.
+1.2   2026-06-16   Regression test: null values in a numeric watermark column
+                   are included (processed), not silently dropped forever.
 """
 
 import json
@@ -136,6 +138,17 @@ class TestIncrementalFilter(unittest.TestCase):
         df = pd.DataFrame({"version": [3, 7, 5]})
         result = self.inc.filter(df, "version", "5", "data.csv")
         self.assertEqual(list(result["version"]), [7])
+
+    def test_filter_numeric_includes_null_watermark_rows(self):
+        # Regression: a null value in a numeric watermark column made every
+        # comparison False, dropping the row on every run forever. It must be
+        # included (processed) with a warning, like the datetime NaT branch.
+        df = pd.DataFrame({"version": [3.0, None, 7.0, 10.0]})
+        with self.assertLogs("pipeline.incremental_filter", level="WARNING") as cm:
+            result = self.inc.filter(df, "version", 5, "data.csv")
+        self.assertTrue(result["version"].isna().any())
+        self.assertEqual(sorted(result["version"].dropna()), [7.0, 10.0])
+        self.assertTrue(any("null watermark value" in m for m in cm.output))
 
     def test_filter_datetime_includes_unparseable_rows(self):
         # Regression: rows that coerce to NaT were silently dropped on every

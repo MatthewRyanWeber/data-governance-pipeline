@@ -5,6 +5,55 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [4.27.0] — 2026-06-16
+
+Distributed governance and silent-failure detection — governance that scales
+out, and catches the failures row counts miss.
+
+### Added
+- **Distributed governance (Path A)** — `pipeline.partitioned_ledger.PartitionedLedger`:
+  each partition writes its own independent hash chain; segments compose into a
+  single verifiable **Merkle root** (`seal()`/`verify()`/`inclusion_proof()`),
+  removing the single-writer ledger bottleneck. `pipeline.partitioned_governance.govern_partition`
+  runs the governance stages on one partition into its segment — the unit a
+  distributed engine maps over partitions. Verified under real `ProcessPoolExecutor`
+  and real PySpark (`mapPartitionsWithIndex`), and across a MinIO object-store
+  round-trip. See `docs/DISTRIBUTED_GOVERNANCE.md`.
+- **Silent-failure detectors** — business-key duplicate detection (same key /
+  differing timestamps, which row counts and full-row dedup miss) and null-spike
+  / null-floor detection in `DataObserver`, wired per-chunk and per-partition.
+- **Late-arriving data visibility** — rows below the incremental watermark are
+  recorded as a `LATE_ARRIVAL` event (not dropped silently), with optional DLQ
+  routing for recovery.
+- **DuckDB read fast path** (`compute_engine: "duckdb"`) — ~2x faster delimited
+  reads, rows handed to the same governance stages (byte-identical, enforced by
+  `tests/test_compute_engine_equivalence.py`).
+- **CI/local parity** — `scripts/preflight.py` reproduces the CI gates locally;
+  a `minimal-deps` job runs loader tests with optional SDKs absent.
+
+### Changed
+- Transform masking is ~2.7x faster with byte-identical output (per-distinct-value
+  masking + an `infer_dtype` pre-filter that skips the per-cell nested scan on
+  all-string columns); masking now skips null cells.
+
+### Fixed
+- Audit-found bugs across the warehouse loaders (staging-table leaks, blind
+  append-on-error duplication, unbounded staging names, HANA non-transactional
+  replace) and a `replace`+streaming data-loss path; `GovernanceLogger` gained an
+  optional injected `ledger` for per-partition use.
+- **Correctness audit (Path A + transform):** PII masking no longer crashes on
+  unhashable cells (a `set`/`dict`/`list` that escaped flattening) — it falls
+  back to per-cell masking with byte-identical output for the hashable path; a
+  corrupt/unreadable partition anchor is treated as tamper (`verify()` returns
+  `False`) instead of crashing; `PartitionedLedger.verify()` is read-only (no
+  longer rewrites anchors via crash-during-append catch-up); segment ids reject
+  `.`/`..` (the charset allowed them, but they escape the ledger root as a path
+  component), with an `is_relative_to` guard on the derived per-segment log dir;
+  `gov.ledger_file`/`ledger_anchor_file` follow an injected ledger instead of
+  reporting this run's default artifacts paths; and the numeric incremental-filter
+  branch keeps rows with a null watermark value (logged) instead of dropping them
+  on every run forever — matching the datetime branch.
+
 ## [4.26.0] — 2026-06-12
 
 The reference-quality release: every claim the project makes is now

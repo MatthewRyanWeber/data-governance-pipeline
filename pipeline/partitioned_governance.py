@@ -32,6 +32,9 @@ Revision history
 1.0   2026-06-15   Initial release: govern_partition + a concurrent coordinator.
 1.1   2026-06-15   Optional observe_config runs the DataObserver per partition
                    (dup-key / null-spike detectors) into the partition's segment.
+1.2   2026-06-16   segment_id validated before deriving the per-segment log_dir,
+                   with an is_relative_to guard so a crafted id cannot place the
+                   partition's reports outside the ledger root.
 """
 
 import logging
@@ -73,12 +76,22 @@ def govern_partition(
     from pipeline.governance_logger import GovernanceLogger
     from pipeline.transform import Transformer
     from pipeline.helpers import detect_pii
+    from pipeline.partitioned_ledger import validate_segment_id
+
+    # Reject "."/".." (and any non-charset id) before it becomes a path
+    # component — the per-segment log_dir below joins it onto root_dir.
+    validate_segment_id(segment_id)
+    log_dir = (ledger.root_dir / segment_id).resolve()
+    if not log_dir.is_relative_to(ledger.root_dir.resolve()):
+        raise ValueError(
+            f"segment_id {segment_id!r} resolves outside the ledger root"
+        )
 
     # The partition's own independent ledger chain.
     segment = ledger.segment(segment_id)
     gov = GovernanceLogger(
         source_name=segment_id,
-        log_dir=str(ledger.root_dir / segment_id),
+        log_dir=str(log_dir),
         dry_run=dry_run,
         ledger=segment,                # events chain into THIS partition's segment
     )

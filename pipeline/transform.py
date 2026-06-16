@@ -21,6 +21,9 @@ Revision history
                    uses a fast infer_dtype pre-filter so all-string columns skip
                    the per-cell scan; PII masking masks each DISTINCT value once
                    and maps the rest (fewer SHA-256 calls, no per-cell apply).
+1.4   2026-06-16   PII masking no longer crashes on unhashable cells (a list/dict
+                   that escaped flattening): .unique() TypeError falls back to a
+                   per-cell map. Output byte-identical for the hashable fast path.
 """
 
 import re
@@ -271,9 +274,15 @@ class Transformer:
                 # mask_value is deterministic per value, so mask each DISTINCT
                 # value once and vectorise the rest with .map — identical output,
                 # far fewer SHA-256 calls on repeated values, and no per-cell
-                # Python .apply loop.
-                token = {v: mask_value(v) for v in col.unique()}
-                df.loc[present, field] = col.map(token)
+                # Python .apply loop. Unhashable cells (a list/dict that escaped
+                # flattening) make .unique() raise TypeError — fall back to a
+                # per-cell map, which masks str(value) and never crashes. The
+                # output is byte-identical to the fast path for hashable values.
+                try:
+                    token = {v: mask_value(v) for v in col.unique()}
+                    df.loc[present, field] = col.map(token)
+                except TypeError:
+                    df.loc[present, field] = col.map(mask_value)
                 self.gov.pii_action(field, "MASKED")
                 self.pii_actions[field] = "MASKED"
             elif pii_strategy == "drop":

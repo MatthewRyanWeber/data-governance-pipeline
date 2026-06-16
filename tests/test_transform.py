@@ -12,6 +12,8 @@ Revision history
                    after flattening; flatten_nested honours sep/max_level and
                    leaves plain string columns untouched; None pii_findings
                    disables flatten-time detection.
+1.2   2026-06-16   Regression test: masking a PII column with unhashable
+                   (list/dict) cells falls back to per-cell masking, no crash.
 """
 
 import hashlib
@@ -451,6 +453,21 @@ class TestTransformPipeline(unittest.TestCase):
         result = self.t.transform(df, None, "mask", drop_cols=[])
         email_columns = [c for c in result.columns if "email" in c.lower()]
         self.assertEqual(result[email_columns[0]].iloc[0], "alice@example.com")
+
+    def test_masking_unhashable_cells_does_not_crash(self):
+        # Regression: a PII column holding unhashable cells (a set survives to
+        # masking because it is neither dict nor list, so it is not flattened)
+        # made .unique() raise TypeError mid-mask. It must mask via the
+        # per-cell fallback instead.
+        df = pd.DataFrame({
+            "id": [1, 2],
+            "email": [{"a@example.com"}, {"b@example.com"}],
+        })
+        result = self.t.transform(df, [{"field": "email"}], "mask", drop_cols=[])
+        self.assertTrue(
+            result["email"].astype(str).str.startswith("MASKED_").all(),
+            "Unhashable PII cells must still be masked, not crash",
+        )
 
 
 class TestEdgeCases(unittest.TestCase):

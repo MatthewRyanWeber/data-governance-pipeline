@@ -29,6 +29,9 @@ Revision history
 4.6   2026-06-15   Optional `ledger` injection so a per-partition run can write
                    its audit chain into a PartitionedLedger segment (Path A);
                    defaults to the single-file ledger.
+4.7   2026-06-16   ledger_file / ledger_anchor_file aliases now follow the
+                   injected ledger (they reported this run's artifacts paths
+                   while events chained into the segment file — a divergence).
 """
 
 import getpass
@@ -174,6 +177,14 @@ class GovernanceLogger:
             logger=self.logger,
         )
         self._buffers = AuditBuffers()
+
+        # Point the ledger-path aliases at the ledger that actually receives
+        # events. With an injected ledger (a PartitionedLedger segment) these
+        # would otherwise report this run's artifacts paths while events chain
+        # into the segment file — a confusing divergence for anything that
+        # reads gov.ledger_file. For the default ledger these are unchanged.
+        self.ledger_file = self._ledger.ledger_file
+        self.ledger_anchor_file = self._ledger.ledger_anchor_file
 
     # ── Back-compat delegating properties ────────────────────────────────
     # GovernanceLogger used to own the ledger machinery and aggregation

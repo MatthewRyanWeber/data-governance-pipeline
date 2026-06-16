@@ -28,6 +28,11 @@ Revision history
 ────────────────
 1.0   2026-06-15   Initial release: per-partition segments, Merkle root anchor,
                    verification, and inclusion proofs.
+1.1   2026-06-16   Hardening: segment_id rejects "." / ".." (the charset allowed
+                   them, but they escape the ledger root when used as a path
+                   component); a corrupt/unreadable segment anchor is treated as
+                   tamper (verify→False) instead of crashing; verify() reads
+                   segments read-only (dry_run) so it never mutates anchors.
 """
 
 import hashlib
@@ -47,6 +52,27 @@ _ROOT_ANCHOR_NAME = "ledger.root.json"
 _SEG_PREFIX = "segment-"
 _SEG_SUFFIX = ".jsonl"
 _ANCHOR_SUFFIX = ".jsonl.anchor"
+
+# Sentinel head for a segment whose anchor cannot be read — guarantees a leaf
+# that no intact segment can produce, so the Merkle root mismatches and verify
+# returns False (tamper) rather than the run crashing on a corrupt anchor.
+_UNREADABLE_HEAD = {"entry_count": -1, "last_hash": "<UNREADABLE>"}
+
+
+def validate_segment_id(segment_id: str) -> str:
+    """Validate a segment id as a safe filename AND path component.
+
+    The single check both the ledger (filename) and the governance entrypoint
+    (which derives a per-segment ``log_dir = root_dir / segment_id``) call.
+    "." and ".." pass the charset regex but escape the ledger root when used
+    as a path component, so they are rejected explicitly.
+    """
+    if segment_id in (".", "..") or not _SEGMENT_ID_RE.match(segment_id):
+        raise ValueError(
+            f"Invalid segment_id {segment_id!r}: must match "
+            f"{_SEGMENT_ID_RE.pattern} and not be '.' or '..'"
+        )
+    return segment_id
 
 
 def _sha(data: str) -> str:
@@ -133,10 +159,7 @@ class PartitionedLedger:
             self.root_dir.mkdir(parents=True, exist_ok=True)
 
     def _segment_file(self, segment_id: str) -> Path:
-        if not _SEGMENT_ID_RE.match(segment_id):
-            raise ValueError(
-                f"Invalid segment_id {segment_id!r}: must match {_SEGMENT_ID_RE.pattern}"
-            )
+        validate_segment_id(segment_id)
         return self.root_dir / f"{_SEG_PREFIX}{segment_id}{_SEG_SUFFIX}"
 
     def segment(self, segment_id: str) -> LedgerWriter:
@@ -146,12 +169,15 @@ class PartitionedLedger:
         workers can call this and write concurrently with no shared state and
         no lock contention — the property the single-file ledger lacks.
         """
+        return self._segment(segment_id, dry_run=self.dry_run)
+
+    def _segment(self, segment_id: str, *, dry_run: bool) -> LedgerWriter:
         return LedgerWriter(
             # Structural shim: LedgerWriter only reads .ledger_file and
             # .ledger_anchor_file off its artifacts arg, which _SegmentPaths
             # provides — it just isn't the nominal RunArtifacts type.
             _SegmentPaths(self._segment_file(segment_id)),  # type: ignore[arg-type]
-            dry_run=self.dry_run,
+            dry_run=dry_run,
             verify_integrity=self._verify_integrity,
             logger=self.logger,
         )
@@ -161,7 +187,18 @@ class PartitionedLedger:
         heads = []
         for anchor in self.root_dir.glob(f"{_SEG_PREFIX}*{_ANCHOR_SUFFIX}"):
             seg_id = anchor.name[len(_SEG_PREFIX):-len(_ANCHOR_SUFFIX)]
-            data = json.loads(anchor.read_text(encoding="utf-8"))
+            try:
+                data = json.loads(anchor.read_text(encoding="utf-8"))
+                if not isinstance(data, dict):
+                    raise ValueError("anchor is not a JSON object")
+            except (OSError, ValueError) as exc:
+                # A corrupt/unreadable anchor is a tamper signal, not a reason
+                # to crash the whole verification. Emit a sentinel head so the
+                # recomputed Merkle root cannot match the sealed root.
+                self.logger.error(
+                    "[TAMPER DETECTED] Segment %s anchor unreadable: %s", seg_id, exc
+                )
+                data = _UNREADABLE_HEAD
             heads.append({
                 "segment_id": seg_id,
                 "entry_count": int(data.get("entry_count", 0)),
@@ -201,8 +238,11 @@ class PartitionedLedger:
         stored = json.loads(root_path.read_text(encoding="utf-8"))
 
         # 1) each sealed segment's internal hash chain (reuses LedgerWriter).
+        # Read-only (dry_run): verify must never mutate the anchors it audits —
+        # LedgerWriter's crash-during-append catch-up rewrites the anchor unless
+        # dry_run is set, which would let a verify pass silently "fix" a segment.
         for head in stored.get("segments", []):
-            if not self.segment(head["segment_id"]).verify_ledger():
+            if not self._segment(head["segment_id"], dry_run=True).verify_ledger():
                 self.logger.error(
                     "[TAMPER DETECTED] Segment %s failed chain verification.",
                     head["segment_id"],

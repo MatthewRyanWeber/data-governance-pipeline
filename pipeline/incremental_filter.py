@@ -21,6 +21,9 @@ Revision history
                    the watermark are counted in the ledger every run, and an
                    optional dlq= routes them for recovery (a delayed event or
                    backfill arriving after the watermark moved on).
+1.4   2026-06-16   Numeric branch keeps rows with a null watermark value (logged)
+                   instead of dropping them forever — matches the datetime
+                   branch's unparseable-row handling.
 """
 
 import json
@@ -111,8 +114,19 @@ class IncrementalFilter:
                     last_wm, col,
                 )
                 return df
+            # A null watermark value makes every comparison False, so the row
+            # would be dropped on every run forever with no trace — process it
+            # instead, mirroring the datetime branch's unparseable handling.
+            null_mask = df[col].isna()
+            null_count = int(null_mask.sum())
+            if null_count:
+                logger.warning(
+                    "[INCREMENTAL] %d row(s) in '%s' have a null watermark value "
+                    "— including them in this run rather than dropping them.",
+                    null_count, col,
+                )
             self._handle_late_arrivals(df, df[col] < numeric_watermark, col, last_wm, dlq)
-            df = df[df[col] > numeric_watermark].copy()
+            df = df[(df[col] > numeric_watermark) | null_mask].copy()
         else:
             try:
                 watermark_value = pd.to_datetime(last_wm)
