@@ -17,6 +17,8 @@ Revision history
 1.4   2026-06-14   Upsert validates each natural_key via the shared identifier
                    validator and confirms membership in df.columns before
                    interpolating keys into the MERGE ON/SET clauses.
+1.5   2026-06-17   Byte-aware staging chunk size (_adaptive_chunksize) instead of
+                   a fixed 500 rows.
 """
 
 import time
@@ -189,7 +191,8 @@ class Db2Loader(BaseLoader):
         with self._engine_scope(cfg) as engine:
             with engine.begin() as conn_sa:
                 df.to_sql(tmp_table.lower(), conn_sa, if_exists="replace",
-                          index=False, schema=schema.lower(), chunksize=500)
+                          index=False, schema=schema.lower(),
+                          chunksize=self._adaptive_chunksize(df))
 
         conn = _ibm_db.connect(self._conn_str(cfg), "", "")
         try:

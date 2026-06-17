@@ -24,6 +24,12 @@ Revision history
 1.8   2026-06-14   _require_upsert_keys now validates every natural_key (closes
                    the identifier-injection gap across all upsert loaders);
                    SUPPORTS_UPSERT capability flag for the CLI fail-fast.
+1.9   2026-06-17   Added _adaptive_chunksize (byte-aware write batching) and
+                   _execute_outside_transaction (autocommit DDL guard), porting
+                   the file-size lessons from the 27 GB binary import: a fixed
+                   row-count chunk blows driver packet/memory limits on wide or
+                   large-cell rows, and pre-load maintenance DDL must run outside
+                   a transaction.
 """
 
 import contextlib
@@ -203,6 +209,92 @@ class BaseLoader:
             yield engine
         finally:
             engine.dispose()
+
+    # ── Adaptive write batching and maintenance DDL ──────────────────────
+
+    def _adaptive_chunksize(
+        self,
+        df,
+        *,
+        method: str | None = None,
+        target_bytes: int = 8 * 1024 * 1024,
+        max_param_count: int = 2000,
+        fallback_rows: int = 500,
+        max_rows: int = 50_000,
+    ) -> int:
+        """Rows per write batch, sized by payload bytes (and bind-parameter limits).
+
+        A fixed row count (the old hardcoded 500) is safe for thin rows, but a
+        load of wide rows or large text/binary cells can exceed the driver's
+        packet limit and inflate memory — the failure mode a 27 GB binary import
+        hit in practice. Two independent caps apply; the smaller wins:
+
+        * bytes — keep ``rows * avg_row_bytes`` near ``target_bytes`` (8 MiB) so
+          one batch never balloons regardless of how fat each row is.
+        * parameters — with ``method="multi"`` the driver binds
+          ``len(columns)`` parameters per row into a single statement, and SQL
+          Server caps a statement at 2,100, so the row count must shrink as the
+          frame widens. Only applied when method="multi".
+
+        Result is clamped to ``[1, max_rows]`` and never exceeds the frame's own
+        row count; an empty frame returns ``fallback_rows``.
+        """
+        row_count = len(df)
+        if row_count == 0:
+            return fallback_rows
+
+        # Estimate average row size from a bounded head sample so the cost is
+        # O(sample), not O(frame) — flat regardless of how big the chunk is.
+        # deep=True so object/string/bytes columns report their real footprint.
+        sample = df.head(1000)
+        sample_bytes = int(sample.memory_usage(index=False, deep=True).sum())
+        average_row_bytes = max(1, sample_bytes // max(1, len(sample)))
+        rows = max(1, target_bytes // average_row_bytes)
+
+        if method == "multi":
+            column_count = max(1, len(df.columns))
+            rows = min(rows, max(1, max_param_count // column_count))
+
+        return max(1, min(rows, max_rows, row_count))
+
+    def _execute_outside_transaction(
+        self,
+        engine,
+        statements,
+        *,
+        best_effort: bool = True,
+    ) -> int:
+        """Run statements a DBMS forbids inside a multi-statement transaction.
+
+        SQL Server ``ALTER DATABASE`` (e.g. pre-growing a data file before a
+        bulk load — the FILEGROWTH lesson), Postgres/Redshift ``VACUUM``, and
+        some ``OPTIMIZE``/maintenance statements error if wrapped in a
+        transaction. SQLAlchemy's ``engine.begin()`` opens one, so these run on
+        an AUTOCOMMIT connection instead.
+
+        ``best_effort`` (default): a failing statement is logged and skipped —
+        these are tuning/maintenance, never the load itself, so one rejection
+        (a managed instance that disallows ``ALTER DATABASE``) must not abort
+        the load. Pass ``best_effort=False`` to surface the first failure.
+        Returns the count of statements that executed cleanly.
+        """
+        from sqlalchemy import text
+
+        executed = 0
+        with engine.connect() as conn:
+            autocommit_conn = conn.execution_options(isolation_level="AUTOCOMMIT")
+            for statement in statements:
+                try:
+                    autocommit_conn.execute(text(statement))
+                    executed += 1
+                except Exception as exc:
+                    if not best_effort:
+                        raise
+                    logger.warning(
+                        "Maintenance statement skipped (autocommit): %.60s — %s",
+                        statement, exc,
+                    )
+        return executed
 
     # ── Circuit breaker helpers (opt-in) ───────────────────────────────
 

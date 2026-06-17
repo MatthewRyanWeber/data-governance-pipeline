@@ -15,6 +15,8 @@ Revision history
                    frame); the COPY error propagates in the append case while the
                    'replace' stage-copy keeps the safe fallback. R-3: staging
                    table name and S3 key bound to the 127-char Redshift limit.
+1.4   2026-06-17   Byte-aware write/staging chunk size (_adaptive_chunksize,
+                   param-capped for method="multi") instead of a fixed 500 rows.
 """
 
 import os
@@ -248,7 +250,8 @@ class RedshiftLoader(BaseLoader):
             with self._engine_scope(cfg) as engine:
                 with engine.begin() as _conn:
                     df.to_sql(tmp_table, _conn, if_exists="replace",
-                              index=False, schema=schema, chunksize=500,
+                              index=False, schema=schema,
+                              chunksize=self._adaptive_chunksize(df, method="multi"),
                               method="multi")
 
         conn = self._connect(cfg)
@@ -307,7 +310,8 @@ class RedshiftLoader(BaseLoader):
                 try:
                     with engine.begin() as _conn:
                         df.to_sql(table, _conn, if_exists=if_exists,
-                                  index=False, schema=schema, chunksize=500,
+                                  index=False, schema=schema,
+                                  chunksize=self._adaptive_chunksize(df, method="multi"),
                                   method="multi")
                     return
                 except Exception as exc:

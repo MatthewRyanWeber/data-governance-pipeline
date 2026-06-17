@@ -5,6 +5,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [4.30.0] — 2026-06-17
+
+Write batching is now sized by payload bytes, not a fixed row count — porting
+the file-size lessons from a real 27 GB binary import to every SQL/warehouse
+destination.
+
+### Added
+- **`BaseLoader._adaptive_chunksize`** — derives the `to_sql` chunk size from the
+  frame's estimated bytes-per-row against an 8 MiB target instead of a hardcoded
+  500 rows, so wide rows or large text/binary cells can't exceed the driver's
+  packet limit or inflate memory. When `method="multi"` it also keeps the SQL
+  Server 2,100-bind-parameter cap (the previous behaviour), taking whichever
+  cap is smaller. Clamped to `[1, max_rows]`; never exceeds the frame's rows.
+- **`BaseLoader._execute_outside_transaction`** — runs maintenance DDL that a
+  DBMS forbids inside a transaction (SQL Server `ALTER DATABASE` pre-grow,
+  `VACUUM`, `OPTIMIZE`) on an AUTOCOMMIT connection, best-effort by default.
+
+### Changed
+- Every loader that wrote with a fixed `chunksize=500` now uses
+  `_adaptive_chunksize`: `sql`, `redshift`, `snowflake`, `synapse`, `db2`,
+  `cockroachdb`, `postgis`, and the `pgvector` / `snowflake_vector` loaders.
+- `SynapseLoader._safe_chunksize` (parameter-cap only) is removed; its 2,100-param
+  cap is subsumed by the shared `_adaptive_chunksize`, which adds the byte cap.
+
 ## [4.29.0] — 2026-06-16
 
 Another destination crosses from credential-gated to verified against a real

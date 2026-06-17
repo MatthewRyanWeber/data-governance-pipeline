@@ -15,6 +15,9 @@ Revision history
                    uuid4) so parallel workers targeting the same destination no
                    longer clobber each other's staging table; engine is cached per
                    connection identity so streaming chunk loads reuse one pool.
+1.5   2026-06-17   Write chunk size is byte-aware (_adaptive_chunksize) instead of
+                   a fixed 500 rows, so wide or large-cell frames don't blow the
+                   driver packet limit / memory.
 """
 
 import time
@@ -170,7 +173,7 @@ class SQLLoader(BaseLoader):
             try:
                 with engine.begin() as _conn:
                     df.to_sql(table, _conn, if_exists=if_exists, index=False,
-                              chunksize=500, schema=schema)
+                              chunksize=self._adaptive_chunksize(df), schema=schema)
                 return
             except Exception as exc:
                 if attempt == 3:
@@ -215,7 +218,7 @@ class SQLLoader(BaseLoader):
         try:
             with engine.begin() as conn:
                 new_df.to_sql(staging, conn, if_exists="replace", index=False,
-                              chunksize=500, schema=schema)
+                              chunksize=self._adaptive_chunksize(new_df), schema=schema)
             with engine.begin() as conn:
                 conn.execute(text(
                     f"DELETE FROM {qualified(table)} WHERE EXISTS "

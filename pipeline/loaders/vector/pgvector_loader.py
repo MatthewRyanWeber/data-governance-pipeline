@@ -15,6 +15,8 @@ Revision history
                    failure propagates instead of being swallowed.  Config
                    validation now requires user/password, search() coerces
                    limit to int, and every engine is disposed via try/finally.
+1.3   2026-06-17   Byte-aware, param-capped write chunk size
+                   (_adaptive_chunksize) instead of a fixed 500 rows.
 """
 
 import logging
@@ -147,7 +149,8 @@ class PgvectorLoader(BaseLoader):
             # on first load (no table yet) and after a replace (column reset)
             pg_if_exists = "replace" if if_exists == "replace" else "append"
             out.to_sql(table, engine, if_exists=pg_if_exists,
-                       index=False, method="multi", chunksize=500)
+                       index=False, method="multi",
+                       chunksize=self._adaptive_chunksize(out, method="multi"))
 
             self._ensure_vector_type(engine, table, vector_col, int(vector_size))
 

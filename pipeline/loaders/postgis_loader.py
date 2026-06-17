@@ -11,6 +11,8 @@ Revision history
 1.2   2026-06-11   Geometry now written in the same INSERT as the row via
                    ST_GeomFromText, replacing the ctid-offset UPDATE that
                    mismatched geometries on concurrent writes and was O(n²).
+1.3   2026-06-17   Byte-aware write chunk size (_adaptive_chunksize) instead of
+                   a fixed 500 rows.
 """
 
 import logging
@@ -74,7 +76,8 @@ class PostGISLoader(BaseLoader):
 
             if geom_col not in df.columns:
                 df.to_sql(table, engine, if_exists=if_exists,
-                          index=False, method="multi", chunksize=500)
+                          index=False, method="multi",
+                          chunksize=self._adaptive_chunksize(df, method="multi"))
             else:
                 self._load_with_geometry(
                     df, engine, table, if_exists, geom_col, srid

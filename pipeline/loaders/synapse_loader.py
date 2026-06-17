@@ -18,6 +18,9 @@ Revision history
                    table name and blob name bound to the 128-char limit. SY-4:
                    blob_client initialised to None so an upload-setup failure no
                    longer raises NameError in the cleanup finally.
+1.4   2026-06-17   _safe_chunksize (param-only cap) replaced by the shared
+                   _adaptive_chunksize, which keeps the 2,100-parameter cap and
+                   adds a byte-size cap for large-cell frames.
 """
 
 import time
@@ -86,13 +89,6 @@ class SynapseLoader(BaseLoader):
             f"mssql+pyodbc:///?odbc_connect="
             f"{urllib.parse.quote_plus(conn_str)}"
         )
-
-    @staticmethod
-    def _safe_chunksize(df) -> int:
-        # SQL Server caps a statement at 2,100 bind parameters; with
-        # method="multi" each row consumes len(columns) parameters, so the
-        # chunk size must shrink as the frame gets wider (2000 leaves headroom).
-        return max(1, 2000 // max(1, len(df.columns)))
 
     def load(self, df, cfg, table, if_exists="append", natural_keys=None) -> int:
         validate_sql_identifier(table, "table")
@@ -225,7 +221,8 @@ class SynapseLoader(BaseLoader):
         with self._engine_scope(cfg) as engine:
             with engine.begin() as _conn:
                 df.to_sql(tmp_table, _conn, if_exists="replace", index=False,
-                          schema=schema, chunksize=self._safe_chunksize(df),
+                          schema=schema,
+                          chunksize=self._adaptive_chunksize(df, method="multi"),
                           method="multi")
         conn_str = self._connection_string(cfg)
         conn = _pyodbc.connect(conn_str, autocommit=False)
@@ -283,7 +280,7 @@ class SynapseLoader(BaseLoader):
                     with engine.begin() as _conn:
                         df.to_sql(table, _conn, if_exists=if_exists,
                                   index=False, schema=schema,
-                                  chunksize=self._safe_chunksize(df),
+                                  chunksize=self._adaptive_chunksize(df, method="multi"),
                                   method="multi")
                     return
                 except Exception as exc:

@@ -55,7 +55,7 @@ class EventCategory(str, enum.Enum):
     RULES = "RULES"
 
 
-VERSION = "4.29.0"
+VERSION = "4.30.0"
 DEFAULT_CHUNK_SIZE = 50_000
 
 # Safety limit for decompressed archive size (zip bomb protection)

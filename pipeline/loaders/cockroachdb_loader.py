@@ -10,6 +10,8 @@ Revision history
 1.1   2026-06-07   Added Layer 4 docstring convention.
 1.2   2026-06-11   if_exists='upsert' without natural_keys now raises instead
                    of silently appending.
+1.3   2026-06-17   Byte-aware write chunk size (_adaptive_chunksize) instead of
+                   a fixed 500 rows.
 """
 
 import logging
@@ -65,7 +67,8 @@ class CockroachDBLoader(BaseLoader):
             else:
                 pg_if_exists = "replace" if if_exists == "replace" else "append"
                 df.to_sql(table, engine, if_exists=pg_if_exists,
-                          index=False, method="multi", chunksize=500)
+                          index=False, method="multi",
+                          chunksize=self._adaptive_chunksize(df, method="multi"))
                 rows = len(df)
 
         self.gov._event(

@@ -7,6 +7,7 @@ Revision history
                    validate_float_vector, validate_column_names, and BaseLoader.
 1.1   2026-06-09   Added retry_with_backoff and circuit breaker integration tests.
 1.2   2026-06-09   Added field-level encryption helpers tests.
+1.3   2026-06-17   Added _adaptive_chunksize and _execute_outside_transaction tests.
 """
 
 import logging
@@ -318,6 +319,110 @@ class TestFieldLevelEncryption(unittest.TestCase):
         df = pd.DataFrame({"a": [1]})
         result = loader._encrypt_columns(df, ["nonexistent"], key)
         self.assertEqual(result["a"].tolist(), [1])
+
+
+# ── Adaptive write batching ────────────────────────────────────────────────
+
+class TestAdaptiveChunksize(unittest.TestCase):
+    """Tests for BaseLoader._adaptive_chunksize — byte- and parameter-aware."""
+
+    def _make(self) -> BaseLoader:
+        return BaseLoader(gov=MagicMock())
+
+    def test_empty_frame_returns_fallback(self):
+        loader = self._make()
+        df = pd.DataFrame({"a": []})
+        self.assertEqual(loader._adaptive_chunksize(df, fallback_rows=500), 500)
+
+    def test_thin_rows_get_a_large_chunk(self):
+        loader = self._make()
+        # A few small integer columns: thousands of rows fit in the byte budget.
+        df = pd.DataFrame({"a": range(2000), "b": range(2000)})
+        chunk = loader._adaptive_chunksize(df)
+        # Never larger than the frame itself, and not the old fixed 500 floor.
+        self.assertLessEqual(chunk, len(df))
+        self.assertGreater(chunk, 500)
+
+    def test_large_cell_rows_get_a_small_chunk(self):
+        loader = self._make()
+        # ~1 MiB per row: an 8 MiB budget should allow only a handful of rows.
+        big = "x" * (1024 * 1024)
+        df = pd.DataFrame({"blob": [big] * 64})
+        chunk = loader._adaptive_chunksize(df, target_bytes=8 * 1024 * 1024)
+        self.assertGreaterEqual(chunk, 1)
+        self.assertLessEqual(chunk, 12)
+
+    def test_huge_cell_never_returns_zero(self):
+        loader = self._make()
+        # A single row larger than the whole budget must still load — one row.
+        huge = "x" * (20 * 1024 * 1024)
+        df = pd.DataFrame({"blob": [huge]})
+        self.assertEqual(loader._adaptive_chunksize(df, target_bytes=8 * 1024 * 1024), 1)
+
+    def test_multi_method_applies_parameter_cap(self):
+        loader = self._make()
+        # 100 thin columns with method="multi": the 2,100-parameter cap
+        # (2000 // 100 = 20) must dominate the byte budget.
+        df = pd.DataFrame({f"c{i}": range(500) for i in range(100)})
+        chunk = loader._adaptive_chunksize(df, method="multi", max_param_count=2000)
+        self.assertEqual(chunk, 20)
+
+    def test_no_method_ignores_parameter_cap(self):
+        loader = self._make()
+        # Same wide frame without method="multi": no per-statement param cap,
+        # so the chunk is governed by bytes and exceeds the param-capped 20.
+        df = pd.DataFrame({f"c{i}": range(500) for i in range(100)})
+        chunk = loader._adaptive_chunksize(df)
+        self.assertGreater(chunk, 20)
+
+    def test_never_exceeds_row_count(self):
+        loader = self._make()
+        df = pd.DataFrame({"a": range(10)})
+        self.assertLessEqual(loader._adaptive_chunksize(df), 10)
+
+
+# ── Maintenance DDL outside a transaction ──────────────────────────────────
+
+class TestExecuteOutsideTransaction(unittest.TestCase):
+    """Tests for BaseLoader._execute_outside_transaction — autocommit DDL."""
+
+    def _make(self) -> BaseLoader:
+        return BaseLoader(gov=MagicMock())
+
+    def _engine(self):
+        from sqlalchemy import create_engine
+        return create_engine("sqlite://")  # in-memory, autocommit-capable
+
+    def test_runs_statements_and_counts_them(self):
+        loader = self._make()
+        engine = self._engine()
+        executed = loader._execute_outside_transaction(
+            engine,
+            ["CREATE TABLE t (id INTEGER)", "INSERT INTO t VALUES (1)"],
+        )
+        self.assertEqual(executed, 2)
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            self.assertEqual(conn.execute(text("SELECT COUNT(*) FROM t")).scalar(), 1)
+
+    def test_best_effort_skips_a_failing_statement(self):
+        loader = self._make()
+        engine = self._engine()
+        # The bogus middle statement is logged and skipped; the others run.
+        executed = loader._execute_outside_transaction(
+            engine,
+            ["CREATE TABLE t (id INTEGER)", "ALTER DATABASE nonsense", "INSERT INTO t VALUES (1)"],
+            best_effort=True,
+        )
+        self.assertEqual(executed, 2)
+
+    def test_strict_mode_raises_on_first_failure(self):
+        loader = self._make()
+        engine = self._engine()
+        with self.assertRaises(Exception):
+            loader._execute_outside_transaction(
+                engine, ["THIS IS NOT SQL"], best_effort=False,
+            )
 
 
 if __name__ == "__main__":

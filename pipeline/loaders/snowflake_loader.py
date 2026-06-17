@@ -15,6 +15,8 @@ Revision history
                    whole frame; staging name bounded to fit the 128-char limit;
                    upsert drops the stage table in finally so a MERGE failure
                    cannot leak it.
+1.4   2026-06-17   Byte-aware, param-capped staging chunk size
+                   (_adaptive_chunksize) instead of a fixed 500 rows.
 """
 
 import time
@@ -234,7 +236,8 @@ class SnowflakeLoader(BaseLoader):
                     with engine.begin() as _conn:
                         df.to_sql(
                             tmp_table.lower(), _conn,
-                            if_exists="replace", index=False, chunksize=500,
+                            if_exists="replace", index=False,
+                            chunksize=self._adaptive_chunksize(df, method="multi"),
                             method="multi",
                         )
                     break
@@ -307,7 +310,8 @@ class SnowflakeLoader(BaseLoader):
                         df.to_sql(
                             table.lower(), conn,
                             if_exists=if_exists, index=False,
-                            chunksize=500, method="multi",
+                            chunksize=self._adaptive_chunksize(df, method="multi"),
+                            method="multi",
                         )
                     return
                 except Exception as exc:

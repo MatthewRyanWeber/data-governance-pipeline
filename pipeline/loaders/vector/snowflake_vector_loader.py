@@ -15,6 +15,8 @@ Revision history
                    VECTOR(FLOAT, n) column and rows are inserted via
                    INSERT ... SELECT with an explicit conversion from a staged
                    table.  Failures propagate; engines are disposed.
+1.3   2026-06-17   Byte-aware, param-capped staging chunk size
+                   (_adaptive_chunksize) instead of a fixed 500 rows.
 """
 
 import logging
@@ -191,7 +193,8 @@ class SnowflakeVectorLoader(BaseLoader):
         # the vector table must fail loudly, not report success
         try:
             out.to_sql(staging_table, engine, if_exists="replace",
-                       index=False, method="multi", chunksize=500)
+                       index=False, method="multi",
+                       chunksize=self._adaptive_chunksize(out, method="multi"))
             with engine.connect() as conn:
                 try:
                     conn.execute(sa_text(create_statement))
