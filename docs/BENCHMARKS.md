@@ -38,3 +38,26 @@ hash-chained audit ledger disappear into it.
 Hardware: single workstation, SQL Server 2025 Developer, local disk. Numbers are
 wall-clock and will vary with hardware; the **relative** finding (governance ≈
 free) is the portable result.
+
+### Reproduction (2026-06-17, cold start)
+
+A fresh end-to-end governed run — from a **cold start** (all tables dropped and
+the audit ledger cleared, then the full governed import re-run) — reproduced the
+figure:
+
+| Phase | Volume | Wall-clock |
+|-------|--------|-----------:|
+| Metadata load (documents + pages) | 331,655 + 517,382 rows | ~32 s |
+| Blob phase (binary blobs) | 26.75 GB, 331,655 blobs | **838 s** |
+| Finalize + verify | — | ~7 s |
+| **End-to-end** | 849,037 rows + 26.75 GB | **878.9 s** |
+
+Blob-phase throughput: **~32.7 MB/s (~396 blobs/s)**. The 838 s blob phase lands
+on the 840 s governed average above, and the audit ledger again verified —
+**1,831 SHA-256 hash-chained events, `verified=True`** — with record and blob
+counts independently re-checked (0 empty, 0 orphaned).
+
+Because this was a cold start rather than the warmed / pre-grown protocol of the
+controlled table above, it is reported as a **separate confirming data point, not
+an additional controlled trial**. That it still lands on the governed average is
+the useful result: full governance stays effectively free at this scale.
