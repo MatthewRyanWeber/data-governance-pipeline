@@ -17,6 +17,7 @@ why you're here.
 | [ARCHITECTURE.md](ARCHITECTURE.md) | The 7-layer import DAG, the dispatch/registry seam, and the decision log | You're changing the code and need the why behind the structure |
 | [EXTENDING.md](EXTENDING.md) | How to write a custom loader, register it, and the family contract + verification tier it must earn | You're adding a destination or extractor |
 | [DISTRIBUTED_GOVERNANCE.md](DISTRIBUTED_GOVERNANCE.md) | Running governance per-partition under Spark/Ray/Dask with a partitionable Merkle-root ledger — the 100TB/day path, with measured throughput | You're scaling past a single node (Path A) |
+| [BENCHMARKS.md](BENCHMARKS.md) | Measured numbers from real runs, with method and honest noise bounds (e.g. governance overhead on a 27 GB load) | You want performance evidence |
 | [PRIVACY.md](PRIVACY.md) | Privacy policy template | You need the legal privacy template |
 | [TERMS.md](TERMS.md) | Terms of service template | You need the legal terms template |
 | [CCPA.md](CCPA.md) | CCPA compliance statement template | You need the CCPA-specific statement |
