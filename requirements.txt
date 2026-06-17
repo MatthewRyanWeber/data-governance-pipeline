@@ -21,7 +21,7 @@ hdbcli==2.28.21
 
 # Cloud warehouses
 snowflake-connector-python==4.6.0
-snowflake-sqlalchemy==1.10.0
+snowflake-sqlalchemy==1.10.1
 google-cloud-bigquery==3.41.0
 google-auth==2.53.0
 
