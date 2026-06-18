@@ -17,7 +17,7 @@ pyodbc==5.3.0
 pymongo==4.17.0
 oracledb==4.0.1
 ibm-db==3.2.9
-hdbcli==2.28.21
+hdbcli==2.29.23
 
 # Cloud warehouses
 snowflake-connector-python==4.6.0
