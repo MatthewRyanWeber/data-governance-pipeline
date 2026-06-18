@@ -154,5 +154,44 @@ class TestEngineCaching(unittest.TestCase):
         self.assertEqual(loader._engine_cache, {})
 
 
+class TestBulkInsertPath(unittest.TestCase):
+    """v1.6 — fast_executemany (mssql) and multi-row INSERT (postgres/mysql)."""
+
+    def test_insert_method_multi_for_postgres_and_mysql(self):
+        self.assertEqual(SQLLoader(MagicMock(), "postgresql")._insert_method(), "multi")
+        self.assertEqual(SQLLoader(MagicMock(), "mysql")._insert_method(), "multi")
+
+    def test_insert_method_none_for_mssql_and_sqlite(self):
+        self.assertIsNone(SQLLoader(MagicMock(), "mssql")._insert_method())
+        self.assertIsNone(SQLLoader(MagicMock(), "sqlite")._insert_method())
+
+    def test_postgres_load_passes_multi_method_to_to_sql(self):
+        loader = SQLLoader(MagicMock(), db_type="postgresql")
+        seen = {}
+
+        def spy_to_sql(self_df, name, *args, **kwargs):
+            seen.update(kwargs)
+
+        with patch.object(loader, "_engine", return_value=MagicMock()), \
+             patch("pandas.DataFrame.to_sql", spy_to_sql):
+            loader.load(_DF, {"db_name": "d", "host": "h"}, "t", if_exists="append")
+        self.assertEqual(seen.get("method"), "multi")
+
+    def test_mssql_engine_enables_fast_executemany(self):
+        loader = SQLLoader(MagicMock(), db_type="mssql")
+        cfg = {"db_name": "d", "host": "h", "user": "u", "password": "p"}
+        with patch("sqlalchemy.create_engine") as create:
+            loader._engine(cfg)
+        self.assertTrue(create.call_args.kwargs.get("fast_executemany"))
+
+    def test_mssql_fast_executemany_opt_out(self):
+        loader = SQLLoader(MagicMock(), db_type="mssql")
+        cfg = {"db_name": "d", "host": "h", "user": "u", "password": "p",
+               "fast_executemany": False}
+        with patch("sqlalchemy.create_engine") as create:
+            loader._engine(cfg)
+        self.assertFalse(create.call_args.kwargs.get("fast_executemany"))
+
+
 if __name__ == "__main__":
     unittest.main()

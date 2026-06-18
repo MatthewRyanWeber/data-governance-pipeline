@@ -5,6 +5,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [4.32.0] — 2026-06-18
+
+Native bulk insert path for the core SQL loader — the throughput lever the
+standalone importer used, brought into the pipeline.
+
+### Changed
+- **`SQLLoader` now uses a per-dialect bulk insert path.** SQL Server enables
+  `fast_executemany` on the engine (the whole chunk batched into one
+  parameterised ODBC round-trip); Postgres and MySQL use a multi-row INSERT
+  (`method="multi"`, parameter-capped via `_adaptive_chunksize`). sqlite and
+  snowflake keep the default method. `fast_executemany` is opt-out via
+  `cfg["fast_executemany"] = false`.
+
 ## [4.31.0] — 2026-06-17
 
 Content-level PII detection moves into the default discovery path — PII is now

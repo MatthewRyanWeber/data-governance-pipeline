@@ -18,6 +18,8 @@ Revision history
 1.5   2026-06-17   Write chunk size is byte-aware (_adaptive_chunksize) instead of
                    a fixed 500 rows, so wide or large-cell frames don't blow the
                    driver packet limit / memory.
+1.6   2026-06-17   Native bulk path: mssql enables fast_executemany on the
+                   engine; postgres/mysql use multi-row INSERT (_insert_method).
 """
 
 import time
@@ -123,7 +125,12 @@ class SQLLoader(BaseLoader):
                 url += f"&Encrypt={cfg['encrypt']}"
             if cfg.get("trust_server_certificate"):
                 url += f"&TrustServerCertificate={cfg['trust_server_certificate']}"
-            return create_engine(url)
+            # fast_executemany batches a whole chunk into one parameterised
+            # round-trip via the ODBC driver — the bulk path the standalone
+            # importer used to move ~850k rows in seconds. Opt-out via cfg in
+            # case a driver/type combination misbehaves.
+            fast = cfg.get("fast_executemany", True)
+            return create_engine(url, fast_executemany=bool(fast))
         if t == "snowflake":
             if not HAS_SNOWFLAKE:
                 raise RuntimeError("snowflake-connector-python not installed")
@@ -138,6 +145,17 @@ class SQLLoader(BaseLoader):
                 role=cfg.get("role", ""),
             ))
         raise ValueError(f"Unknown db type: {t}")
+
+    def _insert_method(self):
+        """Per-dialect bulk insert method for ``to_sql``.
+
+        Postgres and MySQL gain throughput from a multi-row INSERT
+        (``method="multi"``). SQL Server instead uses ``fast_executemany`` on
+        the driver (see ``_engine``), where multi-row INSERT is both slower and
+        runs into the 2,100-parameter cap — so it stays on the default method.
+        sqlite/snowflake keep the default too.
+        """
+        return "multi" if self.db_type in ("postgresql", "mysql") else None
 
     @staticmethod
     def _split_table_name(table: str) -> tuple[str | None, str]:
@@ -171,9 +189,11 @@ class SQLLoader(BaseLoader):
     def _load_with_retry(self, df, engine, table, if_exists, schema=None):
         for attempt in range(1, 4):
             try:
+                method = self._insert_method()
                 with engine.begin() as _conn:
                     df.to_sql(table, _conn, if_exists=if_exists, index=False,
-                              chunksize=self._adaptive_chunksize(df), schema=schema)
+                              chunksize=self._adaptive_chunksize(df, method=method),
+                              method=method, schema=schema)
                 return
             except Exception as exc:
                 if attempt == 3:
@@ -217,8 +237,10 @@ class SQLLoader(BaseLoader):
         # the finally and drops whatever partial table was left behind.
         try:
             with engine.begin() as conn:
+                method = self._insert_method()
                 new_df.to_sql(staging, conn, if_exists="replace", index=False,
-                              chunksize=self._adaptive_chunksize(new_df), schema=schema)
+                              chunksize=self._adaptive_chunksize(new_df, method=method),
+                              method=method, schema=schema)
             with engine.begin() as conn:
                 conn.execute(text(
                     f"DELETE FROM {qualified(table)} WHERE EXISTS "
