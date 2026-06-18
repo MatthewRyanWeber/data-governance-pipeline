@@ -5,6 +5,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [4.35.0] — 2026-06-18
+
+A governance system needs production miles, not one demo run — so it can now
+prove them.
+
+### Added
+- **`CanaryRunner`** (`pipeline.monitoring`) + **`scripts/canary_run.py`** run a
+  fixed synthetic dataset through the real governance core (PII detect → mask →
+  governed sqlite load → ledger verify) and append a pass/fail entry — timing,
+  row count, `ledger_verified`, version — to a track-record JSONL. An
+  independent hash-chain check runs alongside `gov.verify_ledger()` so a failure
+  can't hide behind the writing code path. `soak(runs)` loops it;
+  `summarize_history()` reports the pass rate. Scheduled, the accumulating track
+  record is the dated, ledger-verified evidence a single run can't provide.
+  `scripts/canary_run.py` exits non-zero if the run failed, so a scheduler
+  treats a broken governance core as a failed job. Fully synthetic and local.
+
 ## [4.34.0] — 2026-06-18
 
 Data quality becomes monitorable, not just logged.
