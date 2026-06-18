@@ -96,6 +96,31 @@ class TestPIIDiscoveryReporterDetection(unittest.TestCase):
         self.assertIn("ssn", fields)
         self.assertNotIn("product_id", fields)
 
+    def test_value_scan_catches_pii_in_non_pii_named_column(self):
+        # A generically-named column whose VALUES are SSNs — the name scan
+        # alone misses it; the default value scan must catch it.
+        df = pd.DataFrame({"comment": ["my number is 123-45-6789"], "id": [1]})
+        findings = self.reporter.scan(df)
+        value_findings = [f for f in findings
+                          if f["field"] == "comment" and f["detection"] == "value"]
+        self.assertTrue(len(value_findings) > 0)
+
+    def test_findings_tagged_with_detection_source(self):
+        df = pd.DataFrame({"email": ["alice@example.com"]})
+        findings = self.reporter.scan(df)
+        # The email column is caught both by name and by value.
+        sources = {f["detection"] for f in findings}
+        self.assertIn("name", sources)
+        self.assertIn("value", sources)
+
+    def test_value_scan_can_be_disabled(self):
+        from pipeline.privacy.pii_discovery import PIIDiscoveryReporter
+        reporter = PIIDiscoveryReporter(MockGov(), scan_values=False)
+        df = pd.DataFrame({"comment": ["my number is 123-45-6789"]})
+        findings = reporter.scan(df)
+        # With value scanning off, a non-PII-named column yields nothing.
+        self.assertEqual(findings, [])
+
 
 # =============================================================================
 # ColumnEncryptor
@@ -484,6 +509,30 @@ class TestNLPPIIDetectorRegex(unittest.TestCase):
         df = pd.DataFrame({"notes": pd.Series([], dtype=str)})
         findings = self.detector.scan(df, text_columns=["notes"])
         self.assertEqual(findings, [])
+
+    def test_credit_card_luhn_valid_detected(self):
+        # 4111 1111 1111 1111 is the canonical Luhn-valid test card number.
+        df = pd.DataFrame({"notes": ["Paid with 4111 1111 1111 1111 today"]})
+        findings = self.detector.scan(
+            df, text_columns=["notes"], include_regex=True, include_ner=False)
+        card_findings = [f for f in findings if f["entity_type"] == "CREDIT_CARD"]
+        self.assertTrue(len(card_findings) > 0)
+
+    def test_non_card_16_digits_rejected_by_luhn(self):
+        # Same shape, one digit off — fails Luhn, so it is NOT a card number.
+        df = pd.DataFrame({"notes": ["Order 4111 1111 1111 1112 shipped"]})
+        findings = self.detector.scan(
+            df, text_columns=["notes"], include_regex=True, include_ner=False)
+        card_findings = [f for f in findings if f["entity_type"] == "CREDIT_CARD"]
+        self.assertEqual(card_findings, [])
+
+    def test_include_ner_false_skips_ner(self):
+        df = pd.DataFrame({"notes": ["Contact alice@example.com"]})
+        # _scan_column_ner must not run when include_ner=False.
+        with patch.object(self.detector, "_scan_column_ner") as mock_ner:
+            self.detector.scan(df, text_columns=["notes"],
+                               include_regex=True, include_ner=False)
+            mock_ner.assert_not_called()
 
     def test_scan_auto_detects_text_columns(self):
         df = pd.DataFrame({

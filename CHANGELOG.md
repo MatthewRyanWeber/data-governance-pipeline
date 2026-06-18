@@ -5,6 +5,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [4.31.0] — 2026-06-17
+
+Content-level PII detection moves into the default discovery path — PII is now
+caught by the shape of the value, not just the column name.
+
+### Changed
+- **`PIIDiscoveryReporter.scan` now runs a value-level scan by default.** In
+  addition to the column-name scan (`detect_pii`), it scans actual cell values
+  via the `NLPPIIDetector` regex detectors (email/phone/SSN/card/IP/passport/
+  IBAN), so PII in a generically-named column (a `comment` field full of SSNs)
+  is caught. The value scan is regex-only (no spaCy dependency, deterministic);
+  NER stays opt-in via `NLPPIIDetector` directly. Every finding now carries a
+  `detection` tag (`"name"` or `"value"`). Disable with `scan_values=False`.
+  It is deliberately **not** added to the per-chunk CLI transform hot path —
+  value scanning there would be a per-chunk bottleneck.
+
+### Fixed
+- **Credit-card detection validates the Luhn checksum.** A 16-digit value that
+  is not a real card number (order id, tracking number) no longer counts as a
+  card — cutting false positives. Added an `include_ner` flag to
+  `NLPPIIDetector.scan` for a deterministic regex-only scan.
+
 ## [4.30.0] — 2026-06-17
 
 Write batching is now sized by payload bytes, not a fixed row count — porting

@@ -18,6 +18,10 @@ Revision history
                    passport/licence overlap deduped at match-span level
                    (passport wins) instead of relying on a dedup that keys
                    on entity_type and so never merged the two.
+1.3   2026-06-17   Credit-card detection now validates the Luhn checksum, so a
+                   16-digit value that is not a real card number no longer
+                   counts as PII (cuts false positives on order ids, etc.).
+                   Added include_ner flag for a deterministic regex-only scan.
 """
 
 import logging
@@ -51,12 +55,40 @@ _ENTITY_PII_MAP: dict[str, str] = {
 
 _US_PASSPORT_PATTERN = re.compile(r"\b[A-Z]\d{8}\b")
 _US_DRIVERS_LICENSE_PATTERN = re.compile(r"\b[A-Z]\d{7,12}\b")
+_CREDIT_CARD_PATTERN = re.compile(r"\b(?:\d{4}[-\s]?){3}\d{4}\b")
+
+
+def _luhn_valid(number: str) -> bool:
+    """True when the digits of *number* satisfy the Luhn checksum.
+
+    Real payment cards carry a Luhn check digit; validating it turns a generic
+    16-digit regex (which also matches order ids, tracking numbers, etc.) into
+    a card-number test, cutting false positives without an external library.
+    """
+    digits = [int(ch) for ch in number if ch.isdigit()]
+    if len(digits) < 13:
+        return False
+    checksum = 0
+    # Walk from the rightmost digit: the check digit (distance 0) is never
+    # doubled; every second digit moving left is doubled, subtracting 9 if > 9.
+    for distance, digit in enumerate(reversed(digits)):
+        if distance % 2 == 1:
+            digit *= 2
+            if digit > 9:
+                digit -= 9
+        checksum += digit
+    return checksum % 10 == 0
+
+
+def _has_luhn_valid_card(text: str) -> bool:
+    """True when *text* contains a card-shaped number that passes Luhn."""
+    return any(_luhn_valid(m.group()) for m in _CREDIT_CARD_PATTERN.finditer(text))
 
 _REGEX_DETECTORS: list[tuple[str, re.Pattern]] = [
     ("EMAIL", re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b")),
     ("PHONE", re.compile(r"\b(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b")),
     ("SSN", re.compile(r"\b\d{3}-\d{2}-\d{4}\b")),
-    ("CREDIT_CARD", re.compile(r"\b(?:\d{4}[-\s]?){3}\d{4}\b")),
+    ("CREDIT_CARD", _CREDIT_CARD_PATTERN),
     ("IP_ADDRESS", re.compile(
         r"\b(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\b"
     )),
@@ -145,6 +177,7 @@ class NLPPIIDetector:
         df: "pd.DataFrame",
         text_columns: list[str] | None = None,
         include_regex: bool = True,
+        include_ner: bool = True,
     ) -> list[dict]:
         """
         Scan DataFrame columns for PII using NER and regex patterns.
@@ -154,6 +187,8 @@ class NLPPIIDetector:
         df            : pd.DataFrame
         text_columns  : list | None  Columns to scan. Auto-detects object cols if None.
         include_regex : bool         Also run regex-based detectors.
+        include_ner   : bool         Run spaCy NER. Set False for a deterministic,
+                                     spaCy-independent regex-only scan.
 
         Returns
         -------
@@ -175,7 +210,7 @@ class NLPPIIDetector:
             if len(sample) > self.sample_size:
                 sample = sample.sample(self.sample_size, random_state=self.random_seed)
 
-            col_findings = self._scan_column_ner(col, sample)
+            col_findings = self._scan_column_ner(col, sample) if include_ner else []
             if include_regex:
                 col_findings.extend(self._scan_column_regex(col, sample))
 
@@ -239,6 +274,10 @@ class NLPPIIDetector:
                 # Same span matching both passport and licence must count
                 # once, under the more specific passport type.
                 matches = text_values.map(_has_licence_match_outside_passport_spans)
+            elif pii_type == "CREDIT_CARD":
+                # A card-shaped value only counts when it passes Luhn — a real
+                # card number, not an arbitrary 16-digit id.
+                matches = text_values.map(_has_luhn_valid_card)
             else:
                 matches = text_values.str.contains(pattern, na=False)
             count = int(matches.sum())
