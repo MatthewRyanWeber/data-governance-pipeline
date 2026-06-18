@@ -5,6 +5,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [4.34.0] — 2026-06-18
+
+Data quality becomes monitorable, not just logged.
+
+### Added
+- **`DataQualityMetricsExporter`** (`pipeline.monitoring`) renders DataObserver
+  observations as **Prometheus text-exposition** metrics — `dgp_observed_rows`,
+  `dgp_observed_columns`, `dgp_alerts` / `dgp_alerts_by_type`,
+  `dgp_duplicate_key_rate`, `dgp_column_null_rate` — and a compact run-summary
+  JSON. Generated directly (no `prometheus_client` dependency), with atomic
+  `.prom` textfile writes for the node_exporter textfile collector.
+- **`DataObserver.export_metrics(metrics_path, summary_path=None)`** drives it
+  from the persisted observation history at end-of-run — off the per-record
+  path — writing the latest observation per dataset.
+
 ## [4.33.0] — 2026-06-18
 
 The autocommit-DDL helper from v4.30 now has a real caller.

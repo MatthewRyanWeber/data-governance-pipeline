@@ -228,6 +228,22 @@ class DataObserver:
 
         return report
 
+    def export_metrics(self, metrics_path, summary_path=None) -> dict:
+        """Export the latest per-dataset observations as monitoring output.
+
+        Reads the persisted observation history (end-of-run, off the
+        per-record path) and writes a Prometheus textfile for node_exporter;
+        optionally a run-summary JSON. Returns the run summary dict.
+        """
+        from pipeline.monitoring.metrics_exporter import DataQualityMetricsExporter
+
+        exporter = DataQualityMetricsExporter(dry_run=self.dry_run)
+        reports = exporter.latest_reports_from_history(self)
+        exporter.write_textfile(metrics_path, reports)
+        if summary_path is not None:
+            exporter.write_summary_json(summary_path, reports)
+        return exporter.summarize(reports)
+
     def _check_freshness(
         self, df: "pd.DataFrame", timestamp_col: str | None,
     ) -> dict | None:

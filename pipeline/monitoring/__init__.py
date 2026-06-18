@@ -2,6 +2,9 @@
 
 from pipeline.monitoring.sla_monitor import SLAMonitor
 from pipeline.monitoring.metrics_collector import MetricsCollector
+from pipeline.monitoring.metrics_exporter import DataQualityMetricsExporter
 from pipeline.monitoring.notifier import Notifier
 
-__all__ = ["SLAMonitor", "MetricsCollector", "Notifier"]
+__all__ = [
+    "SLAMonitor", "MetricsCollector", "DataQualityMetricsExporter", "Notifier",
+]
