@@ -20,6 +20,9 @@ Revision history
                    driver packet limit / memory.
 1.6   2026-06-17   Native bulk path: mssql enables fast_executemany on the
                    engine; postgres/mysql use multi-row INSERT (_insert_method).
+1.7   2026-06-18   Optional post-load maintenance (VACUUM/ANALYZE/OPTIMIZE) via
+                   _execute_outside_transaction, enabled by cfg
+                   post_load_maintenance.
 """
 
 import time
@@ -184,7 +187,31 @@ class SQLLoader(BaseLoader):
         self.gov.load_complete(len(df), table)
         db_identifier = cfg.get("database") or cfg.get("db_name", "")
         self.gov.destination_registered(self.db_type, db_identifier, table)
+        if cfg.get("post_load_maintenance"):
+            statements = self._maintenance_statements(table_name, schema)
+            if statements:
+                # VACUUM/OPTIMIZE cannot run inside a transaction — autocommit.
+                self._execute_outside_transaction(engine, statements)
         return len(df)
+
+    def _maintenance_statements(self, table_name, schema=None) -> list[str]:
+        """Per-dialect post-load maintenance (reclaim space / refresh stats).
+
+        Postgres VACUUM ANALYZE and MySQL OPTIMIZE TABLE cannot run inside a
+        transaction, which is why these go through _execute_outside_transaction.
+        sqlite VACUUM is database-level (no table arg); mssql/snowflake have no
+        cheap equivalent here and return nothing.
+        """
+        quote = "`" if self.db_type == "mysql" else '"'
+        qualified = (f"{quote}{schema}{quote}.{quote}{table_name}{quote}"
+                     if schema else f"{quote}{table_name}{quote}")
+        if self.db_type == "postgresql":
+            return [f"VACUUM ANALYZE {qualified}"]
+        if self.db_type == "mysql":
+            return [f"OPTIMIZE TABLE {qualified}"]
+        if self.db_type == "sqlite":
+            return ["VACUUM"]
+        return []
 
     def _load_with_retry(self, df, engine, table, if_exists, schema=None):
         for attempt in range(1, 4):

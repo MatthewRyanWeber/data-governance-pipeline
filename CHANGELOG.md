@@ -5,6 +5,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [4.33.0] — 2026-06-18
+
+The autocommit-DDL helper from v4.30 now has a real caller.
+
+### Added
+- **Optional post-load maintenance for `SQLLoader`.** With
+  `cfg["post_load_maintenance"] = true`, the loader runs per-dialect maintenance
+  after a successful load — Postgres `VACUUM ANALYZE`, MySQL `OPTIMIZE TABLE`,
+  sqlite `VACUUM` — through `_execute_outside_transaction`, since `VACUUM`/
+  `OPTIMIZE` cannot run inside a transaction. mssql/snowflake are no-ops.
+
 ## [4.32.0] — 2026-06-18
 
 Native bulk insert path for the core SQL loader — the throughput lever the

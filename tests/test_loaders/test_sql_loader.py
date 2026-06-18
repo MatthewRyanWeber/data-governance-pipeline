@@ -193,5 +193,58 @@ class TestBulkInsertPath(unittest.TestCase):
         self.assertFalse(create.call_args.kwargs.get("fast_executemany"))
 
 
+class TestPostLoadMaintenance(unittest.TestCase):
+    """v1.7 — optional VACUUM/OPTIMIZE via _execute_outside_transaction."""
+
+    def test_maintenance_statements_per_dialect(self):
+        self.assertEqual(
+            SQLLoader(MagicMock(), "postgresql")._maintenance_statements("t"),
+            ['VACUUM ANALYZE "t"'])
+        self.assertEqual(
+            SQLLoader(MagicMock(), "mysql")._maintenance_statements("t"),
+            ["OPTIMIZE TABLE `t`"])
+        self.assertEqual(
+            SQLLoader(MagicMock(), "sqlite")._maintenance_statements("t"),
+            ["VACUUM"])
+        self.assertEqual(
+            SQLLoader(MagicMock(), "mssql")._maintenance_statements("t"), [])
+
+    def test_maintenance_qualifies_schema(self):
+        self.assertEqual(
+            SQLLoader(MagicMock(), "postgresql")._maintenance_statements("t", "s"),
+            ['VACUUM ANALYZE "s"."t"'])
+
+    def test_no_maintenance_by_default(self):
+        loader = SQLLoader(MagicMock(), db_type="sqlite")
+        with patch.object(loader, "_engine", return_value=MagicMock()), \
+             patch("pandas.DataFrame.to_sql"), \
+             patch.object(loader, "_execute_outside_transaction") as maint:
+            loader.load(_DF, {"db_name": "x"}, "events", if_exists="append")
+        maint.assert_not_called()
+
+    def test_maintenance_runs_when_enabled(self):
+        loader = SQLLoader(MagicMock(), db_type="sqlite")
+        with patch.object(loader, "_engine", return_value=MagicMock()), \
+             patch("pandas.DataFrame.to_sql"), \
+             patch.object(loader, "_execute_outside_transaction") as maint:
+            loader.load(_DF, {"db_name": "x", "post_load_maintenance": True},
+                        "events", if_exists="append")
+        maint.assert_called_once()
+        self.assertEqual(maint.call_args[0][1], ["VACUUM"])
+
+    def test_maintenance_runs_for_real_on_sqlite(self):
+        # End-to-end: a real sqlite VACUUM executes without error via the
+        # autocommit helper after a real load.
+        engine = create_engine("sqlite://")
+        loader = SQLLoader(MagicMock(), db_type="sqlite")
+        with patch.object(loader, "_engine", return_value=engine):
+            rows = loader.load(_DF, {"db_name": "x", "post_load_maintenance": True},
+                               "events", if_exists="replace")
+        self.assertEqual(rows, 2)
+        with engine.begin() as conn:
+            count = conn.execute(text('SELECT COUNT(*) FROM "events"')).scalar()
+        self.assertEqual(count, 2)
+
+
 if __name__ == "__main__":
     unittest.main()
