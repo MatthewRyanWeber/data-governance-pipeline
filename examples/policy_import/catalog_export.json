@@ -1,0 +1,33 @@
+{
+  "datasets": [
+    {
+      "source_label": "customers",
+      "columns": ["customer_id", "full_name", "email", "ssn", "signup_date"],
+      "dtypes": {
+        "customer_id": "int64",
+        "email": "object",
+        "signup_date": "datetime64[ns]"
+      },
+      "column_purposes": {
+        "email": "contact",
+        "signup_date": "analytics"
+      },
+      "pii_columns": ["full_name", "email", "ssn"],
+      "allowed_columns": ["customer_id", "email", "signup_date"],
+      "purpose": "billing",
+      "expected_row_count": 50000,
+      "null_rates": {"email": 0.01, "ssn": 0.0}
+    },
+    {
+      "source_label": "orders",
+      "columns": ["order_id", "customer_id", "amount", "card_number", "created_at"],
+      "dtypes": {"order_id": "int64", "amount": "float64"},
+      "column_purposes": {"amount": "financial"},
+      "pii_columns": ["card_number"],
+      "allowed_columns": ["order_id", "customer_id", "amount", "created_at"],
+      "purpose": "fulfilment",
+      "expected_row_count": 250000,
+      "null_rates": {"amount": 0.0}
+    }
+  ]
+}
