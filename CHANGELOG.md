@@ -5,6 +5,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [4.36.0] — 2026-06-19
+
+Meet an org's existing governance where it already lives — import its policy
+instead of re-typing it.
+
+### Added
+- **`PolicyImporter`** (`pipeline.catalog`) maps a normalized catalog export onto
+  the governance files `governance_preflight.py` already enforces —
+  `schema_registry.json`, `column_purpose.json`, `purpose_registry.json`,
+  `anomaly_baseline.json` — so an org that keeps policy in an external catalog
+  gets it enforced here without re-entry. Merges, never clobbers: an imported
+  source updates only its own entry; other sources and unrelated fields survive.
+  Atomic writes, `dry_run`, and per-file "only write what's relevant".
+- **`JsonExportAdapter`** — dependency-free path; reads normalized policies from a
+  JSON export (a list, or a `{"datasets": [...]}` wrapper).
+- **`AtlanCatalogAdapter`** — sketch for the Atlan catalog; the Atlan-specific
+  asset→policy mapping (`_normalize_asset`) is a pure function unit-tested
+  without `pyatlan` or a live tenant (the network fetch is not exercised in CI).
+
+This closes the loop the lineage emitter only opened outward: lineage flows out
+to existing tools (OpenLineage), and now policy flows in from them.
+
 ## [4.35.0] — 2026-06-18
 
 A governance system needs production miles, not one demo run — so it can now

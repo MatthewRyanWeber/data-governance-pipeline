@@ -9,5 +9,13 @@ Revision history
 from pipeline.catalog.catalog_store import CatalogStore
 from pipeline.catalog.catalog_search import CatalogSearch
 from pipeline.catalog.glossary import BusinessGlossary
+from pipeline.catalog.policy_importer import (
+    PolicyImporter,
+    JsonExportAdapter,
+    AtlanCatalogAdapter,
+)
 
-__all__ = ["CatalogStore", "CatalogSearch", "BusinessGlossary"]
+__all__ = [
+    "CatalogStore", "CatalogSearch", "BusinessGlossary",
+    "PolicyImporter", "JsonExportAdapter", "AtlanCatalogAdapter",
+]
