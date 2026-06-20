@@ -163,6 +163,67 @@ with suppress / report / raise enforcement modes.
 
 ---
 
+## Working with existing governance
+
+The pipeline drops into an environment that already has governance instead of
+replacing it: it discovers existing policy and enforces it, imports policy that
+lives in an external catalog, coexists with data already in a destination, and
+feeds the lineage tools an organisation already runs. Nothing existing gets
+steamrolled.
+
+### Discover and enforce existing policy
+
+**Code:** on every run a pre-flight gate (`pipeline/governance_preflight.py`)
+discovers whatever policy already exists — schema baselines, column purposes,
+purpose-limitation rules, quality baselines, a consent database, and data
+contracts — and reconciles the incoming data against each. It enforces by
+dropping out-of-purpose columns, filtering rows without consent, and flagging
+schema drift and quality anomalies, surfacing what it found rather than silently
+overriding. Each check only runs when its state file exists, so a first run with
+no prior policy stays clean.
+
+**Artifact:** `PREFLIGHT_GATE_COMPLETE` (plus `PURPOSE_LIMITATION_APPLIED` /
+`CONSENT_FILTER_APPLIED` where enforced) ledger events recording what was found
+and applied.
+
+### Import policy from an external catalog
+
+**Code:** where policy already lives in a catalog (Atlan, Collibra, a home-grown
+store), `PolicyImporter` (`pipeline/catalog/policy_importer.py`) maps a
+normalised catalog export onto the very files the pre-flight gate enforces —
+`schema_registry.json`, `column_purpose.json`, `purpose_registry.json`,
+`anomaly_baseline.json` — so the organisation's rules apply here without
+re-entry. It **merges rather than clobbers**, touching only the entries it is
+given. `JsonExportAdapter` is the dependency-free path; `AtlanCatalogAdapter`
+pulls the same shape from an Atlan tenant.
+
+**Artifact:** the populated `config/*.json` policy files (see
+`examples/policy_import/`).
+
+### Coexist with data already in a destination
+
+**Code:** loads append, replace, or **idempotently upsert by natural key** via a
+staging table (the loader family), so existing rows are never blindly
+overwritten; `pipeline/advanced/reversible_loader.py` can snapshot the prior
+table first, and `pipeline/load_verifier.py` reconciles source vs destination
+row counts after the load.
+
+### Extend, never rewrite, the audit trail
+
+**Code:** the hash-chained ledger is append-only (`AppendOnlyWriter` blocks
+seek/truncate), so new runs extend the audit trail and never alter prior
+evidence; distributed runs compose into a single Merkle root
+(`pipeline/partitioned_ledger.py`).
+
+### Feed existing lineage tools
+
+**Code:** `pipeline/lineage/openlineage_emitter.py` emits events in the
+OpenLineage spec, so existing lineage and catalog backends (Marquez, DataHub,
+OpenMetadata, Atlan) ingest this pipeline's runs. Policy flows in; lineage flows
+out.
+
+---
+
 ## How to verify any of this yourself
 
 ```bash
