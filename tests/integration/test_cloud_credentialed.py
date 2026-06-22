@@ -29,6 +29,9 @@ Revision history
                    environment problem too: MotherDuck refusing a newer
                    DuckDB ("not yet supported by MotherDuck") now skips
                    loudly instead of failing the weekly cron red.
+1.3   2026-06-22   Lapsed plan/trial ("trial has ended") also skips loudly
+                   — a valid credential on an account that lost access is a
+                   billing state, not a loader bug.
 """
 
 import contextlib
@@ -81,6 +84,10 @@ _CREDENTIAL_ERROR_MARKERS = (
     "access denied", "permission denied", "forbidden", "http 403", " 403 ",
     "invalid api key", "invalid client", "login failed",
     "not authenticated", "please check your motherduck token",
+    # Lapsed paid/trial plan — the credential is valid but the account no
+    # longer has access (e.g. "Your MotherDuck trial has ended").  An
+    # account-billing state, not a loader bug.
+    "trial has ended", "trial has expired", "subscription has expired",
     # Connectivity
     "could not connect", "connection refused", "connection timed out",
     "could not translate host", "name or service not known", "getaddrinfo",
