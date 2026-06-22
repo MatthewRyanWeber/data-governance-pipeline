@@ -34,6 +34,14 @@ jobs:
       - name: Install dependencies
         run: pip install -e ".[dev,cloud,integration]" || pip install -e ".[dev,integration]"
 
+      # MotherDuck's server extension trails new DuckDB releases by days and
+      # hard-refuses an unsupported client ("not yet supported by MotherDuck").
+      # Pin below the breaking release so the live MotherDuck test keeps
+      # actually running (real production miles) rather than skipping. Raise
+      # this ceiling once MotherDuck publishes support for the newer version.
+      - name: Pin DuckDB to a MotherDuck-supported version
+        run: pip install "duckdb<1.5.4"
+
       - name: Write GCP credentials when provided
         if: ${{ env.BQ_SA != '' }}
         env:

@@ -25,6 +25,10 @@ Revision history
                    a lapsed trial account never turns CI red or spams the
                    owner.  Genuine loader bugs (assertion failures) still
                    fail — only auth/connection errors are downgraded.
+1.2   2026-06-22   Treat managed-service/client version skew as an
+                   environment problem too: MotherDuck refusing a newer
+                   DuckDB ("not yet supported by MotherDuck") now skips
+                   loudly instead of failing the weekly cron red.
 """
 
 import contextlib
@@ -87,6 +91,15 @@ _CREDENTIAL_ERROR_MARKERS = (
     "error during request to server", "service unavailable",
     "temporarily unavailable", "http 503", "http 429", "too many requests",
     "warehouse is starting", "cluster is starting",
+    # Platform/runtime version skew — the managed service lags a client
+    # release.  MotherDuck's server extension trails new DuckDB versions by
+    # days; until it catches up it refuses the session.  That is the
+    # service's release cadence, not a loader regression, so it must not
+    # turn the weekly cron red.  The CI job pins duckdb below the breaking
+    # release to keep the test actually running; this marker is the safety
+    # net for the window where even the pinned version outruns MotherDuck.
+    "not yet supported by motherduck",
+    "please downgrade to use motherduck",
 )
 
 
