@@ -1,14 +1,14 @@
 {
-  "utc": "2026-06-23T00:59:31.387747+00:00",
-  "status": "pass",
+  "utc": "2026-06-23T01:02:18.954012+00:00",
+  "status": "fail",
   "source_url": "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_day.csv",
   "source_note": "US Government work \u2014 public domain (17 U.S.C. \u00a7 105); no personal data.",
   "http_status": 200,
-  "input_bytes": 56413,
-  "input_sha256": "730f1572263507654d5fbeb272a7437adf2cdc3d29088786566f075610943a7b",
-  "input_rows": 275,
+  "input_bytes": 57051,
+  "input_sha256": "60998371eb9a0001d2c066da9b1434a9ad14733e1f3dca5cac44773521271e13",
+  "input_rows": 278,
   "table": "earthquakes",
   "ledger_verified": true,
-  "pipeline_returncode": 0,
+  "pipeline_returncode": 1,
   "version": "4.37.0"
 }
