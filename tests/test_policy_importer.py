@@ -9,13 +9,19 @@ governance_preflight.py expects.
 Revision history
 ────────────────
 1.0   2026-06-19   Initial release.
+1.1   2026-06-22   Exercise AtlanCatalogAdapter.fetch() end to end with a
+                   faked pyatlan SDK — covers the find_all → _asset_to_dict
+                   → _normalize_asset glue that was previously untested.
 """
 
 import json
 import shutil
+import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 from pipeline.catalog.policy_importer import (
     PolicyImporter,
@@ -94,6 +100,97 @@ class TestAtlanNormalize(unittest.TestCase):
         self.assertEqual(policy["column_purposes"], {"id": "key"})
         self.assertEqual(policy["pii_columns"], ["card"])
         self.assertEqual(policy["purpose"], "fulfilment")
+
+
+class TestAtlanFetch(unittest.TestCase):
+    """Exercise fetch() against a faked pyatlan SDK.
+
+    The Atlan-specific glue (construct client → find_all → flatten each Table
+    → normalize) is real code; only the SDK is faked. A bare MagicMock cannot
+    satisfy `from pyatlan.client.atlan import AtlanClient`, so real module
+    objects are registered in sys.modules and removed again in tearDown.
+    """
+
+    def setUp(self):
+        self._saved = {name: sys.modules.get(name) for name in (
+            "pyatlan", "pyatlan.client", "pyatlan.client.atlan",
+            "pyatlan.model", "pyatlan.model.assets")}
+
+        # Two real Table-shaped assets the adapter will flatten + normalize.
+        column = SimpleNamespace
+        people = SimpleNamespace(
+            name="people",
+            user_description="HR roster",
+            columns=[
+                column(name="id", data_type="int", user_description="key",
+                       meanings=""),
+                column(name="ssn", data_type="string", user_description=None,
+                       meanings="contains PII"),
+            ],
+        )
+        orders = SimpleNamespace(
+            name="orders", user_description=None,
+            columns=[column(name="total", data_type="double",
+                            user_description="order total", meanings="")],
+        )
+
+        class _FakeAsset:
+            def find_all(self, asset_type=None):
+                return [people, orders]
+
+        captured = {}
+
+        class _FakeAtlanClient:
+            def __init__(self, base_url=None, api_key=None):
+                captured["base_url"] = base_url
+                captured["api_key"] = api_key
+                self.asset = _FakeAsset()
+
+        self.captured = captured
+
+        atlan_mod = types.ModuleType("pyatlan.client.atlan")
+        atlan_mod.AtlanClient = _FakeAtlanClient
+        assets_mod = types.ModuleType("pyatlan.model.assets")
+        assets_mod.Table = type("Table", (), {})
+
+        for name, mod in (
+            ("pyatlan", types.ModuleType("pyatlan")),
+            ("pyatlan.client", types.ModuleType("pyatlan.client")),
+            ("pyatlan.client.atlan", atlan_mod),
+            ("pyatlan.model", types.ModuleType("pyatlan.model")),
+            ("pyatlan.model.assets", assets_mod),
+        ):
+            sys.modules[name] = mod
+
+    def tearDown(self):
+        for name, mod in self._saved.items():
+            if mod is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = mod
+
+    def test_fetch_normalizes_every_asset(self):
+        adapter = AtlanCatalogAdapter("https://tenant.atlan.com", "secret-key")
+        policies = adapter.fetch()
+
+        # The credentials reached the client constructor.
+        self.assertEqual(self.captured["base_url"], "https://tenant.atlan.com")
+        self.assertEqual(self.captured["api_key"], "secret-key")
+
+        self.assertEqual([p["source_label"] for p in policies],
+                         ["people", "orders"])
+
+        people = policies[0]
+        self.assertEqual(people["columns"], ["id", "ssn"])
+        self.assertEqual(people["dtypes"], {"id": "int", "ssn": "string"})
+        self.assertEqual(people["column_purposes"], {"id": "key"})
+        self.assertEqual(people["pii_columns"], ["ssn"])  # meanings flagged PII
+        self.assertEqual(people["purpose"], "HR roster")
+
+        orders = policies[1]
+        self.assertEqual(orders["columns"], ["total"])
+        self.assertNotIn("pii_columns", orders)   # nothing flagged
+        self.assertNotIn("purpose", orders)        # no user_description
 
 
 class TestPolicyImporter(unittest.TestCase):

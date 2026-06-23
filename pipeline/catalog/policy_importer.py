@@ -34,6 +34,9 @@ Revision history
 ────────────────
 1.0   2026-06-19   Initial release: PolicyImporter + JsonExportAdapter +
                    AtlanCatalogAdapter sketch.
+1.1   2026-06-22   AtlanCatalogAdapter.fetch() glue now covered by tests with
+                   a faked pyatlan SDK; dropped the no-cover pragmas. Only a
+                   live tenant / real network round-trip stays unexercised.
 """
 
 import json
@@ -83,9 +86,10 @@ class AtlanCatalogAdapter:
     """Sketch adapter for the Atlan catalog (needs live credentials).
 
     Kept thin on purpose: the only Atlan-specific part is fetching assets and
-    mapping each to the normalized form in `_normalize_asset` — which is a pure
-    function over plain dicts, so it is unit-tested without pyatlan or a live
-    tenant. The network fetch itself is not exercised in CI.
+    mapping each to the normalized form in `_normalize_asset` — a pure function
+    over plain dicts. The fetch glue (construct client → find_all → flatten →
+    normalize) is covered by tests with a faked pyatlan SDK; only a live tenant
+    and the real network round-trip remain unexercised.
     """
 
     def __init__(self, base_url: str, api_key: str,
@@ -94,7 +98,7 @@ class AtlanCatalogAdapter:
         self.api_key = api_key
         self.source_label_attr = source_label_attr
 
-    def fetch(self) -> list[dict]:  # pragma: no cover - needs a live tenant
+    def fetch(self) -> list[dict]:
         try:
             from pyatlan.client.atlan import AtlanClient
             from pyatlan.model.assets import Table
@@ -110,7 +114,7 @@ class AtlanCatalogAdapter:
         return policies
 
     @staticmethod
-    def _asset_to_dict(table) -> dict:  # pragma: no cover - needs pyatlan types
+    def _asset_to_dict(table) -> dict:
         """Flatten a pyatlan Table asset into the plain dict _normalize maps."""
         return {
             "name": getattr(table, "name", ""),
