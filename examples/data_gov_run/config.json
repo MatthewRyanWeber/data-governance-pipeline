@@ -1,0 +1,1 @@
+{"db_name": "earthquakes.db", "observability": {"critical_fields": ["mag", "time"], "null_absolute_floor": 0.5}}

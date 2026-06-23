@@ -5,6 +5,36 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [4.37.0] — 2026-06-22
+
+Accrue "production miles" — the dated, verifiable evidence a governance system
+needs but a single demo run can't give — and fix the metrics bug that real runs
+exposed.
+
+### Added
+- **`scripts/real_dataset_run.py`** governs a live public-domain US government
+  dataset (USGS earthquake feed) end to end and records honest `provenance.json`
+  (source URL, fetch time, input bytes/SHA-256/row count, ledger-verified). The
+  committed `examples/data_gov_run/` is its real output. Network failure is a
+  loud skip (exit 2), not a governance failure.
+- **`.github/workflows/governance-evidence.yml`** runs the synthetic canary and
+  the real-dataset run on a daily schedule and commits their evidence back
+  (`[skip ci]`). A broken governance core fails red; an unreachable feed skips.
+- **Canary track record** seeded under `examples/canary/`.
+
+### Fixed
+- **Metrics report row totals were always zero.** `MetricsCollector.rows_in` /
+  `rows_out` were never updated by `end_stage` or `record_extract/load`, so every
+  `metrics_report.json` showed `rows_input: 0` (regenerated `sample_run`
+  artifacts now show the real counts). The chunked CLI load is now staged so
+  `rows_output` is recorded, and the orphan trailing `start_stage('extract')`
+  that left a phantom 0-row stage is gone.
+
+### Tested
+- **`AtlanCatalogAdapter.fetch()`** glue is now covered with a faked pyatlan SDK
+  (find_all → flatten → normalize); dropped the no-cover pragmas. Only a live
+  tenant / real network round-trip remains unexercised.
+
 ## [4.36.0] — 2026-06-19
 
 Meet an org's existing governance where it already lives — import its policy

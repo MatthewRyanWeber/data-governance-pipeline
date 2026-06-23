@@ -1,0 +1,24 @@
+{
+  "total_duration_sec": 1.16,
+  "rows_input": 275,
+  "rows_output": 275,
+  "rows_dlq": 0,
+  "error_rate": 0.0,
+  "overall_rows_per_sec": 236.7,
+  "stages": {
+    "extract": {
+      "start": 26045.3884933,
+      "duration_sec": 0.598,
+      "rows": 275,
+      "rows_per_sec": 459.9
+    },
+    "load": {
+      "start": 26046.0519989,
+      "duration_sec": 0.061,
+      "rows": 275,
+      "rows_per_sec": 4504.0
+    }
+  },
+  "pipeline_id": "5f5387c0-e339-40f4-986c-33e7732fd2d2",
+  "generated_utc": "2026-06-23T00:59:33.526152+00:00"
+}
