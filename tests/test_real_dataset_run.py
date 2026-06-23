@@ -10,6 +10,9 @@ chain verification, and header-excluding row counts.
 Revision history
 ────────────────
 1.0   2026-06-22   Initial release.
+1.1   2026-06-22   Skip (not error) when scripts/ is absent — the Docker test
+                   image ships only the library + tests, so the by-path load
+                   must degrade to a skip rather than break collection.
 """
 
 import importlib.util
@@ -19,11 +22,19 @@ import tempfile
 import unittest
 from pathlib import Path
 
-# Load the script by path — scripts/ is not an importable package.
+# Load the script by path — scripts/ is not an importable package. Some build
+# contexts ship only the library + tests (the Docker test image omits scripts/),
+# so guard the load and skip rather than error at collection.
 _SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "real_dataset_run.py"
-_spec = importlib.util.spec_from_file_location("real_dataset_run", _SCRIPT)
-real_dataset_run = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(real_dataset_run)
+if _SCRIPT.exists():
+    _spec = importlib.util.spec_from_file_location("real_dataset_run", _SCRIPT)
+    real_dataset_run = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(real_dataset_run)
+else:
+    real_dataset_run = None
+
+_needs_script = unittest.skipUnless(
+    real_dataset_run is not None, "scripts/real_dataset_run.py not deployed")
 
 
 def _chain(*payloads):
@@ -37,6 +48,7 @@ def _chain(*payloads):
     return "\n".join(lines) + "\n"
 
 
+@_needs_script
 class TestVerifyLedgerChain(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
@@ -65,6 +77,7 @@ class TestVerifyLedgerChain(unittest.TestCase):
         self.assertFalse(real_dataset_run._verify_ledger_chain(empty))
 
 
+@_needs_script
 class TestCountRows(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
@@ -83,6 +96,7 @@ class TestCountRows(unittest.TestCase):
         self.assertEqual(real_dataset_run._count_rows(path), 0)
 
 
+@_needs_script
 class TestCollectArtifacts(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
