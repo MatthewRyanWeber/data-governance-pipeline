@@ -14,6 +14,8 @@ Revision history
                    disables flatten-time detection.
 1.2   2026-06-16   Regression test: masking a PII column with unhashable
                    (list/dict) cells falls back to per-cell masking, no crash.
+1.3   2026-06-22   Regression test: masking a numeric / Arrow-backed PII column
+                   (geolocation lat/long) no longer raises LossySetitemError.
 """
 
 import hashlib
@@ -347,6 +349,27 @@ class TestTransformPipeline(unittest.TestCase):
                 str(result[email_col[0]].iloc[0]).startswith("MASKED_"),
                 "PII field should be masked",
             )
+
+    def test_mask_numeric_column_does_not_raise(self):
+        # A numeric column flagged as PII (e.g. latitude/longitude as
+        # geolocation) is masked with a string token. Writing a string into a
+        # float column raises LossySetitemError on pandas >= 3.0; the column
+        # must be widened to object first.
+        df = pd.DataFrame({"latitude": [1.5, 2.5, 2.5], "name": ["a", "b", "c"]})
+        result = self.t.transform(df, [{"field": "latitude"}], "mask", drop_cols=[])
+        self.assertTrue(all(str(v).startswith("MASKED_") for v in result["latitude"]))
+
+    def test_mask_pyarrow_column_does_not_raise(self):
+        # Same hazard via pandas 3.0's Arrow-backed string/number dtypes, which
+        # reject the lossy write outright (no silent upcast).
+        df = pd.DataFrame({
+            "latitude": pd.array([1.5, 2.5, None], dtype="float64[pyarrow]"),
+            "name": ["a", "b", "c"],
+        })
+        result = self.t.transform(df, [{"field": "latitude"}], "mask", drop_cols=[])
+        masked = list(result["latitude"])
+        self.assertTrue(str(masked[0]).startswith("MASKED_"))
+        self.assertTrue(pd.isna(masked[2]))   # null preserved, not masked
 
     def test_drop_strategy(self):
         df = pd.DataFrame({

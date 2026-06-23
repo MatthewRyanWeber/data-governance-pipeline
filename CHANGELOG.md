@@ -23,6 +23,13 @@ exposed.
 - **Canary track record** seeded under `examples/canary/`.
 
 ### Fixed
+- **Masking a numeric/Arrow-backed PII column crashed on pandas 3.0.** When a
+  numeric column is flagged as PII (the real-dataset run flagged latitude/
+  longitude as geolocation), masking wrote a string token into a float column.
+  pandas ≤ 2.x silently upcast; pandas ≥ 3.0 and pyarrow dtypes raise
+  `LossySetitemError`. The column is now widened to object first. Found by the
+  new real-dataset run on pandas 3.0 in CI — exactly the kind of bug real data
+  surfaces.
 - **CI mypy step (py3.13) was red on numpy's stubs.** numpy now ships PEP 695
   `type` statements in its `.pyi`, which mypy under `python_version = 3.10`
   cannot parse — aborting the whole run. Skip following imports into numpy (we

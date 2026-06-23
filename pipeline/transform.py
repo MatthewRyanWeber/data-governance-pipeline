@@ -24,6 +24,12 @@ Revision history
 1.4   2026-06-16   PII masking no longer crashes on unhashable cells (a list/dict
                    that escaped flattening): .unique() TypeError falls back to a
                    per-cell map. Output byte-identical for the hashable fast path.
+1.5   2026-06-22   Masking a non-object column (numeric/bool/Arrow-backed — e.g.
+                   latitude/longitude flagged as geolocation PII) widens it to
+                   object first. Writing a string token into such a column
+                   raised LossySetitemError on pandas >= 3.0 / pyarrow dtypes;
+                   pandas <= 2.x only upcast with a FutureWarning. Surfaced by
+                   the real-dataset run on pandas 3.0 in CI.
 """
 
 import re
@@ -271,6 +277,13 @@ class Transformer:
                 # DuckDB None), so the compute engine can never change it.
                 present = df[field].notna()
                 col = df.loc[present, field]
+                # Mask tokens are strings; widen a non-object column to object
+                # before writing them. A numeric/bool/Arrow-backed column (e.g.
+                # latitude/longitude flagged as geolocation PII) otherwise raises
+                # LossySetitemError on pandas >= 3.0 and on pyarrow dtypes —
+                # pandas <= 2.x only upcast with a FutureWarning, hiding the bug.
+                if df[field].dtype != object:
+                    df[field] = df[field].astype(object)
                 # mask_value is deterministic per value, so mask each DISTINCT
                 # value once and vectorise the rest with .map — identical output,
                 # far fewer SHA-256 calls on repeated values, and no per-cell
