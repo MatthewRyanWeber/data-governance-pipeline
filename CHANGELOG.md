@@ -23,6 +23,10 @@ exposed.
 - **Canary track record** seeded under `examples/canary/`.
 
 ### Fixed
+- **CI mypy step (py3.13) was red on numpy's stubs.** numpy now ships PEP 695
+  `type` statements in its `.pyi`, which mypy under `python_version = 3.10`
+  cannot parse — aborting the whole run. Skip following imports into numpy (we
+  don't type-check its internals); our own code is unaffected.
 - **Metrics report row totals were always zero.** `MetricsCollector.rows_in` /
   `rows_out` were never updated by `end_stage` or `record_extract/load`, so every
   `metrics_report.json` showed `rows_input: 0` (regenerated `sample_run`

@@ -292,6 +292,16 @@ warn_return_any = true
 warn_unused_configs = true
 ignore_missing_imports = true
 
+# numpy's bundled stubs use PEP 695 `type` statements (valid only on 3.12+).
+# Under python_version 3.10 mypy cannot PARSE them, which aborts the whole run
+# on interpreters that pull the newer numpy (the py3.13 CI job). We do not
+# type-check numpy internals, so skip following imports into it — including its
+# .pyi stubs (follow_imports_for_stubs).
+[[tool.mypy.overrides]]
+module = ["numpy", "numpy.*"]
+follow_imports = "skip"
+follow_imports_for_stubs = true
+
 [tool.black]
 line-length    = 100
 target-version = ["py310", "py311", "py312", "py313"]
