@@ -36,6 +36,11 @@ Revision history
 1.10  2026-06-14   'replace' clears the destination once on the first chunk
                    written, then appends — a multi-chunk replace previously
                    kept only the last chunk (data loss across every loader).
+1.11  2026-06-22   Stage the per-chunk load through metrics.start/end_stage so
+                   rows_output is recorded, and drop the orphan trailing
+                   start_stage('extract') that left a phantom 0-row extract
+                   stage in the report. Together with the MetricsCollector fix
+                   the metrics report now shows real row totals.
 """
 
 import argparse
@@ -510,8 +515,10 @@ def _run_chunked(
                 timestamp_col=obs_cfg.get("timestamp_col"),
             )
 
+        metrics.start_stage("load")
         with timed_operation(f"load:{destination}:chunk_{chunk_idx}"):
             _load_chunk(chunk)
+        metrics.end_stage("load", rows=len(chunk))
 
         total_rows += len(chunk)
         state_manager.save_checkpoint(gov, str(source), table_name, chunk_idx, total_rows)
@@ -524,7 +531,6 @@ def _run_chunked(
             chunk_idx + 1, total_rows,
         )
         chunk_idx += 1
-        metrics.start_stage("extract")
 
     state_manager.clear_checkpoint(str(source), table_name)
     logger.info("[PIPELINE] All chunks loaded — %d rows total.", total_rows)

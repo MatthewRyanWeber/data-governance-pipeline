@@ -11,6 +11,10 @@ Revision history
 1.0   2026-06-07   Initial extraction from monolith.
 1.1   2026-06-09   Emit to OTEL instruments on record_extract/transform/load.
 1.2   2026-06-09   Cache instrument references on instance to avoid repeated lookups.
+1.3   2026-06-22   Fix: rows_in/rows_out (the report's headline totals) were
+                   never updated by end_stage or record_extract/load, so every
+                   metrics report showed rows_input=0. They now accrue from the
+                   extract/load stages, making throughput and error_rate real.
 """
 
 import logging
@@ -57,6 +61,7 @@ class MetricsCollector:
         self.start_stage("extract")
         self._stages["extract"]["rows"] = rows
         self._stages["extract"]["elapsed"] = elapsed
+        self.rows_in += rows
         self.gov.stage_metrics("extract", rows, elapsed)
         self._instruments()["extract_rows"].add(rows)
 
@@ -71,6 +76,7 @@ class MetricsCollector:
         self.start_stage("load")
         self._stages["load"]["rows"] = rows
         self._stages["load"]["elapsed"] = elapsed
+        self.rows_out += rows
         self.gov.stage_metrics("load", rows, elapsed)
         self._instruments()["load_rows"].add(rows)
         self._instruments()["load_duration"].record(elapsed)
@@ -110,6 +116,13 @@ class MetricsCollector:
         stage["duration_sec"] = round(duration, 3)
         stage["rows"] = rows
         stage["rows_per_sec"] = round(rows / duration, 1) if duration > 0 else 0
+        # Accrue the run-level headline totals from the stages that move rows.
+        # The chunked CLI path calls end_stage per chunk, so these accumulate
+        # across chunks; without this the report's rows_input stayed at zero.
+        if name == "extract":
+            self.rows_in += rows
+        elif name == "load":
+            self.rows_out += rows
         self._current = None
         return duration  # type: ignore[no-any-return]
 
