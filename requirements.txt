@@ -23,7 +23,7 @@ hdbcli==2.29.23
 snowflake-connector-python==4.6.0
 snowflake-sqlalchemy==1.10.1
 google-cloud-bigquery==3.42.0
-google-auth==2.53.0
+google-auth==2.55.0
 
 # Vector databases
 chromadb==1.5.9
