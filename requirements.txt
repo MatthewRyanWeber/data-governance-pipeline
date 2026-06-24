@@ -38,7 +38,7 @@ lancedb==0.33.0
 pyarrow==24.0.0
 deltalake==1.6.0
 pyiceberg==0.11.1
-duckdb==1.5.3
+duckdb==1.5.4
 openpyxl==3.1.5
 fastavro==1.12.2
 pyorc==0.11.0
