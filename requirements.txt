@@ -29,7 +29,7 @@ google-auth==2.53.0
 chromadb==1.5.9
 pymilvus==3.0.0
 pinecone==9.1.0
-weaviate-client==4.21.3
+weaviate-client==4.22.0
 qdrant-client==1.18.0
 pgvector==0.4.2
 lancedb==0.33.0
