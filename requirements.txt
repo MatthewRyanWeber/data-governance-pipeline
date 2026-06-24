@@ -44,7 +44,7 @@ fastavro==1.12.2
 pyorc==0.11.0
 
 # Cloud storage
-boto3==1.43.31
+boto3==1.43.36
 paramiko==5.0.0
 adlfs==2026.5.0
 azure-identity==1.25.3
