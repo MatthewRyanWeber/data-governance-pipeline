@@ -55,7 +55,7 @@ zstandard==0.25.0
 lz4==4.4.5
 
 # Streaming
-kafka-python==3.0.2
+kafka-python==3.0.4
 google-cloud-pubsub==2.39.0
 
 # Privacy & data quality
