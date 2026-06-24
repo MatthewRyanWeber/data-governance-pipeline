@@ -59,7 +59,7 @@ kafka-python==3.0.2
 google-cloud-pubsub==2.39.0
 
 # Privacy & data quality
-phonenumbers==9.0.32
+phonenumbers==9.0.33
 
 # Monitoring & API
 Flask==3.1.3
