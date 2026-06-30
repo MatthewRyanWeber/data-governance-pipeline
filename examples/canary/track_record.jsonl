@@ -48,3 +48,8 @@
 {"utc": "2026-06-29T11:01:18.789708+00:00", "status": "pass", "rows": 200, "duration_sec": 0.022, "ledger_verified": true, "version": "4.37.0"}
 {"utc": "2026-06-29T11:01:18.811927+00:00", "status": "pass", "rows": 200, "duration_sec": 0.0222, "ledger_verified": true, "version": "4.37.0"}
 {"utc": "2026-06-29T11:01:18.834350+00:00", "status": "pass", "rows": 200, "duration_sec": 0.0225, "ledger_verified": true, "version": "4.37.0"}
+{"utc": "2026-06-30T09:36:41.784992+00:00", "status": "pass", "rows": 200, "duration_sec": 0.7368, "ledger_verified": true, "version": "4.37.0"}
+{"utc": "2026-06-30T09:36:42.522022+00:00", "status": "pass", "rows": 200, "duration_sec": 0.0234, "ledger_verified": true, "version": "4.37.0"}
+{"utc": "2026-06-30T09:36:42.545547+00:00", "status": "pass", "rows": 200, "duration_sec": 0.0228, "ledger_verified": true, "version": "4.37.0"}
+{"utc": "2026-06-30T09:36:42.568504+00:00", "status": "pass", "rows": 200, "duration_sec": 0.0221, "ledger_verified": true, "version": "4.37.0"}
+{"utc": "2026-06-30T09:36:42.590755+00:00", "status": "pass", "rows": 200, "duration_sec": 0.0216, "ledger_verified": true, "version": "4.37.0"}
