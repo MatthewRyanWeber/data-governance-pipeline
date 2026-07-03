@@ -1,24 +1,24 @@
 {
-  "total_duration_sec": 1.49,
-  "rows_input": 279,
-  "rows_output": 279,
+  "total_duration_sec": 1.06,
+  "rows_input": 219,
+  "rows_output": 219,
   "rows_dlq": 0,
   "error_rate": 0.0,
-  "overall_rows_per_sec": 187.0,
+  "overall_rows_per_sec": 206.9,
   "stages": {
     "extract": {
-      "start": 177.356937422,
-      "duration_sec": 0.431,
-      "rows": 279,
-      "rows_per_sec": 647.1
+      "start": 78.987821314,
+      "duration_sec": 0.534,
+      "rows": 219,
+      "rows_per_sec": 410.2
     },
     "load": {
-      "start": 177.808867637,
-      "duration_sec": 0.014,
-      "rows": 279,
-      "rows_per_sec": 19637.6
+      "start": 79.553328279,
+      "duration_sec": 0.021,
+      "rows": 219,
+      "rows_per_sec": 10358.4
     }
   },
-  "pipeline_id": "c8bde14a-2658-49e5-96a4-7ada528ea013",
-  "generated_utc": "2026-07-02T08:57:46.990784+00:00"
+  "pipeline_id": "f2c03943-336e-4f6d-9b38-a27630da5b1e",
+  "generated_utc": "2026-07-03T09:19:42.409740+00:00"
 }
